@@ -50,6 +50,11 @@ class Card {
 
   bool FinishedExiting(double now) const { return now >= exit_end_time_; }
 
+  // Called while the card is behind the front: only its thumbnail shows, so the raw pixels and the
+  // half-size copy can go. Coming back to the front restores them.
+  void Hibernate(Store& store);
+  void Wake(Store& store);
+
   Image RenderDragPreview(int width) const;
 
   const std::shared_ptr<Shot>& shot() const { return shot_; }
@@ -119,6 +124,7 @@ class Card {
   int shadow_surface_width_ = 1;
   int shadow_surface_height_ = 1;
 
+  bool hibernating_ = false;
   double full_release_at_ = 0.0;
   double exit_end_time_ = 0.0;
   bool dimmed_ = false;

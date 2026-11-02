@@ -39,14 +39,6 @@ class DropSource final : public IDropSource {
   LONG references_ = 1;
 };
 
-void EnsureOleInitialized() {
-  static bool initialized = false;
-  if (!initialized) {
-    (void)OleInitialize(nullptr);
-    initialized = true;
-  }
-}
-
 HBITMAP CreateDragBitmap(const Image& preview) {
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof(info.bmiHeader);
@@ -62,6 +54,14 @@ HBITMAP CreateDragBitmap(const Image& preview) {
 }
 
 }  // namespace
+
+void EnsureOleInitialized() {
+  static bool initialized = false;
+  if (!initialized) {
+    (void)OleInitialize(nullptr);
+    initialized = true;
+  }
+}
 
 DWORD RunFileDrag(const std::wstring& path, const Image& preview) {
   EnsureOleInitialized();

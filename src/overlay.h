@@ -33,6 +33,7 @@ class Overlay {
  private:
   Deck* DeckFor(HMONITOR monitor);
   void EnsureTicking();
+  bool AnyDeckInModalDrag() const;
 
   HWND controller_;
   Compositor& compositor_;
@@ -40,6 +41,7 @@ class Overlay {
   std::vector<std::unique_ptr<Deck>> decks_;
   bool ticking_ = false;
   bool active_ = false;
+  bool display_change_pending_ = false;
 };
 
 }  // namespace sstk

@@ -12,6 +12,10 @@ namespace sstk {
 namespace {
 
 std::wstring GalleryFolder() {
+  // Test tooling redirects output so that automated runs never touch the real Gallery.
+  wchar_t override_path[MAX_PATH];
+  if (GetEnvironmentVariableW(L"SSTK_GALLERY_DIR", override_path, MAX_PATH) > 0) return override_path;
+
   PWSTR folder = nullptr;
   std::wstring result;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Screenshots, KF_FLAG_CREATE, nullptr, &folder))) result = folder;
@@ -130,6 +134,13 @@ void Store::Warmup() {
   wake_.notify_all();
 }
 
+void Store::ReleaseCodec() {
+  std::unique_lock lock(mutex_);
+  codec_release_requested_ = true;
+  wake_.notify_all();
+  saved_.wait(lock, [&] { return !codec_release_requested_ || stopping_; });
+}
+
 void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region) {
   {
     std::lock_guard lock(mutex_);
@@ -157,14 +168,20 @@ bool Store::IsIdle() {
 }
 
 void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, uint64_t sequence) {
-  HGLOBAL dib = BuildDib(*shot->frame, region);
+  std::shared_ptr<const Image> frame;
+  {
+    std::lock_guard lock(mutex_);
+    frame = shot->frame;
+  }
+  if (!frame) return;
+  HGLOBAL dib = BuildDib(*frame, region);
   if (dib == nullptr) return;
   if (!PostMessageW(controller_, kMsgClipboardReady, static_cast<WPARAM>(sequence), reinterpret_cast<LPARAM>(dib))) {
     GlobalFree(dib);
   }
 }
 
-bool Store::SaveToDisk(Shot& shot, const RECT& region) {
+bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_pointer, const RECT& region) {
   if (shot.path.empty()) shot.path = AllocateFilePath(shot.local_time);
   if (shot.path.empty()) {
     Trace("save: no gallery path");
@@ -201,7 +218,7 @@ bool Store::SaveToDisk(Shot& shot, const RECT& region) {
   WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
   if (!ok(target->SetPixelFormat(&format), "pixel format")) return false;
 
-  const Image& frame = *shot.frame;
+  const Image& frame = *frame_pointer;
   ComPtr<IWICBitmap> source;
   if (!ok(codec_factory_->CreateBitmapFromMemory(frame.width(), frame.height(), GUID_WICPixelFormat32bppBGR,
                                                  frame.stride(), frame.stride() * frame.height(),
@@ -222,7 +239,67 @@ bool Store::SaveToDisk(Shot& shot, const RECT& region) {
     Trace("save: could not write the file, error %lu", GetLastError());
     return false;
   }
+
+  // The first encode of the whole frame doubles as the in-memory archive.
+  const bool whole_frame = width == frame.width() && height == frame.height();
+  STATSTG stat{};
+  HGLOBAL memory = nullptr;
+  if (whole_frame && SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) &&
+      SUCCEEDED(GetHGlobalFromStream(stream.Get(), &memory))) {
+    if (const void* bytes = GlobalLock(memory)) {
+      const auto* first = static_cast<const uint8_t*>(bytes);
+      std::vector<uint8_t> archive(first, first + static_cast<size_t>(stat.cbSize.QuadPart));
+      GlobalUnlock(memory);
+      std::lock_guard lock(mutex_);
+      if (shot.archive.empty()) shot.archive = std::move(archive);
+    }
+  }
   return true;
+}
+
+std::shared_ptr<const Image> Store::DecodeArchive(const std::vector<uint8_t>& archive) {
+  if (!codec_factory_ && FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                                 IID_PPV_ARGS(&codec_factory_)))) {
+    return nullptr;
+  }
+  ComPtr<IWICStream> stream;
+  if (FAILED(codec_factory_->CreateStream(&stream))) return nullptr;
+  if (FAILED(stream->InitializeFromMemory(const_cast<BYTE*>(archive.data()), static_cast<DWORD>(archive.size())))) {
+    return nullptr;
+  }
+  ComPtr<IWICBitmapDecoder> decoder;
+  if (FAILED(codec_factory_->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder))) {
+    return nullptr;
+  }
+  ComPtr<IWICBitmapFrameDecode> source;
+  if (FAILED(decoder->GetFrame(0, &source))) return nullptr;
+  ComPtr<IWICBitmapSource> converted;
+  if (FAILED(WICConvertBitmapSource(GUID_WICPixelFormat32bppBGR, source.Get(), &converted))) return nullptr;
+  UINT width = 0;
+  UINT height = 0;
+  if (FAILED(converted->GetSize(&width, &height))) return nullptr;
+  auto image = std::make_shared<Image>(Image::Allocate(static_cast<int>(width), static_cast<int>(height)));
+  if (!*image) return nullptr;
+  if (FAILED(converted->CopyPixels(nullptr, image->stride(), image->stride() * image->height(), image->data()))) {
+    return nullptr;
+  }
+  return image;
+}
+
+bool Store::ReleaseFrame(const std::shared_ptr<Shot>& shot) {
+  std::lock_guard lock(mutex_);
+  if (!shot->frame || shot->archive.empty() || shot->saved_version < shot->requested_version) return false;
+  if (pending_clipboard_ == shot || active_shot_ == shot.get()) return false;
+  shot->frame.reset();
+  return true;
+}
+
+void Store::RestoreFrame(const std::shared_ptr<Shot>& shot) {
+  std::unique_lock lock(mutex_);
+  if (shot->frame) return;
+  pending_restore_ = shot;
+  wake_.notify_all();
+  saved_.wait(lock, [&] { return shot->frame != nullptr || pending_restore_ != shot || stopping_; });
 }
 
 void Store::WorkerMain() {
@@ -231,10 +308,22 @@ void Store::WorkerMain() {
   std::unique_lock lock(mutex_);
   for (;;) {
     busy_ = false;
+    active_shot_ = nullptr;
     wake_.wait(lock, [&] {
-      return stopping_ || warmup_requested_ || pending_clipboard_ != nullptr || !pending_saves_.empty();
+      return stopping_ || warmup_requested_ || codec_release_requested_ || pending_restore_ != nullptr ||
+             pending_clipboard_ != nullptr || !pending_saves_.empty();
     });
     busy_ = true;
+
+    if (codec_release_requested_) {
+      lock.unlock();
+      codec_factory_.Reset();
+      CoFreeUnusedLibrariesEx(0, 0);
+      lock.lock();
+      codec_release_requested_ = false;
+      saved_.notify_all();
+      continue;
+    }
 
     if (warmup_requested_) {
       warmup_requested_ = false;
@@ -247,10 +336,23 @@ void Store::WorkerMain() {
       continue;
     }
 
-    // The clipboard is served first because it is what the next keystroke may depend on.
+    // The UI thread is waiting on a restore, so it goes ahead of everything else.
+    if (pending_restore_ != nullptr) {
+      std::shared_ptr<Shot> shot = pending_restore_;
+      lock.unlock();
+      std::shared_ptr<const Image> frame = DecodeArchive(shot->archive);
+      lock.lock();
+      shot->frame = std::move(frame);
+      pending_restore_ = nullptr;
+      saved_.notify_all();
+      continue;
+    }
+
+    // The clipboard comes next because it is what the next keystroke may depend on.
     if (pending_clipboard_ != nullptr) {
       std::shared_ptr<Shot> shot = std::move(pending_clipboard_);
       pending_clipboard_ = nullptr;
+      active_shot_ = shot.get();
       const RECT region = pending_clipboard_region_;
       const uint64_t sequence = clipboard_sequence_.load(std::memory_order_relaxed);
       lock.unlock();
@@ -263,12 +365,15 @@ void Store::WorkerMain() {
     if (!pending_saves_.empty()) {
       std::shared_ptr<Shot> shot = pending_saves_.front();
       pending_saves_.erase(pending_saves_.begin());
+      active_shot_ = shot.get();
       const RECT region = shot->region;
       const uint64_t version = shot->requested_version;
+      std::shared_ptr<const Image> frame = shot->frame;
       lock.unlock();
       const double started = NowSeconds();
-      const bool saved = SaveToDisk(*shot, region);
+      const bool saved = frame != nullptr && SaveToDisk(*shot, frame, region);
       Trace("save: %s in %.1f ms", saved ? "ok" : "FAILED", (NowSeconds() - started) * 1000.0);
+      frame.reset();
       lock.lock();
       shot->saved_version = version;
       // A failed write still releases waiters so that the UI cannot hang on a full disk.

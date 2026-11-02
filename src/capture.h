@@ -17,6 +17,7 @@ struct CaptureResult {
 };
 
 // Blocks until quit_event is signaled, posting kMsgFlash and kMsgCaptured to the controller window.
+// A kMsgFlash carries the monitor in wParam.
 void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE quit_event);
 
 }  // namespace sstk

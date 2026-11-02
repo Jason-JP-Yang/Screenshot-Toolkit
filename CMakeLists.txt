@@ -34,7 +34,7 @@ target_compile_definitions(ScreenshotToolkit PRIVATE
 )
 
 target_compile_options(ScreenshotToolkit PRIVATE
-  /W4 /permissive- /utf-8 /Zc:__cplusplus /GS- /Gy /Gw
+  /W4 /permissive- /utf-8 /Zc:__cplusplus /Gy /Gw
   $<$<CONFIG:Release>:/O2 /GL /DNDEBUG>
 )
 

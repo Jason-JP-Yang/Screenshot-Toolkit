@@ -33,6 +33,7 @@ class Deck {
 
   HMONITOR monitor() const { return monitor_; }
   bool ready() const { return window_ != nullptr; }
+  bool in_modal_drag() const { return in_modal_drag_; }
 
   void Flash();
   void AddShot(std::unique_ptr<CaptureResult> capture);
@@ -43,7 +44,7 @@ class Deck {
   LRESULT HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
  private:
-  enum class Press { kNone, kSegment, kCard, kSwipe };
+  enum class Press { kNone, kCard, kSwipe };
 
   float Dip(float value) const { return value * scale_; }
   RectF RectForRegion(const RECT& region) const;
@@ -93,8 +94,8 @@ class Deck {
   bool hovering_ = false;
   bool tracking_leave_ = false;
   Press press_ = Press::kNone;
-  int press_segment_ = -1;
   POINT press_point_{};
+  bool in_modal_drag_ = false;
   float swipe_velocity_ = 0.0f;
   float swipe_offset_ = 0.0f;
   double swipe_time_ = 0.0;
@@ -276,6 +277,7 @@ void Deck::BindCapsuleToFront(const TimeBase& now) {
     capsule_->Hide(now);
     return;
   }
+  top->Wake(store_);
   capsule_->Bind(top->regions(), top->selected(), top->frost(), now);
 }
 
@@ -353,7 +355,7 @@ void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
 
 void Deck::SelectRegion(int index) {
   Card* top = front();
-  if (top == nullptr || index == top->selected()) return;
+  if (top == nullptr || index == top->selected() || !top->shot()->frame) return;
 
   const TimeBase now = compositor_.Now();
   const RECT region = top->regions()[index].rect;
@@ -376,7 +378,10 @@ void Deck::Tick() {
     if (!paused && now.seconds >= card->expiry) Dismiss(i, now, 0.0f);
   }
 
-  for (auto& card : cards_) card->Tick(now.seconds);
+  for (auto& card : cards_) {
+    card->Tick(now.seconds);
+    if (card.get() != front() && !card->held_by_drag) card->Hibernate(store_);
+  }
   for (auto it = exiting_.begin(); it != exiting_.end();) {
     if ((*it)->FinishedExiting(now.seconds)) {
       it = exiting_.erase(it);
@@ -386,6 +391,13 @@ void Deck::Tick() {
     }
   }
   capsule_->Tick(now.seconds);
+
+  // A release outside the sink, or a shape change under a still cursor, can end hover without a leave message.
+  if (hovering_ && press_ == Press::kNone) {
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    if (WindowFromPoint(cursor) != sink_) OnMouseLeave();
+  }
 
   // An auto-hiding taskbar can slide in at any moment, and thumbnails must stay clear of it.
   if (!cards_.empty() && ++tick_count_ % kTaskbarPollTicks == 0) {
@@ -470,19 +482,19 @@ void Deck::OnMouseMove(POINT point) {
 
 void Deck::OnButtonDown(POINT point) {
   if (front() == nullptr) return;
-  SetCapture(sink_);
-  press_point_ = point;
   const int segment = capsule_->HitTest(point.x, point.y);
   Trace("sink: down at %ld,%ld segment %d", point.x, point.y, segment);
   if (segment >= 0) {
-    press_ = Press::kSegment;
-    press_segment_ = segment;
+    // Switching is reversible and costs nothing, so it happens on press rather than making the user wait for release.
+    SelectRegion(segment);
     return;
   }
   const bool on_card = point.x >= front_rect_.left && point.x < front_rect_.right && point.y >= front_rect_.top &&
                        point.y < front_rect_.bottom;
-  press_ = on_card ? Press::kCard : Press::kNone;
-  if (press_ == Press::kNone) ReleaseCapture();
+  if (!on_card) return;
+  SetCapture(sink_);
+  press_point_ = point;
+  press_ = Press::kCard;
 }
 
 void Deck::OnButtonUp(POINT point) {
@@ -492,9 +504,6 @@ void Deck::OnButtonUp(POINT point) {
   if (GetCapture() == sink_) ReleaseCapture();
 
   switch (press) {
-    case Press::kSegment:
-      if (capsule_->HitTest(point.x, point.y) == press_segment_) SelectRegion(press_segment_);
-      break;
     case Press::kCard:
       OpenFront();
       break;
@@ -535,7 +544,11 @@ void Deck::OpenFront() {
   const TimeBase now = compositor_.Now();
   Dismiss(cards_.size() - 1, now, 0.0f);
   compositor_.Commit();
-  if (!path.empty()) ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  if (path.empty()) return;
+  EnsureOleInitialized();
+  // The click makes this process eligible to pass the foreground on, which the viewer needs to come to the front.
+  AllowSetForegroundWindow(ASFW_ANY);
+  ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 void Deck::BeginFileDrag() {
@@ -545,7 +558,7 @@ void Deck::BeginFileDrag() {
   if (card == nullptr) return;
 
   const std::wstring path = store_.WaitUntilSaved(card->shot());
-  if (path.empty()) return;
+  if (path.empty() || !card->shot()->frame) return;
 
   card->held_by_drag = true;
   card->SetDimmed(true, compositor_.Now());
@@ -553,7 +566,9 @@ void Deck::BeginFileDrag() {
 
   Image preview = card->RenderDragPreview(static_cast<int>(Dip(theme::kDragPreviewWidth)));
   // DoDragDrop runs its own message loop, so ticks and new shots can still arrive during the drag.
+  in_modal_drag_ = true;
   const DWORD effect = RunFileDrag(path, preview);
+  in_modal_drag_ = false;
 
   auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& entry) { return entry.get() == card; });
   if (found == cards_.end()) return;
@@ -630,7 +645,7 @@ void Overlay::EnsureTicking() {
 }
 
 void Overlay::OnFlash(HMONITOR monitor) {
-  if (!compositor_.IsHealthy()) {
+  if (!compositor_.IsHealthy() && !AnyDeckInModalDrag()) {
     // DWM restarted underneath us: every composition object is gone, so start over.
     decks_.clear();
     compositor_.Shutdown();
@@ -650,7 +665,20 @@ void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   }
 }
 
+bool Overlay::AnyDeckInModalDrag() const {
+  for (const auto& deck : decks_) {
+    if (deck->in_modal_drag()) return true;
+  }
+  return false;
+}
+
 void Overlay::OnTick() {
+  if (display_change_pending_ && !AnyDeckInModalDrag()) {
+    display_change_pending_ = false;
+    OnDisplayChange();
+    return;
+  }
+
   bool any_active = false;
   for (auto& deck : decks_) {
     if (!deck->IsIdle()) {
@@ -667,6 +695,11 @@ void Overlay::OnTick() {
 }
 
 void Overlay::OnDisplayChange() {
+  // A deck cannot be destroyed from inside its own drag loop, so the change waits for the drag to end.
+  if (AnyDeckInModalDrag()) {
+    display_change_pending_ = true;
+    return;
+  }
   // Geometry is stale for every monitor, so everything on screen is dropped; files and clipboard are already safe.
   decks_.clear();
   compositor_.Commit();

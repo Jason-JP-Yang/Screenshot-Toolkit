@@ -54,9 +54,14 @@ void TrimMemory(App& app) {
   }
   KillTimer(app.controller, kTrimTimer);
   app.compositor.ReleaseUnusedMemory();
-  HeapCompact(GetProcessHeap(), 0);
+  app.store.ReleaseCodec();
+  HEAP_OPTIMIZE_RESOURCES_INFORMATION heap_options{HEAP_OPTIMIZE_RESOURCES_CURRENT_VERSION, 0};
+  HeapSetInformation(nullptr, HeapOptimizeResources, &heap_options, sizeof(heap_options));
   EmptyWorkingSet(GetCurrentProcess());
-  Trace("trimmed");
+  PROCESS_MEMORY_COUNTERS_EX memory{};
+  memory.cb = sizeof(memory);
+  GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory));
+  Trace("trimmed, commit %.1f MB", memory.PrivateUsage / 1048576.0);
 }
 
 void DropPendingClipboard(App& app) {
@@ -99,6 +104,7 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
     case kMsgFlash:
       KillTimer(window, kTrimTimer);
       app->overlay->OnFlash(reinterpret_cast<HMONITOR>(wparam));
+      Trace("flash committed");
       return 0;
     case kMsgCaptured:
       app->overlay->OnCaptured(std::unique_ptr<CaptureResult>(reinterpret_cast<CaptureResult*>(lparam)));

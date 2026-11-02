@@ -10,7 +10,6 @@
 #include "platform.h"
 
 #include <knownfolders.h>
-#include <sddl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -52,21 +51,40 @@ std::wstring InstallDirectory() {
   return result;
 }
 
-std::wstring CurrentUserSid() {
+// The DOMAIN\name form, which both the logon trigger and the task principal accept.
+std::wstring CurrentAccountName() {
   HANDLE token = nullptr;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return {};
   BYTE buffer[256];
   DWORD size = 0;
   std::wstring result;
   if (GetTokenInformation(token, TokenUser, buffer, sizeof(buffer), &size)) {
-    PWSTR text = nullptr;
-    if (ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(buffer)->User.Sid, &text)) {
-      result = text;
-      LocalFree(text);
+    wchar_t name[256];
+    wchar_t domain[256];
+    DWORD name_size = ARRAYSIZE(name);
+    DWORD domain_size = ARRAYSIZE(domain);
+    SID_NAME_USE use;
+    if (LookupAccountSidW(nullptr, reinterpret_cast<TOKEN_USER*>(buffer)->User.Sid, name, &name_size, domain,
+                          &domain_size, &use)) {
+      result = std::wstring(domain) + L"\\" + name;
     }
   }
   CloseHandle(token);
   return result;
+}
+
+std::wstring EscapeXml(const std::wstring& text) {
+  std::wstring escaped;
+  for (wchar_t c : text) {
+    switch (c) {
+      case L'&': escaped += L"&amp;"; break;
+      case L'<': escaped += L"&lt;"; break;
+      case L'>': escaped += L"&gt;"; break;
+      case L'"': escaped += L"&quot;"; break;
+      default: escaped += c;
+    }
+  }
+  return escaped;
 }
 
 int RelaunchElevated(const wchar_t* argument) {
@@ -102,7 +120,7 @@ bool RunHidden(std::wstring command_line) {
   return code == 0;
 }
 
-std::wstring TaskXml(const std::wstring& sid, const std::wstring& command, const wchar_t* arguments, const wchar_t* run_level,
+std::wstring TaskXml(const std::wstring& account, const std::wstring& command, const wchar_t* arguments, const wchar_t* run_level,
                      const wchar_t* description) {
   std::wstring xml;
   xml += L"<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n";
@@ -110,8 +128,8 @@ std::wstring TaskXml(const std::wstring& sid, const std::wstring& command, const
   xml += L"<RegistrationInfo><Description>";
   xml += description;
   xml += L"</Description></RegistrationInfo>\n";
-  xml += L"<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + sid + L"</UserId></LogonTrigger></Triggers>\n";
-  xml += L"<Principals><Principal id=\"Author\"><UserId>" + sid + L"</UserId><LogonType>InteractiveToken</LogonType><RunLevel>";
+  xml += L"<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + EscapeXml(account) + L"</UserId></LogonTrigger></Triggers>\n";
+  xml += L"<Principals><Principal id=\"Author\"><UserId>" + EscapeXml(account) + L"</UserId><LogonType>InteractiveToken</LogonType><RunLevel>";
   xml += run_level;
   xml += L"</RunLevel></Principal></Principals>\n";
   xml += L"<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>";
@@ -122,7 +140,7 @@ std::wstring TaskXml(const std::wstring& sid, const std::wstring& command, const
   xml += L"<AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden><RunOnlyIfIdle>false</RunOnlyIfIdle>";
   xml += L"<WakeToRun>false</WakeToRun><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority>";
   xml += L"<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>\n";
-  xml += L"<Actions Context=\"Author\"><Exec><Command>\"" + command + L"\"</Command>";
+  xml += L"<Actions Context=\"Author\"><Exec><Command>" + EscapeXml(command) + L"</Command>";
   if (arguments != nullptr) {
     xml += L"<Arguments>";
     xml += arguments;
@@ -202,8 +220,8 @@ int InstallApplication() {
   StopRunningInstances();
 
   const std::wstring directory = InstallDirectory();
-  const std::wstring sid = CurrentUserSid();
-  if (directory.empty() || sid.empty()) {
+  const std::wstring account = CurrentAccountName();
+  if (directory.empty() || account.empty()) {
     MessageBoxW(nullptr, L"Could not resolve the install location or the current user.", kMessageTitle, MB_ICONERROR);
     return 1;
   }
@@ -215,9 +233,9 @@ int InstallApplication() {
     return 1;
   }
 
-  const bool ok = RegisterTask(kHookTask, TaskXml(sid, target, L"--hook-host", L"HighestAvailable",
+  const bool ok = RegisterTask(kHookTask, TaskXml(account, target, L"--hook-host", L"HighestAvailable",
                                                   L"Keeps PrintScreen and Win+Shift+S working while an administrator window has focus.")) &&
-                  RegisterTask(kAppTask, TaskXml(sid, target, nullptr, L"LeastPrivilege",
+                  RegisterTask(kAppTask, TaskXml(account, target, nullptr, L"LeastPrivilege",
                                                  L"Instant screenshots. Runs quietly in the background."));
   if (!ok) {
     MessageBoxW(nullptr, L"Could not register the logon tasks.", kMessageTitle, MB_ICONERROR);

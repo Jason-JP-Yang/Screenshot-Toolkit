@@ -324,6 +324,26 @@ void Card::Tick(double now) {
   }
 }
 
+void Card::Hibernate(Store& store) {
+  // The crossfades of the flight need these layers, so a card still landing stays as it is.
+  if (hibernating_ || full_release_at_ != 0.0 || !half_) return;
+  if (!store.ReleaseFrame(shot_)) return;
+  hibernating_ = true;
+  half_ = Image();
+  if (half_visual_) half_visual_->SetContent(nullptr);
+  half_surface_.Reset();
+}
+
+void Card::Wake(Store& store) {
+  if (!hibernating_) return;
+  hibernating_ = false;
+  store.RestoreFrame(shot_);
+  if (!shot_->frame) return;
+  half_ = Halve(*shot_->frame);
+  half_surface_ = compositor_.CreateSurface(half_, true);
+  if (half_visual_) half_visual_->SetContent(half_surface_.Get());
+}
+
 Image Card::RenderDragPreview(int width) const {
   const RECT& region = selected_rect();
   const float region_w = static_cast<float>(region.right - region.left);
