@@ -46,7 +46,10 @@ bool HandleKey(DWORD virtual_key, bool is_down, bool injected) {
     }
     if (g_snapshot_held) return true;  // Auto-repeat of a press that already fired.
     // Modified variants such as Alt+PrintScreen keep their native meaning.
-    if (IsHeld(VK_MENU) || IsHeld(VK_CONTROL) || IsHeld(VK_SHIFT) || IsWinHeld()) return false;
+    if (IsHeld(VK_MENU) || IsHeld(VK_CONTROL) || IsHeld(VK_SHIFT) || IsWinHeld()) {
+      Trace("hook: PrintScreen with a modifier held, left to Windows");
+      return false;
+    }
     g_snapshot_held = FireTrigger();
     Trace("hook: PrintScreen, injected=%d", injected);
     return g_snapshot_held;
