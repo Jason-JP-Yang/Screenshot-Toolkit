@@ -1,0 +1,31 @@
+# Build output
+/build/
+/out/
+/dist/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+*.res
+
+# Local tooling
+/.vs/
+/.vscode/
+*.user
+
+# Planning and assistant notes are never versioned
+CLAUDE.md
+CLAUDE.local.md
+/.claude/
+/plan/
+/plans/
+PLAN*.md
+plan*.md
+*.plan.md
+*-plan.md
+
+# Runtime logs and captures from local testing
+*.log
+/captures/
