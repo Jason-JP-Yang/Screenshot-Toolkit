@@ -62,29 +62,17 @@ struct ShadowLayer {
 // Soft shadow of a rounded rectangle, premultiplied black. All lengths are in output pixels.
 Image RenderShadow(int box_width, int box_height, float radius, float pad, const ShadowLayer* layers, int layer_count);
 
-enum class GlyphStyle {
-  kWholeScreen,     // A solid slab: everything, taskbar included.
-  kWithoutTaskbar,  // The screen filled, with the taskbar band left faint.
-  kWindow,          // One window, recognizable by its title bar seam.
-  kZone,            // One cell of a snap layout, drawn among its faint neighbors.
-};
-
-enum class GlyphBand { kNone, kLeft, kTop, kRight, kBottom };
-
-struct GlyphBox {
-  float left, top, right, bottom;  // Normalized to the part of the monitor outside the taskbar.
-};
+// The monitor edge a glyph leaves empty to say that the taskbar there is not included.
+enum class GlyphGap { kNone, kLeft, kTop, kRight, kBottom };
 
 struct GlyphSpec {
-  GlyphStyle style;
-  GlyphBand band;       // The monitor edge holding the taskbar.
   float screen_aspect;  // Width over height of the monitor.
-  GlyphBox box;
-  std::vector<GlyphBox> neighbors;
+  float left, top, right, bottom;  // Region in normalized monitor coordinates.
+  GlyphGap gap;
 };
 
 // One mini-screen glyph per option, laid out left to right at a fixed pitch.
 Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
-                       float color_alpha, float faint_alpha);
+                       float color_alpha);
 
 }  // namespace sstk

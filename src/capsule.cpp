@@ -4,12 +4,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace sstk {
 
 namespace {
 
 constexpr int kShadowDownscale = 4;
+constexpr int kSameAreaTolerance = 2;
 
 uint32_t Argb(uint32_t rgb, float alpha) { return static_cast<uint32_t>(alpha * 255.0f + 0.5f) << 24 | rgb; }
 
@@ -173,46 +175,28 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   // Glyph strips are rebuilt from the shot's real geometry.
   std::vector<GlyphSpec> glyphs;
   glyphs.reserve(regions.size());
-  GlyphBand band = GlyphBand::kNone;
-  if (insets.bottom > 0) band = GlyphBand::kBottom;
-  else if (insets.top > 0) band = GlyphBand::kTop;
-  else if (insets.left > 0) band = GlyphBand::kLeft;
-  else if (insets.right > 0) band = GlyphBand::kRight;
-
-  // Boxes are relative to the area outside the taskbar, because the glyph draws the band at its own legible size.
-  const float area_w = std::max(static_cast<float>(monitor_.cx - insets.left - insets.right), 1.0f);
-  const float area_h = std::max(static_cast<float>(monitor_.cy - insets.top - insets.bottom), 1.0f);
-  auto to_box = [&](const RECT& rect) {
-    return GlyphBox{std::clamp((rect.left - insets.left) / area_w, 0.0f, 1.0f),
-                    std::clamp((rect.top - insets.top) / area_h, 0.0f, 1.0f),
-                    std::clamp((rect.right - insets.left) / area_w, 0.0f, 1.0f),
-                    std::clamp((rect.bottom - insets.top) / area_h, 0.0f, 1.0f)};
-  };
+  GlyphGap taskbar_edge = GlyphGap::kNone;
+  if (insets.bottom > 0) taskbar_edge = GlyphGap::kBottom;
+  else if (insets.top > 0) taskbar_edge = GlyphGap::kTop;
+  else if (insets.left > 0) taskbar_edge = GlyphGap::kLeft;
+  else if (insets.right > 0) taskbar_edge = GlyphGap::kRight;
+  const RECT usable{insets.left, insets.top, monitor_.cx - insets.right, monitor_.cy - insets.bottom};
+  const float mw = static_cast<float>(monitor_.cx);
+  const float mh = static_cast<float>(monitor_.cy);
   for (const Region& region : regions) {
-    GlyphSpec glyph{GlyphStyle::kWindow, band, static_cast<float>(monitor_.cx) / monitor_.cy, to_box(region.rect), {}};
-    switch (region.kind) {
-      case RegionKind::kFull:
-        glyph.style = GlyphStyle::kWholeScreen;
-        break;
-      case RegionKind::kNoTaskbar:
-        glyph.style = GlyphStyle::kWithoutTaskbar;
-        break;
-      case RegionKind::kApp:
-        glyph.style = GlyphStyle::kWindow;
-        break;
-      case RegionKind::kZone:
-        glyph.style = GlyphStyle::kZone;
-        for (const Region& other : regions) {
-          if (other.kind == RegionKind::kZone && &other != &region) glyph.neighbors.push_back(to_box(other.rect));
-        }
-        break;
-    }
-    glyphs.push_back(std::move(glyph));
+    // A maximized window merges with the "without taskbar" option, so this goes by area rather than by kind.
+    const RECT& rect = region.rect;
+    const bool without_taskbar = std::abs(rect.left - usable.left) <= kSameAreaTolerance &&
+                                 std::abs(rect.top - usable.top) <= kSameAreaTolerance &&
+                                 std::abs(rect.right - usable.right) <= kSameAreaTolerance &&
+                                 std::abs(rect.bottom - usable.bottom) <= kSameAreaTolerance;
+    glyphs.push_back({mw / mh, rect.left / mw, rect.top / mh, rect.right / mw, rect.bottom / mh,
+                      without_taskbar ? taskbar_edge : GlyphGap::kNone});
   }
   const int pitch = static_cast<int>(std::round(theme::kSegmentWidth * scale_));
   const int strip_height = static_cast<int>(std::round(theme::kSegmentHeight * scale_));
-  Image light = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnGlass), theme::kGlyphOnGlassAlpha, theme::kGlyphFaintAlpha);
-  Image dark = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnPorcelain), 1.0f, theme::kGlyphFaintAlpha);
+  Image light = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnGlass), theme::kGlyphOnGlassAlpha);
+  Image dark = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnPorcelain), 1.0f);
 
   auto layer = std::make_unique<GlyphLayer>();
   layer->light_surface = compositor_.CreateSurface(light, false);
