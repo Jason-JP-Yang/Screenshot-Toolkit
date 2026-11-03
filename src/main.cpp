@@ -170,7 +170,7 @@ int RunApplication() {
   app.store.Warmup();
   ScheduleTrim(app);
 
-  std::thread hook_thread([quit] { RunKeyboardHook(quit); });
+  std::thread hook_thread([quit] { RunKeyboardHookUnlessHosted(quit); });
   std::thread capture_thread([&app, trigger, quit] { RunCaptureLoop(app.controller, trigger, quit); });
   Trace("application ready");
 
