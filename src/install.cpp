@@ -1,10 +1,12 @@
-// Privilege model: the application itself runs unelevated, so drag and drop, opening files, and
-// the clipboard behave normally with every other program. Only a minimal hook host runs elevated,
-// because Windows does not deliver keys typed into administrator windows to an unelevated hook.
+// Privilege model: the application runs as the logged-on user without administrator rights, so
+// drag and drop, opening files, and the clipboard behave normally with every other program. It does
+// carry the UI Access right, as Magnifier and the on-screen keyboard do. Only that puts its topmost
+// windows above Start and Task View, and lets its keyboard hook see keys typed into administrator
+// windows. Setting the right takes SYSTEM, so a logon task does that and exits at once.
 //
-// The elevated task runs without a UAC prompt at every logon, so its executable has to live where
-// only administrators can write. Pointing it at a user-writable path would let any program
-// replace the file and silently gain administrator rights, hence the copy into Program Files.
+// That task runs as SYSTEM without a prompt at every logon, so its executable has to live where only
+// administrators can write. Pointing it at a user-writable path would let any program replace the
+// file and silently gain those rights, hence the copy into Program Files.
 #include "install.h"
 
 #include "platform.h"
@@ -12,6 +14,8 @@
 #include <knownfolders.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <userenv.h>
+#include <wtsapi32.h>
 
 #include <string>
 
@@ -20,10 +24,16 @@ namespace sstk {
 namespace {
 
 constexpr wchar_t kTaskFolder[] = L"Screenshot Toolkit";
-constexpr wchar_t kHookTask[] = L"Screenshot Toolkit\\Hook Host";
-constexpr wchar_t kAppTask[] = L"Screenshot Toolkit\\Application";
+constexpr wchar_t kLauncherTask[] = L"Screenshot Toolkit\\Launcher";
+// Replaced by the launcher task. Installing or uninstalling also clears them from earlier versions.
+constexpr wchar_t kOldHookTask[] = L"Screenshot Toolkit\\Hook Host";
+constexpr wchar_t kOldAppTask[] = L"Screenshot Toolkit\\Application";
+constexpr wchar_t kOldHookHostQuitEvent[] = L"Local\\ScreenshotToolkit.HookHost.Quit";
+constexpr wchar_t kOldHookHostMutex[] = L"Local\\ScreenshotToolkit.HookHost";
 constexpr wchar_t kExeName[] = L"ScreenshotToolkit.exe";
 constexpr wchar_t kMessageTitle[] = L"Screenshot Toolkit";
+constexpr int kUserTokenAttempts = 60;
+constexpr DWORD kUserTokenRetryMs = 500;
 
 bool IsElevated() {
   HANDLE token = nullptr;
@@ -120,18 +130,13 @@ bool RunHidden(std::wstring command_line) {
   return code == 0;
 }
 
-std::wstring TaskXml(const std::wstring& account, const std::wstring& command, const wchar_t* arguments, const wchar_t* run_level,
-                     const wchar_t* description) {
+std::wstring TaskXml(const std::wstring& account, const std::wstring& command) {
   std::wstring xml;
   xml += L"<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n";
   xml += L"<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n";
-  xml += L"<RegistrationInfo><Description>";
-  xml += description;
-  xml += L"</Description></RegistrationInfo>\n";
+  xml += L"<RegistrationInfo><Description>Starts Screenshot Toolkit at logon, then exits.</Description></RegistrationInfo>\n";
   xml += L"<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + EscapeXml(account) + L"</UserId></LogonTrigger></Triggers>\n";
-  xml += L"<Principals><Principal id=\"Author\"><UserId>" + EscapeXml(account) + L"</UserId><LogonType>InteractiveToken</LogonType><RunLevel>";
-  xml += run_level;
-  xml += L"</RunLevel></Principal></Principals>\n";
+  xml += L"<Principals><Principal id=\"Author\"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\n";
   xml += L"<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>";
   xml += L"<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>";
   xml += L"<AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>false</StartWhenAvailable>";
@@ -140,13 +145,7 @@ std::wstring TaskXml(const std::wstring& account, const std::wstring& command, c
   xml += L"<AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden><RunOnlyIfIdle>false</RunOnlyIfIdle>";
   xml += L"<WakeToRun>false</WakeToRun><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority>";
   xml += L"<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>\n";
-  xml += L"<Actions Context=\"Author\"><Exec><Command>" + EscapeXml(command) + L"</Command>";
-  if (arguments != nullptr) {
-    xml += L"<Arguments>";
-    xml += arguments;
-    xml += L"</Arguments>";
-  }
-  xml += L"</Exec></Actions>\n</Task>\n";
+  xml += L"<Actions Context=\"Author\"><Exec><Command>" + EscapeXml(command) + L"</Command><Arguments>--launch</Arguments></Exec></Actions>\n</Task>\n";
   return xml;
 }
 
@@ -205,14 +204,70 @@ void WaitForMutexRelease(const wchar_t* name) {
 
 void StopRunningInstances() {
   SignalEventByName(kQuitEventName);
-  SignalEventByName(kHookHostQuitEventName);
+  SignalEventByName(kOldHookHostQuitEvent);
   WaitForMutexRelease(kAppMutexName);
-  WaitForMutexRelease(kHookHostMutexName);
+  WaitForMutexRelease(kOldHookHostMutex);
+}
+
+void DeleteOldTasks() {
+  DeleteTask(kOldHookTask);
+  DeleteTask(kOldAppTask);
+}
+
+HANDLE ActiveUserToken() {
+  HANDLE token = nullptr;
+  if (WTSQueryUserToken(WTSGetActiveConsoleSessionId(), &token)) return token;
+  // Over Remote Desktop nobody is logged on at the console.
+  WTS_SESSION_INFOW* sessions = nullptr;
+  DWORD count = 0;
+  if (WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions, &count)) {
+    for (DWORD i = 0; i < count; ++i) {
+      if (sessions[i].State == WTSActive && WTSQueryUserToken(sessions[i].SessionId, &token)) break;
+    }
+    WTSFreeMemory(sessions);
+  }
+  return token;
 }
 
 }  // namespace
 
 void RequestQuit() { SignalEventByName(kQuitEventName); }
+
+int LaunchInUserSession() {
+  // The logon trigger can fire a moment before the session has a usable token.
+  HANDLE user = nullptr;
+  for (int attempt = 0; attempt < kUserTokenAttempts && user == nullptr; ++attempt) {
+    user = ActiveUserToken();
+    if (user == nullptr) Sleep(kUserTokenRetryMs);
+  }
+  if (user == nullptr) return 1;
+
+  HANDLE token = nullptr;
+  const BOOL duplicated = DuplicateTokenEx(user, MAXIMUM_ALLOWED, nullptr, SecurityImpersonation, TokenPrimary, &token);
+  CloseHandle(user);
+  if (!duplicated) return 1;
+
+  // If this fails the application still works, only below Start and Task View and deaf to administrator windows.
+  DWORD ui_access = 1;
+  SetTokenInformation(token, TokenUIAccess, &ui_access, sizeof(ui_access));
+
+  void* environment = nullptr;
+  CreateEnvironmentBlock(&environment, token, FALSE);
+  wchar_t desktop[] = L"winsta0\\default";
+  STARTUPINFOW startup{sizeof(startup)};
+  startup.lpDesktop = desktop;
+  PROCESS_INFORMATION process{};
+  const std::wstring self = CurrentExecutablePath();
+  std::wstring command_line = L"\"" + self + L"\"";
+  const BOOL started = CreateProcessAsUserW(token, self.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+                                            CREATE_UNICODE_ENVIRONMENT, environment, nullptr, &startup, &process);
+  if (environment != nullptr) DestroyEnvironmentBlock(environment);
+  CloseHandle(token);
+  if (!started) return 1;
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return 0;
+}
 
 int InstallApplication() {
   if (!IsElevated()) return RelaunchElevated(L"--install");
@@ -233,17 +288,13 @@ int InstallApplication() {
     return 1;
   }
 
-  const bool ok = RegisterTask(kHookTask, TaskXml(account, target, L"--hook-host", L"HighestAvailable",
-                                                  L"Keeps PrintScreen and Win+Shift+S working while an administrator window has focus.")) &&
-                  RegisterTask(kAppTask, TaskXml(account, target, nullptr, L"LeastPrivilege",
-                                                 L"Instant screenshots. Runs quietly in the background."));
-  if (!ok) {
-    MessageBoxW(nullptr, L"Could not register the logon tasks.", kMessageTitle, MB_ICONERROR);
+  DeleteOldTasks();
+  if (!RegisterTask(kLauncherTask, TaskXml(account, target))) {
+    MessageBoxW(nullptr, L"Could not register the logon task.", kMessageTitle, MB_ICONERROR);
     return 1;
   }
 
-  StartTask(kHookTask);
-  StartTask(kAppTask);
+  StartTask(kLauncherTask);
   MessageBoxW(nullptr, L"Installed. PrintScreen and Win+Shift+S now take instant screenshots, and it starts automatically at logon.",
               kMessageTitle, MB_ICONINFORMATION);
   return 0;
@@ -253,8 +304,8 @@ int UninstallApplication() {
   if (!IsElevated()) return RelaunchElevated(L"--uninstall");
 
   StopRunningInstances();
-  DeleteTask(kHookTask);
-  DeleteTask(kAppTask);
+  DeleteOldTasks();
+  DeleteTask(kLauncherTask);
 
   const std::wstring directory = InstallDirectory();
   if (!directory.empty()) {

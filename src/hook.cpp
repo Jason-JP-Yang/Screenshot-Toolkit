@@ -8,8 +8,6 @@ namespace {
 
 // Windows silently removes hooks that once ran too slowly, so the hook is refreshed periodically.
 constexpr DWORD kReinstallIntervalMs = 5 * 60 * 1000;
-constexpr DWORD kHostCheckIntervalMs = 15 * 1000;
-constexpr int kHostChecksPerRefresh = 20;
 
 // An unassigned virtual key. Injecting it while Win is held stops the Start menu from opening on release.
 constexpr WORD kMaskKey = 0xFF;
@@ -99,17 +97,6 @@ void InstallHook() {
 
 namespace {
 
-// A process cannot open the elevated host's mutex, but the refusal still proves that it exists.
-bool HookHostIsRunning() {
-  if (GetEnvironmentVariableW(L"SSTK_IGNORE_HOOK_HOST", nullptr, 0) > 0) return false;
-  HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, kHookHostMutexName);
-  if (mutex != nullptr) {
-    CloseHandle(mutex);
-    return true;
-  }
-  return GetLastError() == ERROR_ACCESS_DENIED;
-}
-
 // Settings broadcasts and the like slowly page things back in, so idle memory is handed back now and then.
 void TrimWorkingSet() { EmptyWorkingSet(GetCurrentProcess()); }
 
@@ -144,26 +131,6 @@ void RunKeyboardHook(HANDLE stop_event) {
   while (!PumpHookMessages(stop_event, kReinstallIntervalMs)) {
     InstallHook();
     TrimWorkingSet();
-  }
-  RemoveHook();
-}
-
-void RunKeyboardHookUnlessHosted(HANDLE stop_event) {
-  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-  int checks = 0;
-  bool stopping = false;
-  while (!stopping) {
-    const bool refresh = checks % kHostChecksPerRefresh == 0;
-    if (HookHostIsRunning()) {
-      RemoveHook();
-      stopping = WaitForSingleObject(stop_event, kHostCheckIntervalMs) == WAIT_OBJECT_0;
-    } else {
-      // Windows can drop a hook silently, so one held for a while is renewed.
-      if (g_hook == nullptr || refresh) InstallHook();
-      stopping = PumpHookMessages(stop_event, kHostCheckIntervalMs);
-    }
-    if (refresh && checks > 0) TrimWorkingSet();
-    ++checks;
   }
   RemoveHook();
 }

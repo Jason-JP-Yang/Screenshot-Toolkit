@@ -12,9 +12,7 @@ namespace sstk {
 
 inline constexpr wchar_t kTriggerEventName[] = L"Local\\ScreenshotToolkit.Trigger";
 inline constexpr wchar_t kQuitEventName[] = L"Local\\ScreenshotToolkit.Quit";
-inline constexpr wchar_t kHookHostQuitEventName[] = L"Local\\ScreenshotToolkit.HookHost.Quit";
 inline constexpr wchar_t kAppMutexName[] = L"Local\\ScreenshotToolkit.App";
-inline constexpr wchar_t kHookHostMutexName[] = L"Local\\ScreenshotToolkit.HookHost";
 
 // Messages handled by the hidden controller window on the UI thread.
 enum Message : UINT {
@@ -27,7 +25,8 @@ enum Message : UINT {
 double NowSeconds();
 int64_t QpcFrequency();
 
-// True when SSTK_DEBUG_VISIBLE is set, so test tooling can sample the overlay from the screen.
+// True when screenshots show the overlay: chosen in config.h, or forced by SSTK_DEBUG_VISIBLE so that
+// test tooling can sample the overlay from the screen.
 bool OverlayVisibleToCapture();
 
 // Appends a line to %TEMP%\ScreenshotToolkit.log when SSTK_TRACE is set. No-op otherwise.

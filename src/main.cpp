@@ -1,8 +1,8 @@
 // Entry point. Modes:
-//   (no arguments)   The application: capture, overlay, and persistence, running unelevated.
-//   --hook-host      Elevated companion holding only a keyboard hook. See install.cpp.
-//   --install        Copies to Program Files and registers the logon tasks. Prompts through UAC.
-//   --uninstall      Removes the tasks and the installed program. Prompts through UAC.
+//   (no arguments)   The application: capture, overlay, and persistence.
+//   --launch         Run by the logon task: starts the application in the user's session. See install.cpp.
+//   --install        Copies to Program Files and registers the logon task. Prompts through UAC.
+//   --uninstall      Removes the task and the installed program. Prompts through UAC.
 //   --quit           Asks a running instance to exit.
 #include "capture.h"
 #include "compositor.h"
@@ -170,7 +170,7 @@ int RunApplication() {
   app.store.Warmup();
   ScheduleTrim(app);
 
-  std::thread hook_thread([quit] { RunKeyboardHookUnlessHosted(quit); });
+  std::thread hook_thread([quit] { RunKeyboardHook(quit); });
   std::thread capture_thread([&app, trigger, quit] { RunCaptureLoop(app.controller, trigger, quit); });
   Trace("application ready");
 
@@ -205,20 +205,6 @@ int RunApplication() {
   return 0;
 }
 
-int RunHookHost() {
-  HANDLE instance = CreateMutexW(nullptr, TRUE, kHookHostMutexName);
-  if (instance == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
-  HANDLE quit = CreateEventW(nullptr, TRUE, FALSE, kHookHostQuitEventName);
-  if (quit == nullptr) return 1;
-
-  DisablePowerThrottling();
-  EmptyWorkingSet(GetCurrentProcess());
-  RunKeyboardHook(quit);
-  CloseHandle(quit);
-  CloseHandle(instance);
-  return 0;
-}
-
 bool HasArgument(int argc, wchar_t** argv, const wchar_t* name) {
   for (int i = 1; i < argc; ++i) {
     if (_wcsicmp(argv[i], name) == 0) return true;
@@ -234,8 +220,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   int argc = 0;
   wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   int result;
-  if (sstk::HasArgument(argc, argv, L"--hook-host")) {
-    result = sstk::RunHookHost();
+  if (sstk::HasArgument(argc, argv, L"--launch")) {
+    result = sstk::LaunchInUserSession();
   } else if (sstk::HasArgument(argc, argv, L"--install")) {
     result = sstk::InstallApplication();
   } else if (sstk::HasArgument(argc, argv, L"--uninstall")) {

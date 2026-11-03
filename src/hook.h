@@ -10,9 +10,4 @@ namespace sstk {
 // its native behavior whenever the application is not running.
 void RunKeyboardHook(HANDLE stop_event);
 
-// For the application: the same hook, but only while no hook host is running. The host already sees
-// every key, including those typed into administrator windows, so a second hook would only wake this
-// process on each keystroke. Hands over in both directions within a few seconds.
-void RunKeyboardHookUnlessHosted(HANDLE stop_event);
-
 }  // namespace sstk

@@ -206,6 +206,7 @@ void Deck::Flash() {
 }
 
 void Deck::ApplyInsets(const TaskbarInsets& insets) {
+  if (insets != insets_) Trace("taskbar insets: %d %d %d %d", insets.left, insets.top, insets.right, insets.bottom);
   insets_ = insets;
   // Shadows pass under the taskbar, as those of ordinary windows do.
   shadow_clip_->SetLeft(static_cast<float>(insets.left));
@@ -428,7 +429,6 @@ void Deck::Tick() {
   if (!cards_.empty() && ++tick_count_ % kTaskbarPollTicks == 0) {
     const TaskbarInsets insets = QueryTaskbarInsets(monitor_);
     if (insets != insets_) {
-      Trace("taskbar insets: %d %d %d %d", insets.left, insets.top, insets.right, insets.bottom);
       ApplyInsets(insets);
       Layout(theme::kReflow, now);
     }
@@ -574,7 +574,9 @@ void Deck::OpenFront() {
   EnsureOleInitialized();
   // The click makes this process eligible to pass the foreground on, which the viewer needs to come to the front.
   AllowSetForegroundWindow(ASFW_ANY);
-  ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  // Handed to the shell, so that the viewer does not inherit this process's UI Access right.
+  const std::wstring quoted = L"\"" + path + L"\"";
+  ShellExecuteW(nullptr, L"open", L"explorer.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 void Deck::BeginFileDrag() {

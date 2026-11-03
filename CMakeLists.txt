@@ -41,14 +41,15 @@ target_compile_options(ScreenshotToolkit PRIVATE
 target_link_options(ScreenshotToolkit PRIVATE
   /MANIFEST:NO
   /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA
-  # The hook host must never map the rendering or codec stacks.
+  # The SYSTEM launcher must never map the rendering or codec stacks.
   /DELAYLOAD:d3d11.dll /DELAYLOAD:dcomp.dll /DELAYLOAD:dxgi.dll
   /DELAYLOAD:ole32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:windowscodecs.dll
   /DELAYLOAD:dwmapi.dll /DELAYLOAD:psapi.dll
+  /DELAYLOAD:wtsapi32.dll /DELAYLOAD:userenv.dll
   $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
 )
 
 target_link_libraries(ScreenshotToolkit PRIVATE
   user32 gdi32 advapi32 ole32 shell32 uuid
-  d3d11 dxgi dcomp dwmapi psapi windowscodecs delayimp
+  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv delayimp
 )
