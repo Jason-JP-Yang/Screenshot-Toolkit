@@ -23,12 +23,12 @@ With several monitors, the one under the cursor is captured. Options covering an
 ScreenshotToolkit.exe --install
 ```
 
-This prompts through UAC once, copies the program to `Program Files\Screenshot Toolkit`, registers two logon tasks, and starts them.
+This prompts through UAC once, copies the program to `Program Files\Screenshot Toolkit`, registers a logon task, and starts the program.
 
 | Command | Effect |
 |---|---|
 | `--install` | Install or update, and start now |
-| `--uninstall` | Remove the tasks and the program. Screenshots are kept |
+| `--uninstall` | Remove the task and the program. Screenshots are kept |
 | `--quit` | Stop the running application until the next logon |
 
 ## Build
@@ -41,9 +41,19 @@ build.cmd Release
 
 The result is `build\Release\ScreenshotToolkit.exe`.
 
+## Releases
+
+The version is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. To publish, run:
+
+```bash
+release.cmd
+```
+
+This builds Release and copies the program to `release\<version>\`, a local folder git does not track. Each version is tagged `vX.Y.Z`.
+
 ## How it stays fast and light
 
-**Idle cost.** After each session the process returns its working set to the system, leaving about 0.2 MB of private working set. Pages stay cached in RAM, so the next press only takes soft page faults. No timers run while idle; the only recurring wake-up is a keyboard hook refresh every five minutes.
+**Idle cost.** After each session the process returns its working set to the system, leaving about 0.2 MB of private working set. Pages stay cached in RAM, so the next press only takes soft page faults. No timers run on the UI thread while idle. The only recurring wake-up is a keyboard hook refresh every five minutes, which also hands back stray pages.
 
 **Animation cost.** Spring curves have a closed-form solution, so each value is uploaded once as a chain of cubic segments and DWM evaluates it at the display's refresh rate on its own. The process sleeps during animation and the motion is immune to CPU load.
 
@@ -51,15 +61,21 @@ The result is `build\Release\ScreenshotToolkit.exe`.
 
 **Latency.** The flash is committed about 4 ms after the key press. BitBlt takes 25-40 ms at 2560x1600, and the image is on screen about 50 ms after the press. Thumbnails, file saving, and the clipboard happen after that first frame and never delay it.
 
-**Bursts.** Cards behind the front cannot be edited, so their raw pixels are dropped in favor of the PNG already encoded in memory, and restored if the card returns to the front. A burst of twelve shots peaks near 45 MB instead of 250 MB.
+**Active memory.** A thumbnail is prepared for every region when the shot is taken, and the raw frame is released once the PNG is saved, leaving about 15 MB per session instead of a raw copy per shot. Switching regions uploads nothing on click; the new crop and clipboard data come from the PNG kept in memory. Cards deep in the deck keep only their current thumbnail, and a burst of five stays near 8 MB.
 
-**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots.
+**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config.h` and rebuild.
+
+**Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
+
+**Above everything.** Thumbnails stay visible over Start, Task View, and the other shell surfaces, because the overlay sits in the UI Access window band. See below.
 
 ## Privilege model
 
-The application runs unelevated, so drag and drop, opening files, and the clipboard behave normally with every other program. Windows does not deliver keys typed into administrator windows to an unelevated hook, so a second elevated process holds only a keyboard hook and signals the application. It maps no rendering or codec libraries and parses no input.
+The application runs as the logged-on user without administrator rights, so drag and drop, opening files, and the clipboard behave normally with every other program. It carries the UI Access right, as Magnifier and the on-screen keyboard do. Nothing else puts its topmost windows above Start and Task View, or lets its keyboard hook see keys typed into administrator windows.
 
-That task runs elevated without a prompt at each logon, so its executable has to live where only administrators can write. A user-writable path would let any program replace the file and silently gain administrator rights, which is why installation copies to Program Files.
+Setting that right takes SYSTEM, so a logon task running as SYSTEM starts the application with it and exits at once. Only one process stays running, and it is not elevated. Because the task runs without a prompt at each logon, its executable has to live where only administrators can write. A user-writable path would let any program replace the file and silently gain those rights, which is why installation copies to Program Files.
+
+Run directly without installing, the program works the same except that it stays below Start and Task View and does not see keys typed into administrator windows.
 
 Keys are swallowed only while the application is alive. If it is not running, Windows keeps its native behavior.
 
@@ -75,17 +91,18 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/store.cpp` | PNG encoding, atomic saves, clipboard preparation, frame archiving |
 | `src/motion.cpp` | Damped springs emitted as DirectComposition cubic animations |
 | `src/compositor.cpp` | WARP device and composition helpers |
-| `src/card.cpp` | One screenshot: the image plane, its crossfades, and its poses |
+| `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
 | `src/capsule.cpp` | The region selector and its sliding pill |
 | `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
 | `src/dragdrop.cpp` | File drag out of the overlay |
-| `src/install.cpp` | Logon task registration |
+| `src/install.cpp` | Logon task registration and starting in the user's session |
 | `src/theme.h` | Design tokens: "Graphite Glass" palette, metrics, and springs |
+| `src/config.h` | Core behavior switches chosen at build time |
 
 ## Debugging
 
 | Variable | Effect |
 |---|---|
 | `SSTK_TRACE` | Appends timing to `%TEMP%\ScreenshotToolkit.log` |
-| `SSTK_DEBUG_VISIBLE` | Makes the overlay capturable, so tooling can sample animation frames |
+| `SSTK_DEBUG_VISIBLE` | Makes the overlay capturable, so tooling can sample animation frames. Screenshots then contain thumbnails |
 | `SSTK_GALLERY_DIR` | Saves screenshots to another folder |

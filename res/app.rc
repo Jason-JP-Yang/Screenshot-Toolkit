@@ -3,8 +3,8 @@
 1 RT_MANIFEST "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+FILEVERSION SSTK_VERSION_NUMBERS
+PRODUCTVERSION SSTK_VERSION_NUMBERS
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS VOS_NT_WINDOWS32
@@ -16,11 +16,11 @@ BEGIN
     BLOCK "040904b0"
     BEGIN
       VALUE "FileDescription", "Screenshot Toolkit"
-      VALUE "FileVersion", "1.0.0.0"
+      VALUE "FileVersion", SSTK_VERSION_TEXT
       VALUE "InternalName", "ScreenshotToolkit"
       VALUE "OriginalFilename", "ScreenshotToolkit.exe"
       VALUE "ProductName", "Screenshot Toolkit"
-      VALUE "ProductVersion", "1.0.0.0"
+      VALUE "ProductVersion", SSTK_VERSION_TEXT
     END
   END
   BLOCK "VarFileInfo"

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ScreenshotToolkit LANGUAGES CXX RC)
+project(ScreenshotToolkit VERSION 0.1.1 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,8 @@ add_executable(ScreenshotToolkit WIN32
 target_compile_definitions(ScreenshotToolkit PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
   _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A00000F
+  SSTK_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0
+  SSTK_VERSION_TEXT="${PROJECT_VERSION}"
 )
 
 target_compile_options(ScreenshotToolkit PRIVATE
@@ -52,4 +54,12 @@ target_link_options(ScreenshotToolkit PRIVATE
 target_link_libraries(ScreenshotToolkit PRIVATE
   user32 gdi32 advapi32 ole32 shell32 uuid
   d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv delayimp
+)
+
+# Publishes the built program to release/<version>, which is not versioned by git.
+add_custom_target(release
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:ScreenshotToolkit>
+          ${CMAKE_SOURCE_DIR}/release/${PROJECT_VERSION}/ScreenshotToolkit.exe
+  DEPENDS ScreenshotToolkit
+  VERBATIM
 )
