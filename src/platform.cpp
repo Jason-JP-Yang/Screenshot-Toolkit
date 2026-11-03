@@ -1,5 +1,7 @@
 #include "platform.h"
 
+#include "config.h"
+
 #include <cstdarg>
 #include <cstdio>
 
@@ -32,7 +34,7 @@ double NowSeconds() {
 }
 
 bool OverlayVisibleToCapture() {
-  static const bool visible = EnvironmentFlag(L"SSTK_DEBUG_VISIBLE");
+  static const bool visible = config::kCaptureIncludesThumbnails || EnvironmentFlag(L"SSTK_DEBUG_VISIBLE");
   return visible;
 }
 
