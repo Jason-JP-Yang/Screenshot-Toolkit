@@ -75,4 +75,17 @@ struct GlyphSpec {
 Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
                        float color_alpha);
 
+// A thumbnail with rounded corners and border. The clear margin keeps transformed edges antialiased.
+Image RenderSprite(const Image& thumbnail, float radius, float border, int margin);
+
+// Disc of `size` pixels with a white plus and a soft shadow, on a canvas larger by `pad` per side. Color is 0xRRGGBB.
+Image RenderPlusBadge(int size, int pad, float scale, uint32_t color);
+
+// The bin icon in two pieces on one canvas, so that the lid can swing off the can.
+Image RenderBinCan(int size, float scale);
+Image RenderBinLid(int size, float scale);
+
+// One line of white text on clear pixels.
+Image RenderLabel(const wchar_t* text, int font_pixels);
+
 }  // namespace sstk

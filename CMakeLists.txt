@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ScreenshotToolkit VERSION 0.1.1 LANGUAGES CXX RC)
+project(ScreenshotToolkit VERSION 0.1.2 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,6 +14,7 @@ add_executable(ScreenshotToolkit WIN32
   src/main.cpp
   src/capsule.cpp
   src/capture.cpp
+  src/bin.cpp
   src/card.cpp
   src/compositor.cpp
   src/dragdrop.cpp
@@ -24,6 +25,7 @@ add_executable(ScreenshotToolkit WIN32
   src/overlay.cpp
   src/platform.cpp
   src/screen.cpp
+  src/sprite.cpp
   src/store.cpp
   res/app.rc
 )

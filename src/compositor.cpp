@@ -1,5 +1,6 @@
 #include "compositor.h"
 
+#include <dwmapi.h>
 #include <dxgi1_3.h>
 
 #include <algorithm>
@@ -132,6 +133,41 @@ void Compositor::ReleaseUnusedMemory() {
   d3d_context_->Flush();
   ComPtr<IDXGIDevice3> dxgi;
   if (SUCCEEDED(d3d_device_.As(&dxgi))) dxgi->Trim();
+}
+
+void FramePacer::Start(HWND target, UINT message) {
+  if (running()) return;
+  running_.store(true, std::memory_order_relaxed);
+  posted_.store(false, std::memory_order_relaxed);
+  thread_ = std::thread([this, target, message] {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
+    // The compositor clock arrived with Windows 11, and until then the next present is the closest thing.
+    using WaitForClock = DWORD(WINAPI*)(UINT, const HANDLE*, DWORD);
+    using BoostClock = HRESULT(WINAPI*)(BOOL);
+    HMODULE dcomp = GetModuleHandleW(L"dcomp.dll");
+    auto wait = dcomp != nullptr ? reinterpret_cast<WaitForClock>(GetProcAddress(dcomp, "DCompositionWaitForCompositorClock")) : nullptr;
+    auto boost = dcomp != nullptr ? reinterpret_cast<BoostClock>(GetProcAddress(dcomp, "DCompositionBoostCompositorClock")) : nullptr;
+    if (boost != nullptr) boost(TRUE);
+
+    while (running_.load(std::memory_order_relaxed)) {
+      const double before = NowSeconds();
+      if (wait != nullptr) {
+        wait(0, nullptr, 50);
+      } else {
+        DwmFlush();
+      }
+      // Both can return at once when nothing is being composed, which must not turn into a spin.
+      if (NowSeconds() - before < 0.002) Sleep(2);
+      if (!posted_.exchange(true, std::memory_order_relaxed)) PostMessageW(target, message, 0, 0);
+    }
+    if (boost != nullptr) boost(FALSE);
+  });
+}
+
+void FramePacer::Stop() {
+  running_.store(false, std::memory_order_relaxed);
+  if (thread_.joinable()) thread_.join();
 }
 
 }  // namespace sstk

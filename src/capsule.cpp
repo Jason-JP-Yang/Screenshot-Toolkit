@@ -157,7 +157,7 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   visible_ = show;
 
   if (!show) {
-    opacity_.To(dc, now, 0.0f, theme::kFade);
+    Hide(now);
     return;
   }
 
@@ -247,11 +247,20 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
     shadow_sx_.To(dc, now, shadow_scale, theme::kReflow);
     PlacePill(selected, now, false);
     opacity_.To(dc, now, 1.0f, theme::kFade);
+  } else if (opacity_.ValueAt(now.seconds) > 0.02f) {
+    // Called back while still leaving: it turns around from where it is.
+    width_.Snap(width);
+    shadow_sx_.Snap(shadow_scale);
+    PlacePill(selected, now, true);
+    x_.To(dc, now, target_x_, theme::kReflow);
+    opacity_.To(dc, now, 1.0f, theme::kFade);
+    y_.To(dc, now, target_y_, theme::kCapsuleEnter);
   } else {
     width_.Snap(width);
     shadow_sx_.Snap(shadow_scale);
     PlacePill(selected, now, true);
     // The capsule rises into place just after the card starts flying.
+    x_.Snap(target_x_);
     y_.Snap(target_y_ + theme::kCapsuleRise * scale_);
     opacity_.Snap(0.0f);
     opacity_.To(dc, now, 1.0f, theme::kFade, theme::kCapsuleEnterDelay);
@@ -269,6 +278,8 @@ void Capsule::MoveTo(float x, float y, const TimeBase& now) {
     y_.Snap(y);
     return;
   }
+  // Out of sight it only remembers: the next showing starts from these.
+  if (!visible_) return;
   x_.To(dc, now, x, theme::kReflow);
   y_.To(dc, now, y, theme::kReflow);
 }
@@ -302,7 +313,9 @@ void Capsule::Hide(const TimeBase& now) {
   visible_ = false;
   hover_ = -1;
   IDCompositionDevice* dc = compositor_.device();
-  opacity_.To(dc, now, 0.0f, theme::kFade);
+  // It sinks the way it came as it fades, the mirror of its entrance.
+  opacity_.To(dc, now, 0.0f, theme::kCapsuleLeave);
+  y_.To(dc, now, target_y_ + theme::kCapsuleRise * scale_, theme::kCapsuleLeave);
   veil_alpha_.To(dc, now, 0.0f, theme::kQuickFade);
 }
 

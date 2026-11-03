@@ -49,6 +49,30 @@ void BoxBlur(Image& image, int radius) {
   for (int x = 0; x < width; ++x) blur_line(image.data() + static_cast<ptrdiff_t>(x) * 4, height, image.stride());
 }
 
+float SegmentDistance(float px, float py, float ax, float ay, float bx, float by) {
+  const float abx = bx - ax;
+  const float aby = by - ay;
+  const float t = std::clamp(((px - ax) * abx + (py - ay) * aby) / std::max(abx * abx + aby * aby, 1e-6f), 0.0f, 1.0f);
+  const float dx = px - (ax + abx * t);
+  const float dy = py - (ay + aby * t);
+  return std::sqrt(dx * dx + dy * dy);
+}
+
+// A white shape on clear pixels. The callback gets icon units and returns coverage, given how many pixels one unit is.
+template <typename Shape>
+Image RenderIcon(int size, float scale, Shape shape) {
+  Image image = Image::Allocate(size, size);
+  if (!image) return image;
+  uint8_t* out = image.data();
+  for (int y = 0; y < size; ++y) {
+    for (int x = 0; x < size; ++x, out += 4) {
+      const uint8_t value = ToByte(shape((x + 0.5f) / scale, (y + 0.5f) / scale) * 255.0f);
+      out[0] = out[1] = out[2] = out[3] = value;
+    }
+  }
+  return image;
+}
+
 }  // namespace
 
 Image::~Image() { Reset(); }
@@ -373,6 +397,150 @@ Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int heig
     }
   }
   return strip;
+}
+
+Image RenderSprite(const Image& thumbnail, float radius, float border, int margin) {
+  const int width = thumbnail.width() + margin * 2;
+  const int height = thumbnail.height() + margin * 2;
+  Image sprite = Image::Allocate(width, height);
+  if (!sprite) return sprite;
+
+  const float cx = width * 0.5f;
+  const float cy = height * 0.5f;
+  const float half_w = thumbnail.width() * 0.5f;
+  const float half_h = thumbnail.height() * 0.5f;
+  uint8_t* out = sprite.data();
+  for (int y = 0; y < height; ++y) {
+    const int source_y = std::clamp(y - margin, 0, thumbnail.height() - 1);
+    const uint8_t* row = thumbnail.data() + static_cast<ptrdiff_t>(source_y) * thumbnail.stride();
+    for (int x = 0; x < width; ++x, out += 4) {
+      const float px = x + 0.5f;
+      const float py = y + 0.5f;
+      const float outer = Coverage(RoundedBoxDistance(px, py, cx, cy, half_w, half_h, radius));
+      if (outer <= 0.0f) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        continue;
+      }
+      const float inner = Coverage(RoundedBoxDistance(px, py, cx, cy, half_w - border, half_h - border, std::max(radius - border, 0.0f)));
+      const uint8_t* source = row + static_cast<ptrdiff_t>(std::clamp(x - margin, 0, thumbnail.width() - 1)) * 4;
+      for (int c = 0; c < 3; ++c) out[c] = ToByte((255.0f + (source[c] - 255.0f) * inner) * outer);
+      out[3] = ToByte(outer * 255.0f);
+    }
+  }
+  return sprite;
+}
+
+Image RenderPlusBadge(int size, int pad, float scale, uint32_t color) {
+  const int canvas = size + pad * 2;
+  Image badge = Image::Allocate(canvas, canvas);
+  if (!badge) return badge;
+
+  const float center = canvas * 0.5f;
+  const float radius = size * 0.5f;
+  const float ring = 1.5f * scale;
+  const float arm = radius * 0.46f;
+  const float stroke = 1.05f * scale;
+  const float sigma = 2.6f * scale;
+  const float shadow_offset = 1.4f * scale;
+  const float fill[3] = {static_cast<float>(color & 0xFF), static_cast<float>((color >> 8) & 0xFF), static_cast<float>((color >> 16) & 0xFF)};
+  uint8_t* out = badge.data();
+  for (int y = 0; y < canvas; ++y) {
+    for (int x = 0; x < canvas; ++x, out += 4) {
+      const float px = x + 0.5f - center;
+      const float py = y + 0.5f - center;
+      const float distance = std::sqrt(px * px + py * py);
+      const float shadow_distance = std::sqrt(px * px + (py - shadow_offset) * (py - shadow_offset));
+      const float disc = Coverage(distance - radius);
+      const float core = Coverage(distance - (radius - ring));
+      const float shadow = 0.32f * 0.5f * static_cast<float>(std::erfc((shadow_distance - radius) / (sigma * 1.41421356f)));
+      const float plus = std::max(Coverage(SegmentDistance(px, py, -arm, 0.0f, arm, 0.0f) - stroke),
+                                  Coverage(SegmentDistance(px, py, 0.0f, -arm, 0.0f, arm) - stroke));
+      const float alpha = disc + shadow * (1.0f - disc);
+      for (int c = 0; c < 3; ++c) {
+        const float face = 255.0f + (fill[c] - 255.0f) * core * (1.0f - plus);
+        out[c] = ToByte(face * disc);
+      }
+      out[3] = ToByte(alpha * 255.0f);
+    }
+  }
+  return badge;
+}
+
+Image RenderBinCan(int size, float scale) {
+  return RenderIcon(size, scale, [scale](float x, float y) {
+    // A solid body narrowing toward its base, with two slots cut out.
+    const float taper = 1.0f + 0.17f * std::clamp((y - 9.5f) / 11.8f, 0.0f, 1.0f);
+    const float body = RoundedBoxDistance(12.0f + (x - 12.0f) * taper, y, 12.0f, 15.4f, 6.3f, 5.9f, 1.8f);
+    const float slots = std::min(SegmentDistance(x, y, 9.5f, 12.6f, 9.8f, 18.3f), SegmentDistance(x, y, 14.5f, 12.6f, 14.2f, 18.3f)) - 0.8f;
+    return Coverage(body * scale) * (1.0f - Coverage(slots * scale));
+  });
+}
+
+Image RenderBinLid(int size, float scale) {
+  return RenderIcon(size, scale, [scale](float x, float y) {
+    const float bar = RoundedBoxDistance(x, y, 12.0f, 7.2f, 8.1f, 1.3f, 1.3f);
+    const float grip = RoundedBoxDistance(x, y, 12.0f, 4.8f, 3.0f, 1.8f, 1.1f);
+    return Coverage(std::min(bar, grip) * scale);
+  });
+}
+
+Image RenderLabel(const wchar_t* text, int font_pixels) {
+  // Drawn large and reduced, which gives even, unhinted edges at any display scale.
+  constexpr int kOversample = 4;
+  Image label;
+  HDC dc = CreateCompatibleDC(nullptr);
+  if (dc == nullptr) return label;
+  HFONT font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                           L"Segoe UI Semibold");
+  HGDIOBJ previous_font = SelectObject(dc, font);
+  const int length = lstrlenW(text);
+  SIZE extent{};
+  GetTextExtentPoint32W(dc, text, length, &extent);
+  const int width = std::max<int>((extent.cx + kOversample - 1) / kOversample + 2, 1);
+  const int height = std::max<int>((extent.cy + kOversample - 1) / kOversample, 1);
+
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(info.bmiHeader);
+  info.bmiHeader.biWidth = width * kOversample;
+  info.bmiHeader.biHeight = -height * kOversample;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP dib = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (dib != nullptr) {
+    HGDIOBJ previous_bitmap = SelectObject(dc, dib);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    TextOutW(dc, kOversample, 0, text, length);
+    GdiFlush();
+
+    label = Image::Allocate(width, height);
+    if (label) {
+      const auto* source = static_cast<const uint8_t*>(bits);
+      const int source_stride = width * kOversample * 4;
+      uint8_t* out = label.data();
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x, out += 4) {
+          int sum = 0;
+          for (int sy = 0; sy < kOversample; ++sy) {
+            const uint8_t* row = source + static_cast<ptrdiff_t>(y * kOversample + sy) * source_stride + static_cast<ptrdiff_t>(x * kOversample) * 4;
+            for (int sx = 0; sx < kOversample; ++sx) sum += row[sx * 4];
+          }
+          // Light text on a saturated body reads thin without a touch of weight.
+          const float coverage = std::pow(sum / (255.0f * kOversample * kOversample), 0.86f);
+          out[0] = out[1] = out[2] = out[3] = ToByte(coverage * 255.0f);
+        }
+      }
+    }
+    SelectObject(dc, previous_bitmap);
+    DeleteObject(dib);
+  }
+  SelectObject(dc, previous_font);
+  DeleteObject(font);
+  DeleteDC(dc);
+  return label;
 }
 
 }  // namespace sstk

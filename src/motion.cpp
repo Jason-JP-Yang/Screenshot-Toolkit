@@ -40,6 +40,21 @@ double SpringSettleTime(const SpringSpec& spec) {
   return spec.damping < 0.999 ? 7.6 / (spec.damping * omega) : 9.5 / omega;
 }
 
+void SpringValue::Snap(float to) {
+  value = target = to;
+  velocity = 0.0f;
+}
+
+void SpringValue::Step(const SpringSpec& spec, float dt) {
+  const SpringState state = Evaluate(spec, value - target, velocity, dt);
+  value = target + static_cast<float>(state.value);
+  velocity = static_cast<float>(state.velocity);
+}
+
+bool SpringValue::Settled(float tolerance) const {
+  return std::fabs(value - target) < tolerance && std::fabs(velocity) < tolerance * 12.0f;
+}
+
 void AnimFloat::Bind(void* object, Setter setter, float bias) { sinks_[sink_count_++] = Sink{object, setter, bias}; }
 
 void AnimFloat::Sample(double time, float* value, float* velocity) const {

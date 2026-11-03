@@ -6,6 +6,7 @@
 //   --quit           Asks a running instance to exit.
 #include "capture.h"
 #include "compositor.h"
+#include "dragdrop.h"
 #include "hook.h"
 #include "install.h"
 #include "overlay.h"
@@ -39,6 +40,8 @@ struct App {
   HGLOBAL pending_clipboard = nullptr;
   uint64_t pending_clipboard_sequence = 0;
   int clipboard_attempts = 0;
+  DWORD installed_clipboard_sequence = 0;
+  bool clearing_clipboard = false;
 };
 
 App* g_app = nullptr;
@@ -93,7 +96,31 @@ void InstallPendingClipboard(App& app) {
     app.pending_clipboard = nullptr;  // The system owns the memory from here on.
   }
   CloseClipboard();
+  app.installed_clipboard_sequence = GetClipboardSequenceNumber();
   DropPendingClipboard(app);
+}
+
+void ClearInstalledClipboard(App& app) {
+  DropPendingClipboard(app);
+  // Anything copied since then belongs to the user, so it is left alone.
+  if (app.installed_clipboard_sequence == 0 || GetClipboardSequenceNumber() != app.installed_clipboard_sequence) {
+    app.clearing_clipboard = false;
+    return;
+  }
+  if (!OpenClipboard(app.controller)) {
+    if (++app.clipboard_attempts >= kClipboardMaxRetries) {
+      Trace("clipboard stayed busy, giving up on clearing it");
+      app.clearing_clipboard = false;
+    } else {
+      app.clearing_clipboard = true;
+      SetTimer(app.controller, kClipboardTimer, kClipboardRetryMs, nullptr);
+    }
+    return;
+  }
+  EmptyClipboard();
+  CloseClipboard();
+  app.installed_clipboard_sequence = 0;
+  app.clearing_clipboard = false;
 }
 
 LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -111,10 +138,24 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
       return 0;
     case kMsgClipboardReady:
       DropPendingClipboard(*app);
+      app->clearing_clipboard = false;
       app->pending_clipboard = reinterpret_cast<HGLOBAL>(lparam);
       app->pending_clipboard_sequence = static_cast<uint64_t>(wparam);
       app->clipboard_attempts = 0;
       InstallPendingClipboard(*app);
+      return 0;
+    case kMsgClearClipboard:
+      app->clipboard_attempts = 0;
+      ClearInstalledClipboard(*app);
+      return 0;
+    case kMsgDragFrame:
+      app->overlay->OnDragFrame();
+      return 0;
+    case kMsgDragFeedback:
+      app->overlay->OnDragFeedback(static_cast<uint64_t>(wparam), lparam != 0);
+      return 0;
+    case kMsgDragFinished:
+      app->overlay->OnDragFinished(std::unique_ptr<FileDragOutcome>(reinterpret_cast<FileDragOutcome*>(lparam)));
       return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {
@@ -124,7 +165,11 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
         TrimMemory(*app);
       } else if (wparam == kClipboardTimer) {
         KillTimer(window, kClipboardTimer);
-        InstallPendingClipboard(*app);
+        if (app->clearing_clipboard) {
+          ClearInstalledClipboard(*app);
+        } else {
+          InstallPendingClipboard(*app);
+        }
       }
       return 0;
     case WM_DISPLAYCHANGE:

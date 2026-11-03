@@ -42,6 +42,10 @@ class Store {
   // Blocks until the shot's latest selection is on disk, then returns its path.
   std::wstring WaitUntilSaved(const std::shared_ptr<Shot>& shot);
 
+  // Cancels everything still planned for the shot and removes its file, in the background. Returns
+  // whether the shot is the one this program last meant to put on the clipboard.
+  bool Discard(const std::shared_ptr<Shot>& shot);
+
   // Frees the raw pixels of a shot once they are safely archived and nothing is still using them.
   // Returns whether the shot is free of raw pixels now. Later crops decode the archive on the worker.
   bool ReleaseFrame(const std::shared_ptr<Shot>& shot);
@@ -73,6 +77,8 @@ class Store {
   std::vector<std::shared_ptr<Shot>> pending_saves_;
   std::shared_ptr<Shot> pending_clipboard_;
   std::shared_ptr<Shot> pending_restore_;
+  std::vector<std::shared_ptr<Shot>> pending_discards_;
+  const Shot* clipboard_shot_ = nullptr;  // Compared only, never read: the shot may be long gone.
   RECT pending_clipboard_region_{};
   std::atomic<uint64_t> clipboard_sequence_{0};
   bool busy_ = false;

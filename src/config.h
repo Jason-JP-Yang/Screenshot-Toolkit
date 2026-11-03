@@ -9,4 +9,9 @@ namespace sstk::config {
 // The capture flash is never included either way.
 inline constexpr bool kCaptureIncludesThumbnails = false;
 
+// Where a screenshot dropped on the rubbish bin goes.
+//   true:  the Windows Recycle Bin, so an accidental drop can be undone.
+//   false: deleted for good straight away.
+inline constexpr bool kDeleteToRecycleBin = true;
+
 }  // namespace sstk::config

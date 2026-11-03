@@ -10,7 +10,8 @@ There is no window, tray icon, editor, or settings page, by design.
 - **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
-- **Drag** it into another app to drop the file there.
+- **Drag** it into another app to drop the file there. A blue plus shows when the drop will land. Anywhere else, or on Escape, it flies back. Timers stand still during a drag.
+- **Drag it onto the rubbish bin** at the bottom center of the screen and release to delete it from the clipboard and send the file to the Recycle Bin. Drag it back out to change your mind.
 - **Swipe left** to dismiss it early. The file stays in the Gallery.
 
 Screenshots are lossless PNGs in `Pictures\Screenshots`. Alt+PrintScreen and Win+PrintScreen keep their native Windows behavior.
@@ -63,6 +64,8 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Active memory.** A thumbnail is prepared for every region when the shot is taken, and the raw frame is released once the PNG is saved, leaving about 15 MB per session instead of a raw copy per shot. Switching regions uploads nothing on click; the new crop and clipboard data come from the PNG kept in memory. Cards deep in the deck keep only their current thumbnail, and a burst of five stays near 8 MB.
 
+**Dragging.** The system drag loop calls into whichever application is under the pointer and can block there, so it runs on its own thread. The UI thread wakes once per composed frame only while a thumbnail is in the air, reads the pointer, and moves a finished bitmap. Nothing is drawn or uploaded after the lift.
+
 **Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config.h` and rebuild.
 
 **Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
@@ -94,9 +97,11 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
 | `src/capsule.cpp` | The region selector and its sliding pill |
 | `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
-| `src/dragdrop.cpp` | File drag out of the overlay |
+| `src/sprite.cpp` | The thumbnail in the air, and its funnel into the bin |
+| `src/bin.cpp` | The rubbish bin capsule |
+| `src/dragdrop.cpp` | The system drag loop, on its own thread |
 | `src/install.cpp` | Logon task registration and starting in the user's session |
-| `src/theme.h` | Design tokens: "Graphite Glass" palette, metrics, and springs |
+| `src/theme.h` | Design tokens: palette, metrics, and springs |
 | `src/config.h` | Core behavior switches chosen at build time |
 
 ## Debugging

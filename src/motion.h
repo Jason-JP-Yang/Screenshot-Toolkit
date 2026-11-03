@@ -18,6 +18,17 @@ struct SpringSpec {
   float damping;   // 1 is critically damped; below 1 overshoots slightly.
 };
 
+// A spring stepped once per frame, for values that follow the pointer and so cannot be uploaded ahead of time.
+struct SpringValue {
+  float value = 0.0f;
+  float velocity = 0.0f;
+  float target = 0.0f;
+
+  void Snap(float to);
+  void Step(const SpringSpec& spec, float dt);
+  bool Settled(float tolerance) const;
+};
+
 // A shared instant for everything started by one input event, expressed on the DWM timeline.
 struct TimeBase {
   double seconds = 0.0;

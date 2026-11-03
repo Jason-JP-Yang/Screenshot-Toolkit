@@ -19,6 +19,10 @@ enum Message : UINT {
   kMsgFlash = WM_APP + 1,      // wParam: HMONITOR, lParam: 0
   kMsgCaptured,                // lParam: CaptureResult*, ownership moves to the receiver
   kMsgClipboardReady,          // wParam: sequence number, lParam: HGLOBAL
+  kMsgClearClipboard,          // Removes the screenshot this program last put on the clipboard, if it is still there.
+  kMsgDragFrame,               // Sent once per composed frame while a thumbnail is in the air.
+  kMsgDragFeedback,            // wParam: drag id, lParam: whether the window under the pointer accepts the drop.
+  kMsgDragFinished,            // lParam: FileDragOutcome*, ownership moves to the receiver
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

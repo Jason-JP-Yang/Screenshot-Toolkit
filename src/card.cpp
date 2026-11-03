@@ -9,7 +9,6 @@ namespace sstk {
 
 namespace {
 
-constexpr float kDraggedOpacity = 0.4f;
 constexpr float kBehindShadowAlpha = 0.5f;
 constexpr double kFlightDecorationDelay = 0.22;
 constexpr double kBaseFadeDelay = 0.13;
@@ -153,7 +152,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
   exit_end_time_ = 1e300;
 }
 
-Card::~Card() { parent_->RemoveVisual(root_.Get()); }
+Card::~Card() { Detach(); }
 
 void Card::BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip) {
   shadow_holder_ = compositor_.CreateVisual();
@@ -276,6 +275,7 @@ void Card::BuildCaches(const Image& frame, bool with_base) {
 
   crisp_surfaces_.resize(regions_.size());
   crisp_sizes_.resize(regions_.size());
+  crisp_pixels_.resize(regions_.size());
   for (size_t i = 0; i < regions_.size(); ++i) {
     if (crisp_surfaces_[i]) continue;
     const RECT& region = regions_[i].rect;
@@ -293,6 +293,7 @@ void Card::BuildCaches(const Image& frame, bool with_base) {
     }
     crisp_surfaces_[i] = compositor_.CreateSurface(pixels, true);
     crisp_sizes_[i] = size;
+    crisp_pixels_[i] = std::move(pixels);
   }
 }
 
@@ -336,7 +337,7 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
   const float shadow_target = !shown ? 0.0f : (depth == 0 ? 1.0f : kBehindShadowAlpha) * slim;
   shadow_alpha_.To(dc, now, shadow_target, theme::kFade, decoration_delay);
   resting_opacity_ = shown ? 1.0f - depth * theme::kDeckOpacityPerLevel : 0.0f;
-  opacity_.To(dc, now, dimmed_ ? kDraggedOpacity : resting_opacity_, theme::kFade);
+  opacity_.To(dc, now, resting_opacity_, theme::kFade);
 }
 
 void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec) {
@@ -394,9 +395,33 @@ void Card::SlideOut(const TimeBase& now, float velocity) {
   exit_end_time_ = std::max(slide_.end_time(), opacity_.end_time());
 }
 
-void Card::SetDimmed(bool dimmed, const TimeBase& now) {
-  dimmed_ = dimmed;
-  opacity_.To(device(), now, dimmed ? kDraggedOpacity : resting_opacity_, theme::kFade);
+void Card::Detach() {
+  if (!attached_) return;
+  attached_ = false;
+  parent_->RemoveVisual(root_.Get());
+}
+
+void Card::Attach() {
+  if (attached_) return;
+  attached_ = true;
+  parent_->AddVisual(root_.Get(), FALSE, nullptr);
+}
+
+void Card::Raise() {
+  if (!attached_) return;
+  parent_->RemoveVisual(root_.Get());
+  parent_->AddVisual(root_.Get(), FALSE, nullptr);
+}
+
+RectF Card::RectAt(double time) const {
+  return RectF{left_.ValueAt(time), top_.ValueAt(time), right_.ValueAt(time), bottom_.ValueAt(time)};
+}
+
+RectF Card::target_rect() const { return RectF{left_.target(), top_.target(), right_.target(), bottom_.target()}; }
+
+const Image* Card::thumbnail() const {
+  if (selected_ >= static_cast<int>(crisp_pixels_.size()) || !crisp_pixels_[selected_]) return nullptr;
+  return &crisp_pixels_[selected_];
 }
 
 void Card::Tick(double now, Store& store) {
@@ -428,7 +453,10 @@ void Card::Hibernate(Store& store) {
   if (!store.ReleaseFrame(shot_)) return;
   hibernating_ = true;
   for (size_t i = 0; i < crisp_surfaces_.size(); ++i) {
-    if (static_cast<int>(i) != selected_) crisp_surfaces_[i].Reset();
+    if (static_cast<int>(i) != selected_) {
+      crisp_surfaces_[i].Reset();
+      crisp_pixels_[i] = Image();
+    }
   }
   if (base_visual_) base_visual_->SetContent(nullptr);
   base_surface_.Reset();
@@ -440,17 +468,6 @@ void Card::Wake(Store& store) {
   if (!frame) return;
   hibernating_ = false;
   BuildCaches(*frame, regions_.size() >= 2);
-}
-
-Image Card::RenderDragPreview(Store& store, int width) const {
-  std::shared_ptr<const Image> frame = store.AcquireFrame(shot_);
-  if (!frame) return Image();
-  const RECT& region = selected_rect();
-  const float region_w = static_cast<float>(region.right - region.left);
-  const float region_h = static_cast<float>(region.bottom - region.top);
-  const int target_w = std::min(width, static_cast<int>(region_w));
-  const int target_h = std::max(static_cast<int>(target_w * region_h / region_w), 1);
-  return ResampleArea(*frame, region.left, region.top, region.right, region.bottom, target_w, target_h);
 }
 
 }  // namespace sstk

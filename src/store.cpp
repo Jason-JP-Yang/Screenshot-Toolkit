@@ -1,6 +1,9 @@
 #include "store.h"
 
+#include "config.h"
+
 #include <knownfolders.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <wincodec.h>
 
@@ -71,6 +74,22 @@ bool WriteFileAtomically(const std::wstring& path, IStream* stream) {
   }
   DeleteFileW(temporary.c_str());
   return false;
+}
+
+void RemoveShotFile(const std::wstring& path) {
+  if constexpr (config::kDeleteToRecycleBin) {
+    // The list of paths ends with an empty string, which c_str() supplies after the embedded terminator.
+    std::wstring list = path;
+    list.push_back(L'\0');
+    SHFILEOPSTRUCTW operation{};
+    operation.wFunc = FO_DELETE;
+    operation.pFrom = list.c_str();
+    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    const int result = SHFileOperationW(&operation);
+    if (result == 0) return;
+    Trace("discard: recycling failed with %d", result);
+  }
+  if (!DeleteFileW(path.c_str())) Trace("discard: could not delete the file, error %lu", GetLastError());
 }
 
 // Packed bottom-up 24-bit DIB: the form every clipboard consumer understands without alpha surprises.
@@ -151,9 +170,31 @@ void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region) {
     }
     pending_clipboard_ = shot;
     pending_clipboard_region_ = region;
+    clipboard_shot_ = shot.get();
     clipboard_sequence_.fetch_add(1, std::memory_order_relaxed);
   }
   wake_.notify_all();
+}
+
+bool Store::Discard(const std::shared_ptr<Shot>& shot) {
+  bool on_clipboard = false;
+  {
+    std::lock_guard lock(mutex_);
+    pending_saves_.erase(std::remove(pending_saves_.begin(), pending_saves_.end(), shot), pending_saves_.end());
+    if (pending_clipboard_ == shot) pending_clipboard_ = nullptr;
+    if (clipboard_shot_ == shot.get()) {
+      on_clipboard = true;
+      clipboard_shot_ = nullptr;
+      // Whatever is still on its way to the clipboard is now out of date.
+      clipboard_sequence_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Nobody should keep waiting for a save that is no longer coming.
+    shot->saved_version = shot->requested_version;
+    pending_discards_.push_back(shot);
+  }
+  saved_.notify_all();
+  wake_.notify_all();
+  return on_clipboard;
 }
 
 std::wstring Store::WaitUntilSaved(const std::shared_ptr<Shot>& shot) {
@@ -164,7 +205,7 @@ std::wstring Store::WaitUntilSaved(const std::shared_ptr<Shot>& shot) {
 
 bool Store::IsIdle() {
   std::lock_guard lock(mutex_);
-  return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr;
+  return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr && pending_discards_.empty();
 }
 
 std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot) {
@@ -319,13 +360,13 @@ void Store::WorkerMain() {
   for (;;) {
     busy_ = false;
     active_shot_ = nullptr;
-    if (pending_clipboard_ == nullptr && pending_saves_.empty()) {
+    if (pending_clipboard_ == nullptr && pending_saves_.empty() && pending_discards_.empty()) {
       work_frame_.reset();
       work_frame_shot_ = nullptr;
     }
     wake_.wait(lock, [&] {
       return stopping_ || warmup_requested_ || codec_release_requested_ || pending_restore_ != nullptr ||
-             pending_clipboard_ != nullptr || !pending_saves_.empty();
+             pending_clipboard_ != nullptr || !pending_discards_.empty() || !pending_saves_.empty();
     });
     busy_ = true;
 
@@ -371,6 +412,22 @@ void Store::WorkerMain() {
       const uint64_t sequence = clipboard_sequence_.load(std::memory_order_relaxed);
       lock.unlock();
       PrepareClipboard(shot, region, sequence);
+      shot.reset();
+      lock.lock();
+      continue;
+    }
+
+    // Any save of this shot that was already running has finished by now, so the file is complete.
+    if (!pending_discards_.empty()) {
+      std::shared_ptr<Shot> shot = std::move(pending_discards_.back());
+      pending_discards_.pop_back();
+      const std::wstring path = shot->path;
+      if (work_frame_shot_ == shot.get()) {
+        work_frame_.reset();
+        work_frame_shot_ = nullptr;
+      }
+      lock.unlock();
+      if (!path.empty()) RemoveShotFile(path);
       shot.reset();
       lock.lock();
       continue;

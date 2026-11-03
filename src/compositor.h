@@ -12,6 +12,8 @@
 #include <d3d11.h>
 #include <dcomp.h>
 
+#include <atomic>
+#include <thread>
 #include <unordered_map>
 
 namespace sstk {
@@ -49,6 +51,25 @@ class Compositor {
   ComPtr<ID3D11DeviceContext> d3d_context_;
   ComPtr<IDCompositionDevice> device_;
   std::unordered_map<uint32_t, ComPtr<IDCompositionSurface>> solid_colors_;
+};
+
+// Posts a message to the UI thread once per composed frame, for the moments when something on screen
+// follows the pointer. It samples nothing itself, and at most one message is ever waiting.
+class FramePacer {
+ public:
+  ~FramePacer() { Stop(); }
+
+  void Start(HWND target, UINT message);
+  void Stop();
+  bool running() const { return thread_.joinable(); }
+
+  // Called on receiving the message; another may be posted from here on.
+  void Acknowledge() { posted_.store(false, std::memory_order_relaxed); }
+
+ private:
+  std::thread thread_;
+  std::atomic<bool> running_{false};
+  std::atomic<bool> posted_{false};
 };
 
 }  // namespace sstk

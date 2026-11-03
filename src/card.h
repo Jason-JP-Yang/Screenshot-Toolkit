@@ -65,7 +65,21 @@ class Card {
   void SetSwipe(float offset, float progress);
   void SnapBack(const TimeBase& now, float velocity);
   void SlideOut(const TimeBase& now, float velocity);
-  void SetDimmed(bool dimmed, const TimeBase& now);
+
+  // Takes the card off screen while its sprite is in the air, and puts it back on top of the deck.
+  void Detach();
+  void Attach();
+
+  // Moves the card to the top of the deck's stacking order.
+  void Raise();
+
+  // Where the card is at a given moment, and where it is heading.
+  RectF RectAt(double time) const;
+  RectF target_rect() const;
+  float resting_opacity() const { return resting_opacity_; }
+
+  // The selected region's thumbnail in pixels, which is what a drag lifts off the deck. Null until built.
+  const Image* thumbnail() const;
 
   // Drops finished crossfade layers and whatever the flight no longer needs.
   void Tick(double now, Store& store);
@@ -77,8 +91,6 @@ class Card {
   void Hibernate(Store& store);
   void Wake(Store& store);
 
-  Image RenderDragPreview(Store& store, int width) const;
-
   const std::shared_ptr<Shot>& shot() const { return shot_; }
   const std::vector<Region>& regions() const { return regions_; }
   const TaskbarInsets& insets() const { return insets_; }
@@ -87,7 +99,7 @@ class Card {
   IDCompositionSurface* frost() const { return frost_.Get(); }
 
   double expiry = 0.0;
-  bool held_by_drag = false;
+  bool floating = false;  // Its sprite is still flying home, so the card can be neither grabbed nor dismissed.
 
  private:
   struct CrispLayer {
@@ -135,6 +147,7 @@ class Card {
   ComPtr<IDCompositionSurface> base_surface_;
   std::vector<ComPtr<IDCompositionSurface>> crisp_surfaces_;  // One per region; empty until built.
   std::vector<SIZE> crisp_sizes_;
+  std::vector<Image> crisp_pixels_;  // The same thumbnails in memory, kept for the moment one is lifted.
   std::vector<std::unique_ptr<CrispLayer>> crisp_layers_;
 
   AnimFloat left_, top_, right_, bottom_, radius_;
@@ -146,7 +159,7 @@ class Card {
   bool hibernating_ = false;
   double full_release_at_ = 0.0;
   double exit_end_time_ = 0.0;
-  bool dimmed_ = false;
+  bool attached_ = true;
   float resting_opacity_ = 1.0f;
 };
 
