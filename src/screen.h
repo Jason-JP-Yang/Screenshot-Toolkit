@@ -14,12 +14,6 @@ struct Region {
   RECT rect;  // Physical pixels relative to the monitor origin.
 };
 
-struct ScreenInfo {
-  HMONITOR monitor = nullptr;
-  RECT bounds{};  // Monitor rectangle in virtual screen coordinates.
-  std::vector<Region> regions;  // Always starts with the full monitor.
-};
-
 // Space currently taken by a visible taskbar on each monitor edge, in physical pixels.
 struct TaskbarInsets {
   int left = 0;
@@ -27,6 +21,13 @@ struct TaskbarInsets {
   int right = 0;
   int bottom = 0;
   bool operator==(const TaskbarInsets&) const = default;
+};
+
+struct ScreenInfo {
+  HMONITOR monitor = nullptr;
+  RECT bounds{};  // Monitor rectangle in virtual screen coordinates.
+  TaskbarInsets insets;
+  std::vector<Region> regions;  // Always starts with the full monitor.
 };
 
 ScreenInfo AnalyzeScreen(HMONITOR monitor);

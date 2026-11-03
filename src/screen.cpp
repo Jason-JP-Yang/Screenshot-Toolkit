@@ -89,7 +89,10 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
         IntersectRect(&clipped, &rect, &state.bounds);
         state.taskbar.found = true;
         state.taskbar.rect = clipped;
-        state.taskbar.covered = state.covered_so_far;
+        // Windows drops the taskbar out of the topmost band only for a real fullscreen app. While it stays
+        // topmost it is on screen, whatever monitor-sized shell surfaces such as open panels sit above it.
+        const bool topmost = (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        state.taskbar.covered = state.covered_so_far && !topmost;
       }
     }
     return TRUE;
@@ -244,13 +247,13 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
     add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
   }
 
-  const TaskbarInsets insets = InsetsFrom(state.taskbar, info.bounds);
-  if (insets != TaskbarInsets{}) {
+  info.insets = InsetsFrom(state.taskbar, info.bounds);
+  if (info.insets != TaskbarInsets{}) {
     RECT without_taskbar = full;
-    without_taskbar.left += insets.left;
-    without_taskbar.top += insets.top;
-    without_taskbar.right -= insets.right;
-    without_taskbar.bottom -= insets.bottom;
+    without_taskbar.left += info.insets.left;
+    without_taskbar.top += info.insets.top;
+    without_taskbar.right -= info.insets.right;
+    without_taskbar.bottom -= info.insets.bottom;
     add_region(RegionKind::kNoTaskbar, without_taskbar);
   }
   return info;
