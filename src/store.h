@@ -19,7 +19,7 @@ namespace sstk {
 // One screenshot's durable state. Every field except local_time is guarded by the Store's lock
 // while a request for this shot may be in flight.
 struct Shot {
-  std::shared_ptr<const Image> frame;  // Null while the shot is hibernating; see Store::ReleaseFrame.
+  std::shared_ptr<const Image> frame;  // Null once archived; see Store::ReleaseFrame.
   std::vector<uint8_t> archive;        // Lossless copy of the whole frame, far smaller than the raw pixels.
   SYSTEMTIME local_time{};
   std::wstring path;
@@ -43,11 +43,11 @@ class Store {
   std::wstring WaitUntilSaved(const std::shared_ptr<Shot>& shot);
 
   // Frees the raw pixels of a shot once they are safely archived and nothing is still using them.
-  // Cards behind the front of the deck cannot be edited, so a burst only pays for one raw frame.
+  // Returns whether the shot is free of raw pixels now. Later crops decode the archive on the worker.
   bool ReleaseFrame(const std::shared_ptr<Shot>& shot);
 
-  // Brings a released shot's raw pixels back. Blocks for the short time decoding takes.
-  void RestoreFrame(const std::shared_ptr<Shot>& shot);
+  // Returns the shot's raw pixels, restoring them if released. Blocks for the short time decoding takes.
+  std::shared_ptr<const Image> AcquireFrame(const std::shared_ptr<Shot>& shot);
 
   // Unloads the codec on the worker thread. It costs a few milliseconds to reload for the next save,
   // which nobody waits on, and it is the largest thing left in memory between shots.
@@ -60,6 +60,7 @@ class Store {
 
  private:
   void WorkerMain();
+  std::shared_ptr<const Image> FrameForWork(const std::shared_ptr<Shot>& shot);
   void PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, uint64_t sequence);
   bool SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame, const RECT& region);
   std::shared_ptr<const Image> DecodeArchive(const std::vector<uint8_t>& archive);
@@ -80,6 +81,9 @@ class Store {
   bool codec_release_requested_ = false;
   bool stopping_ = false;
   ComPtr<IWICImagingFactory> codec_factory_;
+  // Decoded on demand for crops of a released shot, and kept until the worker runs out of work.
+  std::shared_ptr<const Image> work_frame_;
+  const Shot* work_frame_shot_ = nullptr;
 };
 
 }  // namespace sstk

@@ -167,12 +167,20 @@ bool Store::IsIdle() {
   return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr;
 }
 
-void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, uint64_t sequence) {
-  std::shared_ptr<const Image> frame;
+std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot) {
   {
     std::lock_guard lock(mutex_);
-    frame = shot->frame;
+    if (shot->frame) return shot->frame;
   }
+  if (work_frame_shot_ != shot.get()) {
+    work_frame_ = DecodeArchive(shot->archive);
+    work_frame_shot_ = shot.get();
+  }
+  return work_frame_;
+}
+
+void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, uint64_t sequence) {
+  std::shared_ptr<const Image> frame = FrameForWork(shot);
   if (!frame) return;
   HGLOBAL dib = BuildDib(*frame, region);
   if (dib == nullptr) return;
@@ -288,18 +296,20 @@ std::shared_ptr<const Image> Store::DecodeArchive(const std::vector<uint8_t>& ar
 
 bool Store::ReleaseFrame(const std::shared_ptr<Shot>& shot) {
   std::lock_guard lock(mutex_);
-  if (!shot->frame || shot->archive.empty() || shot->saved_version < shot->requested_version) return false;
+  if (!shot->frame) return true;
+  if (shot->archive.empty() || shot->saved_version < shot->requested_version) return false;
   if (pending_clipboard_ == shot || active_shot_ == shot.get()) return false;
   shot->frame.reset();
   return true;
 }
 
-void Store::RestoreFrame(const std::shared_ptr<Shot>& shot) {
+std::shared_ptr<const Image> Store::AcquireFrame(const std::shared_ptr<Shot>& shot) {
   std::unique_lock lock(mutex_);
-  if (shot->frame) return;
+  if (shot->frame) return shot->frame;
   pending_restore_ = shot;
   wake_.notify_all();
   saved_.wait(lock, [&] { return shot->frame != nullptr || pending_restore_ != shot || stopping_; });
+  return shot->frame;
 }
 
 void Store::WorkerMain() {
@@ -309,6 +319,10 @@ void Store::WorkerMain() {
   for (;;) {
     busy_ = false;
     active_shot_ = nullptr;
+    if (pending_clipboard_ == nullptr && pending_saves_.empty()) {
+      work_frame_.reset();
+      work_frame_shot_ = nullptr;
+    }
     wake_.wait(lock, [&] {
       return stopping_ || warmup_requested_ || codec_release_requested_ || pending_restore_ != nullptr ||
              pending_clipboard_ != nullptr || !pending_saves_.empty();
@@ -368,9 +382,9 @@ void Store::WorkerMain() {
       active_shot_ = shot.get();
       const RECT region = shot->region;
       const uint64_t version = shot->requested_version;
-      std::shared_ptr<const Image> frame = shot->frame;
       lock.unlock();
       const double started = NowSeconds();
+      std::shared_ptr<const Image> frame = FrameForWork(shot);
       const bool saved = frame != nullptr && SaveToDisk(*shot, frame, region);
       Trace("save: %s in %.1f ms", saved ? "ok" : "FAILED", (NowSeconds() - started) * 1000.0);
       frame.reset();

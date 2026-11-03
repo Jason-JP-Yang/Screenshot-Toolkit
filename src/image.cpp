@@ -161,6 +161,16 @@ Image Halve(const Image& source) {
   return result;
 }
 
+Image CopyRect(const Image& source, int left, int top, int width, int height) {
+  Image result = Image::Allocate(width, height);
+  if (!result) return result;
+  for (int y = 0; y < height; ++y) {
+    std::copy_n(source.data() + static_cast<ptrdiff_t>(top + y) * source.stride() + static_cast<ptrdiff_t>(left) * 4,
+                result.stride(), result.data() + static_cast<ptrdiff_t>(y) * result.stride());
+  }
+  return result;
+}
+
 Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height) {
   Image result = Image::Allocate(width, height);
   if (!result) return result;
@@ -293,61 +303,126 @@ Image RenderShadow(int box_width, int box_height, float radius, float pad, const
 }
 
 Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
-                       float color_alpha) {
+                       float color_alpha, float faint_alpha) {
   const int width = std::max<int>(pitch * static_cast<int>(glyphs.size()), 1);
   Image strip = Image::Allocate(width, height);
   if (!strip) return strip;
 
   const float color[3] = {static_cast<float>(color_bgr & 0xFF), static_cast<float>((color_bgr >> 8) & 0xFF),
                           static_cast<float>((color_bgr >> 16) & 0xFF)};
-  const float stroke = 1.1f * scale;
-  const float corner = 2.8f * scale;
-  const float gutter = 2.1f * scale;
-  const float fill_corner = 1.0f * scale;
-  const float minimum_fill = 2.2f * scale;
+
+  // Every length lands on whole pixels, so that strokes and seams stay crisp at any display scale.
+  auto pixels = [scale](float dips, float minimum) { return std::max(std::round(dips * scale), minimum); };
+  const float stroke = pixels(1.0f, 1.0f);
+  const float gutter = pixels(1.0f, 1.0f);
+  const float band_thickness = pixels(2.0f, 2.0f);
+  const float seam = pixels(0.75f, 1.0f);
+  const float corner = 3.0f * scale;
+  const float fill_corner = 1.1f * scale;
+
+  struct Shape {
+    float left, top, right, bottom, radius, alpha;
+  };
 
   for (size_t index = 0; index < glyphs.size(); ++index) {
     const GlyphSpec& glyph = glyphs[index];
-    float screen_w = 20.0f * scale;
+    float screen_w = 22.0f * scale;
     float screen_h = screen_w / glyph.screen_aspect;
-    if (screen_h > 15.0f * scale) {
-      screen_h = 15.0f * scale;
+    if (screen_h > 16.0f * scale) {
+      screen_h = 16.0f * scale;
       screen_w = screen_h * glyph.screen_aspect;
     }
-
-    // Snap the outline to whole pixels so that the strokes stay crisp at any display scale.
-    const float origin_x = std::round(pitch * static_cast<float>(index) + (pitch - screen_w) * 0.5f);
-    const float origin_y = std::round((height - screen_h) * 0.5f);
     screen_w = std::round(screen_w);
     screen_h = std::round(screen_h);
+    const float origin_x = std::round(pitch * static_cast<float>(index) + (pitch - screen_w) * 0.5f);
+    const float origin_y = std::round((height - screen_h) * 0.5f);
+    const float screen_r = origin_x + screen_w;
+    const float screen_b = origin_y + screen_h;
+
+    // The usable area and the taskbar band inside the outline.
+    const float inset = stroke + gutter;
+    float area_l = origin_x + inset;
+    float area_t = origin_y + inset;
+    float area_r = screen_r - inset;
+    float area_b = screen_b - inset;
+    Shape band{0.0f, 0.0f, 0.0f, 0.0f, fill_corner * 0.6f, 0.0f};
+    switch (glyph.band) {
+      case GlyphBand::kLeft: band = {area_l, area_t, area_l + band_thickness, area_b, band.radius, 1.0f}; area_l = band.right + seam; break;
+      case GlyphBand::kTop: band = {area_l, area_t, area_r, area_t + band_thickness, band.radius, 1.0f}; area_t = band.bottom + seam; break;
+      case GlyphBand::kRight: band = {area_r - band_thickness, area_t, area_r, area_b, band.radius, 1.0f}; area_r = band.left - seam; break;
+      case GlyphBand::kBottom: band = {area_l, area_b - band_thickness, area_r, area_b, band.radius, 1.0f}; area_b = band.top - seam; break;
+      case GlyphBand::kNone: break;
+    }
+
+    auto map_box = [&](const GlyphBox& box, float shrink) {
+      Shape shape{};
+      shape.left = std::round(area_l + box.left * (area_r - area_l));
+      shape.top = std::round(area_t + box.top * (area_b - area_t));
+      shape.right = std::round(area_l + box.right * (area_r - area_l));
+      shape.bottom = std::round(area_t + box.bottom * (area_b - area_t));
+      if (box.left > 0.001f) shape.left += shrink;
+      if (box.top > 0.001f) shape.top += shrink;
+      if (box.right < 0.999f) shape.right -= shrink;
+      if (box.bottom < 0.999f) shape.bottom -= shrink;
+      shape.right = std::max(shape.right, shape.left + stroke * 2.0f);
+      shape.bottom = std::max(shape.bottom, shape.top + stroke * 2.0f);
+      shape.radius = fill_corner;
+      shape.alpha = 1.0f;
+      return shape;
+    };
+
+    std::vector<Shape> shapes;
+    std::vector<Shape> cuts;
+    const bool outlined = glyph.style != GlyphStyle::kWholeScreen;
+    if (!outlined) {
+      shapes.push_back({origin_x, origin_y, screen_r, screen_b, corner, 1.0f});
+      // A seam marks the taskbar's edge. It runs from the outline to the outline.
+      switch (glyph.band) {
+        case GlyphBand::kLeft: cuts.push_back({band.right, origin_y, band.right + seam, screen_b, 0.0f, 1.0f}); break;
+        case GlyphBand::kTop: cuts.push_back({origin_x, band.bottom, screen_r, band.bottom + seam, 0.0f, 1.0f}); break;
+        case GlyphBand::kRight: cuts.push_back({band.left - seam, origin_y, band.left, screen_b, 0.0f, 1.0f}); break;
+        case GlyphBand::kBottom: cuts.push_back({origin_x, band.top - seam, screen_r, band.top, 0.0f, 1.0f}); break;
+        case GlyphBand::kNone: break;
+      }
+    } else {
+      if (glyph.band != GlyphBand::kNone) {
+        band.alpha = faint_alpha;
+        shapes.push_back(band);
+      }
+      for (const GlyphBox& neighbor : glyph.neighbors) {
+        Shape shape = map_box(neighbor, seam * 0.5f);
+        shape.alpha = faint_alpha;
+        shapes.push_back(shape);
+      }
+      Shape main_shape = map_box(glyph.box, glyph.style == GlyphStyle::kZone ? seam * 0.5f : 0.0f);
+      shapes.push_back(main_shape);
+      // A title bar seam, when the window is tall enough to carry one.
+      if (glyph.style == GlyphStyle::kWindow && main_shape.bottom - main_shape.top >= seam + pixels(4.0f, 4.0f)) {
+        const float seam_top = main_shape.top + pixels(1.75f, 2.0f);
+        cuts.push_back({main_shape.left, seam_top, main_shape.right, seam_top + seam, 0.0f, 1.0f});
+      }
+    }
+
     const float cx = origin_x + screen_w * 0.5f;
     const float cy = origin_y + screen_h * 0.5f;
-
-    const float inner_x = origin_x + gutter;
-    const float inner_y = origin_y + gutter;
-    const float inner_w = screen_w - gutter * 2.0f;
-    const float inner_h = screen_h - gutter * 2.0f;
-    float fill_l = std::round(inner_x + glyph.left * inner_w);
-    float fill_r = std::round(inner_x + glyph.right * inner_w);
-    float fill_t = std::round(inner_y + glyph.top * inner_h);
-    float fill_b = std::round(inner_y + glyph.bottom * inner_h);
-    if (fill_r - fill_l < minimum_fill) fill_r = fill_l + minimum_fill;
-    if (fill_b - fill_t < minimum_fill) fill_b = fill_t + minimum_fill;
-    const float fill_cx = (fill_l + fill_r) * 0.5f;
-    const float fill_cy = (fill_t + fill_b) * 0.5f;
-    const float fill_hw = (fill_r - fill_l) * 0.5f;
-    const float fill_hh = (fill_b - fill_t) * 0.5f;
-
     const int start_x = pitch * static_cast<int>(index);
     for (int y = 0; y < height; ++y) {
       uint8_t* out = strip.data() + static_cast<ptrdiff_t>(y) * strip.stride() + static_cast<ptrdiff_t>(start_x) * 4;
       for (int x = start_x; x < start_x + pitch; ++x, out += 4) {
         const float px = x + 0.5f;
         const float py = y + 0.5f;
-        const float box = RoundedBoxDistance(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner);
-        const float outline = Coverage(std::fabs(box + stroke * 0.5f) - stroke * 0.5f);
-        const float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
-        const float alpha = std::max(outline, fill) * color_alpha;
+        float coverage = 0.0f;
+        if (outlined) {
+          const float box = RoundedBoxDistance(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner);
+          coverage = Coverage(std::fabs(box + stroke * 0.5f) - stroke * 0.5f);
+        }
+        auto distance_to = [px, py](const Shape& shape) {
+          return RoundedBoxDistance(px, py, (shape.left + shape.right) * 0.5f, (shape.top + shape.bottom) * 0.5f,
+                                    (shape.right - shape.left) * 0.5f, (shape.bottom - shape.top) * 0.5f, shape.radius);
+        };
+        for (const Shape& shape : shapes) coverage = std::max(coverage, Coverage(distance_to(shape)) * shape.alpha);
+        for (const Shape& cut : cuts) coverage *= 1.0f - Coverage(distance_to(cut));
+        const float alpha = coverage * color_alpha;
         for (int c = 0; c < 3; ++c) out[c] = ToByte(color[c] * alpha);
         out[3] = ToByte(alpha * 255.0f);
       }

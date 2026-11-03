@@ -1,8 +1,8 @@
 // Design tokens. Lengths are device independent pixels; springs follow response/damping notation.
 //
 // Visual language, "Graphite Glass": a monochrome palette of warm graphite and porcelain with no
-// accent hue, so the screenshot itself is the only color on screen. Depth comes from soft shadows
-// and hairlines rather than borders, and everything moves on physically modeled springs.
+// accent hue, so the screenshot itself is the only color on screen. A thin white border and a soft
+// shadow lift each thumbnail off the desktop, and everything moves on physically modeled springs.
 #pragma once
 
 #include <cstdint>
@@ -16,6 +16,7 @@ inline constexpr float kCardMaxHeight = 160.0f;
 inline constexpr float kCardMaxWidth = 340.0f;
 inline constexpr float kEdgeMargin = 16.0f;
 inline constexpr float kCardRadius = 12.0f;
+inline constexpr float kCardBorder = 1.0f;
 inline constexpr float kDeckPeek = 9.0f;
 inline constexpr float kDeckShrinkPerLevel = 0.055f;
 inline constexpr int kDeckVisibleBehind = 2;
@@ -44,18 +45,30 @@ inline constexpr uint32_t kGlassTint = 0x16171A;
 inline constexpr float kGlassTintAlpha = 0.80f;
 inline constexpr uint32_t kPorcelain = 0xF3F2EF;
 inline constexpr uint32_t kGlyphOnGlass = 0xFFFFFF;
-inline constexpr float kGlyphOnGlassAlpha = 0.74f;
+inline constexpr float kGlyphOnGlassAlpha = 0.88f;
+inline constexpr float kGlyphFaintAlpha = 0.30f;
 inline constexpr uint32_t kGlyphOnPorcelain = 0x16171A;
-inline constexpr float kHairlineAlpha = 0.20f;
+inline constexpr float kCardBorderAlpha = 0.92f;
 inline constexpr float kCapsuleHairlineAlpha = 0.14f;
 inline constexpr float kHoverVeilAlpha = 0.10f;
-inline constexpr float kFlashPeak = 0.82f;
+inline constexpr float kFlashPeak = 0.36f;
+inline constexpr float kSwipeEndOpacity = 0.90f;
+inline constexpr float kExitOpacity = 0.86f;
+
+// Thumbnail shadow: a wide ambient layer and a tight contact layer. Shadows never fall on the taskbar.
+inline constexpr float kShadowAmbientSigma = 9.0f;
+inline constexpr float kShadowAmbientAlpha = 0.26f;
+inline constexpr float kShadowAmbientOffset = 5.0f;
+inline constexpr float kShadowContactSigma = 1.5f;
+inline constexpr float kShadowContactAlpha = 0.14f;
+inline constexpr float kShadowContactOffset = 1.0f;
 
 // Motion.
-inline constexpr SpringSpec kFlash{0.22f, 1.0f};
+inline constexpr SpringSpec kFlash{0.18f, 1.0f};
 inline constexpr SpringSpec kFlight{0.50f, 0.86f};
 inline constexpr SpringSpec kReflow{0.42f, 0.86f};
 inline constexpr SpringSpec kMorph{0.36f, 0.86f};
+inline constexpr SpringSpec kMorphFade{0.24f, 1.0f};
 inline constexpr SpringSpec kExit{0.38f, 1.0f};
 inline constexpr SpringSpec kSnapBack{0.34f, 0.82f};
 inline constexpr SpringSpec kFade{0.16f, 1.0f};

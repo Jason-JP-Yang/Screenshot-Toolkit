@@ -15,7 +15,8 @@ class Capsule {
   Capsule(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor);
 
   // Shows the options of the card now in front. Fewer than two options hides the capsule.
-  void Bind(const std::vector<Region>& regions, int selected, IDCompositionSurface* frost, const TimeBase& now);
+  void Bind(const std::vector<Region>& regions, const TaskbarInsets& insets, int selected, IDCompositionSurface* frost,
+            const TimeBase& now);
 
   void MoveTo(float x, float y, const TimeBase& now);
   void Select(int index, const TimeBase& now);

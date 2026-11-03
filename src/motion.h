@@ -54,7 +54,7 @@ class AnimFloat {
   void Start(IDCompositionDevice* device, const TimeBase& now, float start, float velocity, float target,
              const SpringSpec& spec, double delay);
 
-  std::array<Sink, 3> sinks_{};
+  std::array<Sink, 8> sinks_{};
   int sink_count_ = 0;
   float target_ = 0.0f;
   float displacement_ = 0.0f;

@@ -47,8 +47,9 @@ class Deck {
   enum class Press { kNone, kCard, kSwipe };
 
   float Dip(float value) const { return value * scale_; }
+  void ApplyInsets(const TaskbarInsets& insets);
   RectF RectForRegion(const RECT& region) const;
-  RectF RectBehind(const RectF& front, int depth) const;
+  RectF RectBehind(const Card& card, const RectF& front, int depth) const;
   void Layout(const SpringSpec& front_spec, const TimeBase& now, double delay = 0.0, bool in_flight = false);
   void UpdateSink();
   void Dismiss(size_t index, const TimeBase& now, float velocity);
@@ -69,6 +70,7 @@ class Deck {
   HMONITOR monitor_;
   RECT bounds_;
   SIZE size_;
+  int stage_width_;
   float scale_ = 1.0f;
 
   HWND window_ = nullptr;
@@ -82,6 +84,8 @@ class Deck {
   ComPtr<IDCompositionEffectGroup> flash_effect_;
   AnimFloat flash_alpha_;
   std::unique_ptr<Capsule> capsule_;
+  CardShadow card_shadow_;
+  ComPtr<IDCompositionRectangleClip> shadow_clip_;
 
   std::vector<std::unique_ptr<Card>> cards_;  // Oldest first; the back is the front of the deck.
   std::vector<std::unique_ptr<Card>> exiting_;
@@ -136,13 +140,17 @@ void ExcludeFromCapture(HWND window) {
 
 Deck::Deck(Compositor& compositor, Store& store, HMONITOR monitor, const RECT& bounds)
     : compositor_(compositor), store_(store), monitor_(monitor), bounds_(bounds),
-      size_{bounds.right - bounds.left, bounds.bottom - bounds.top} {
+      size_{bounds.right - bounds.left, bounds.bottom - bounds.top},
+      // A window covering a whole monitor counts as a fullscreen app, and Windows answers by dropping the
+      // taskbar below every other window. One pixel short of that, nothing on the desktop changes. The
+      // pixel goes unmissed: the screenshot starts out identical to what is under it.
+      stage_width_(size_.cx - 1) {
   RegisterClasses();
   const HINSTANCE instance = GetModuleHandleW(nullptr);
 
   window_ = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
                                 WS_EX_LAYERED | WS_EX_TRANSPARENT,
-                            kStageClass, L"", WS_POPUP, bounds.left, bounds.top, size_.cx, size_.cy, nullptr, nullptr,
+                            kStageClass, L"", WS_POPUP, bounds.left, bounds.top, stage_width_, size_.cy, nullptr, nullptr,
                             instance, nullptr);
   if (window_ == nullptr) return;
   SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA);
@@ -171,6 +179,8 @@ Deck::Deck(Compositor& compositor, Store& store, HMONITOR monitor, const RECT& b
   target_->SetRoot(root_.Get());
 
   capsule_ = std::make_unique<Capsule>(compositor_, capsule_layer_.Get(), scale_, size_);
+  card_shadow_ = BuildCardShadow(compositor_, scale_);
+  shadow_clip_ = compositor_.CreateClip();
 }
 
 Deck::~Deck() {
@@ -190,28 +200,40 @@ void Deck::Flash() {
   compositor_.Commit();
 
   // Shown after the commit so that the first composed frame already contains the flash.
-  SetWindowPos(window_, HWND_TOPMOST, bounds_.left, bounds_.top, size_.cx, size_.cy,
+  SetWindowPos(window_, HWND_TOPMOST, bounds_.left, bounds_.top, stage_width_, size_.cy,
                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
   shown_ = true;
 }
 
+void Deck::ApplyInsets(const TaskbarInsets& insets) {
+  insets_ = insets;
+  // Shadows pass under the taskbar, as those of ordinary windows do.
+  shadow_clip_->SetLeft(static_cast<float>(insets.left));
+  shadow_clip_->SetTop(static_cast<float>(insets.top));
+  shadow_clip_->SetRight(static_cast<float>(size_.cx - insets.right));
+  shadow_clip_->SetBottom(static_cast<float>(size_.cy - insets.bottom));
+}
+
 RectF Deck::RectForRegion(const RECT& region) const {
-  const float region_w = static_cast<float>(region.right - region.left);
-  const float region_h = static_cast<float>(region.bottom - region.top);
-  const float fit = std::min({1.0f, Dip(theme::kCardMaxWidth) / region_w, Dip(theme::kCardMaxHeight) / region_h});
-  const float width = std::max(std::round(region_w * fit), 1.0f);
-  const float height = std::max(std::round(region_h * fit), 1.0f);
+  const SIZE size = ThumbnailSize(region, scale_);
+  const float width = static_cast<float>(size.cx);
+  const float height = static_cast<float>(size.cy);
   const float left = std::round(static_cast<float>(insets_.left) + Dip(theme::kEdgeMargin));
   const float bottom = std::round(static_cast<float>(size_.cy - insets_.bottom) - Dip(theme::kEdgeMargin));
   return RectF{left, bottom - height, left + width, bottom};
 }
 
-RectF Deck::RectBehind(const RectF& front, int depth) const {
-  const float shrink = theme::kDeckShrinkPerLevel * std::min(depth, theme::kDeckVisibleBehind + 1);
-  const float width = front.width() * (1.0f - shrink);
-  const float height = front.height() * (1.0f - shrink);
-  const float left = front.left + (front.width() - width) * 0.5f;
-  const float top = front.top - Dip(theme::kDeckPeek) * std::min(depth, theme::kDeckVisibleBehind + 1);
+RectF Deck::RectBehind(const Card& card, const RectF& front, int depth) const {
+  // Each card keeps the shape of its own selection. Only its place in the stack comes from the front card.
+  const RectF own = RectForRegion(card.selected_rect());
+  const int level = std::min(depth, theme::kDeckVisibleBehind + 1);
+  const float keep = 1.0f - theme::kDeckShrinkPerLevel * level;
+  const float width = own.width() * keep;
+  const float height = own.height() * keep;
+  const float left = own.left + (own.width() - width) * 0.5f;
+  const float peek = Dip(theme::kDeckPeek) * level;
+  // A card taller than the front rises above it rather than hanging below the deck.
+  const float top = std::min(front.top - peek, front.bottom - height - peek);
   return RectF{left, top, left + width, top + height};
 }
 
@@ -226,7 +248,7 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
     if (depth == 0) {
       cards_[i]->MoveTo(front_rect_, 0, front_spec, now, delay, in_flight);
     } else {
-      cards_[i]->MoveTo(RectBehind(front_rect_, depth), depth, theme::kReflow, now, 0.0, false);
+      cards_[i]->MoveTo(RectBehind(*cards_[i], front_rect_, depth), depth, theme::kReflow, now, 0.0, false);
     }
   }
 
@@ -278,7 +300,7 @@ void Deck::BindCapsuleToFront(const TimeBase& now) {
     return;
   }
   top->Wake(store_);
-  capsule_->Bind(top->regions(), top->selected(), top->frost(), now);
+  capsule_->Bind(top->regions(), top->insets(), top->selected(), top->frost(), now);
 }
 
 void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
@@ -295,7 +317,7 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   shot->local_time = capture->local_time;
   store_.Submit(shot, capture->screen.regions.front().rect);
 
-  insets_ = QueryTaskbarInsets(monitor_);
+  ApplyInsets(capture->screen.insets);
   const float capsule_full = capsule_->full_width();
   const float left = static_cast<float>(insets_.left) + Dip(theme::kEdgeMargin);
   const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(theme::kEdgeMargin) - Dip(theme::kCardMaxHeight);
@@ -312,8 +334,8 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
     frost = compositor_.CreateSurface(frost_pixels, true);
   }
 
-  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, capture->screen.regions, scale_,
-                                     std::move(frost), now.seconds);
+  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, capture->screen, scale_, std::move(frost),
+                                     card_shadow_, shadow_clip_.Get(), now.seconds);
   Card* raw = card.get();
   raw->PlaceFullScreen();
   cards_.push_back(std::move(card));
@@ -326,7 +348,7 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   compositor_.Commit();
   const double committed = NowSeconds();
 
-  raw->BuildDerivedAssets(front_rect_, now);
+  raw->BuildDerivedAssets(now);
   compositor_.Commit();
   Trace("shot: trigger->commit %.1f ms (ui %.1f ms), derived %.1f ms, options %zu",
         (committed - capture->trigger_time) * 1000.0, (committed - started) * 1000.0, (NowSeconds() - committed) * 1000.0,
@@ -338,8 +360,7 @@ void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
   const bool was_front = index + 1 == cards_.size();
   cards_.erase(cards_.begin() + static_cast<ptrdiff_t>(index));
 
-  const float distance = -(front_rect_.right + Dip(theme::kExitOvershoot));
-  card->SlideOut(now, distance, velocity);
+  card->SlideOut(now, velocity);
   exiting_.push_back(std::move(card));
 
   if (was_front) {
@@ -355,17 +376,18 @@ void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
 
 void Deck::SelectRegion(int index) {
   Card* top = front();
-  if (top == nullptr || index == top->selected() || !top->shot()->frame) return;
+  if (top == nullptr || index == top->selected() || !top->CanSelect(index)) return;
 
+  // A selection belongs to one screenshot, so the cards behind it stay exactly where they are.
   const TimeBase now = compositor_.Now();
-  const RECT region = top->regions()[index].rect;
-  RectF target = RectForRegion(region);
-  top->Select(index, target, now);
+  top->Select(index, now);
   top->expiry = now.seconds + theme::kDwellSeconds;
   capsule_->Select(index, now);
-  Layout(theme::kMorph, now);
+  front_rect_ = RectForRegion(top->selected_rect());
+  top->MoveTo(front_rect_, 0, theme::kMorph, now, 0.0, false);
+  UpdateSink();
   compositor_.Commit();
-  store_.Submit(top->shot(), region);
+  store_.Submit(top->shot(), top->selected_rect());
 }
 
 void Deck::Tick() {
@@ -378,15 +400,18 @@ void Deck::Tick() {
     if (!paused && now.seconds >= card->expiry) Dismiss(i, now, 0.0f);
   }
 
-  for (auto& card : cards_) {
-    card->Tick(now.seconds);
-    if (card.get() != front() && !card->held_by_drag) card->Hibernate(store_);
+  for (size_t i = 0; i < cards_.size(); ++i) {
+    Card* card = cards_[i].get();
+    card->Tick(now.seconds, store_);
+    // Cards still in sight keep everything, so that dismissing the front card never has to wait for a decode.
+    const int depth = static_cast<int>(cards_.size() - 1 - i);
+    if (depth > theme::kDeckVisibleBehind && !card->held_by_drag) card->Hibernate(store_);
   }
   for (auto it = exiting_.begin(); it != exiting_.end();) {
     if ((*it)->FinishedExiting(now.seconds)) {
       it = exiting_.erase(it);
     } else {
-      (*it)->Tick(now.seconds);
+      (*it)->Tick(now.seconds, store_);
       ++it;
     }
   }
@@ -403,7 +428,8 @@ void Deck::Tick() {
   if (!cards_.empty() && ++tick_count_ % kTaskbarPollTicks == 0) {
     const TaskbarInsets insets = QueryTaskbarInsets(monitor_);
     if (insets != insets_) {
-      insets_ = insets;
+      Trace("taskbar insets: %d %d %d %d", insets.left, insets.top, insets.right, insets.bottom);
+      ApplyInsets(insets);
       Layout(theme::kReflow, now);
     }
   }
@@ -469,7 +495,7 @@ void Deck::OnMouseMove(POINT point) {
       swipe_time_ = now.seconds;
     }
     const float travel = std::max(front_rect_.right + Dip(theme::kExitOvershoot), 1.0f);
-    top->SetSwipe(offset, std::clamp(1.0f + std::min(offset, 0.0f) / travel, 0.0f, 1.0f));
+    top->SetSwipe(offset, std::clamp(-offset / travel, 0.0f, 1.0f));
     compositor_.Commit();
     return;
   }
@@ -558,13 +584,13 @@ void Deck::BeginFileDrag() {
   if (card == nullptr) return;
 
   const std::wstring path = store_.WaitUntilSaved(card->shot());
-  if (path.empty() || !card->shot()->frame) return;
+  if (path.empty()) return;
 
   card->held_by_drag = true;
   card->SetDimmed(true, compositor_.Now());
   compositor_.Commit();
 
-  Image preview = card->RenderDragPreview(static_cast<int>(Dip(theme::kDragPreviewWidth)));
+  Image preview = card->RenderDragPreview(store_, static_cast<int>(Dip(theme::kDragPreviewWidth)));
   // DoDragDrop runs its own message loop, so ticks and new shots can still arrive during the drag.
   in_modal_drag_ = true;
   const DWORD effect = RunFileDrag(path, preview);

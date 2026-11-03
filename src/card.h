@@ -4,6 +4,10 @@
 // switching regions are therefore the same operation: animate the window's edges and the plane's
 // origin and scale together. Each of those is linear in the spring's progress, so every point of
 // the image travels in a straight line and the motion reads as a single continuous camera move.
+//
+// The plane holds three kinds of bitmap, all in exact registration, so crossfading between them
+// only ever changes sharpness: the full frame for the start of the flight, a base copy filtered
+// for thumbnail scales that is always underneath, and one crisp 1:1 thumbnail per region.
 #pragma once
 
 #include "compositor.h"
@@ -11,6 +15,7 @@
 #include "screen.h"
 #include "store.h"
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -22,10 +27,25 @@ struct RectF {
   float height() const { return bottom - top; }
 };
 
+// Pixel size of the thumbnail showing a region.
+SIZE ThumbnailSize(const RECT& region, float scale);
+
+// One soft shadow cut into corners and edges, so that it can follow a card of any size without its
+// blur or corners ever being stretched. Shared by every card on a monitor.
+struct CardShadow {
+  std::array<ComPtr<IDCompositionSurface>, 4> corners;  // Top left, top right, bottom left, bottom right.
+  std::array<ComPtr<IDCompositionSurface>, 4> edges;    // Top, bottom, left, right; one pixel long.
+  float outer = 0.0f;  // How far the bitmap reaches beyond the card.
+  float reach = 0.0f;  // How far corners reach along the card's edges.
+};
+
+CardShadow BuildCardShadow(Compositor& compositor, float scale);
+
 class Card {
  public:
-  Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, std::vector<Region> regions,
-       float scale, ComPtr<IDCompositionSurface> frost, double created_at);
+  Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, const ScreenInfo& screen,
+       float scale, ComPtr<IDCompositionSurface> frost, const CardShadow& shadow, IDCompositionClip* shadow_clip,
+       double created_at);
   ~Card();
   Card(const Card&) = delete;
   Card& operator=(const Card&) = delete;
@@ -34,31 +54,34 @@ class Card {
   void PlaceFullScreen();
 
   // Prepares the reduced copies the flight fades into. Separate so the first frame is not delayed by them.
-  void BuildDerivedAssets(const RectF& landing, const TimeBase& now);
+  void BuildDerivedAssets(const TimeBase& now);
 
   void MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const TimeBase& now, double delay, bool in_flight);
 
-  void Select(int index, const RectF& rect, const TimeBase& now);
+  // Crossfades to another region's thumbnail. MoveTo carries out the matching camera move.
+  void Select(int index, const TimeBase& now);
+  bool CanSelect(int index) const;
 
-  void SetSwipe(float offset, float opacity);
+  void SetSwipe(float offset, float progress);
   void SnapBack(const TimeBase& now, float velocity);
-  void SlideOut(const TimeBase& now, float distance, float velocity);
+  void SlideOut(const TimeBase& now, float velocity);
   void SetDimmed(bool dimmed, const TimeBase& now);
 
-  // Drops finished crossfade layers and the transient full-resolution surface.
-  void Tick(double now);
+  // Drops finished crossfade layers and whatever the flight no longer needs.
+  void Tick(double now, Store& store);
 
   bool FinishedExiting(double now) const { return now >= exit_end_time_; }
 
-  // Called while the card is behind the front: only its thumbnail shows, so the raw pixels and the
-  // half-size copy can go. Coming back to the front restores them.
+  // Called while the card is deep in the deck: only its current thumbnail shows, so everything else
+  // can go. Coming back to the front rebuilds it from the shot's archive.
   void Hibernate(Store& store);
   void Wake(Store& store);
 
-  Image RenderDragPreview(int width) const;
+  Image RenderDragPreview(Store& store, int width) const;
 
   const std::shared_ptr<Shot>& shot() const { return shot_; }
   const std::vector<Region>& regions() const { return regions_; }
+  const TaskbarInsets& insets() const { return insets_; }
   int selected() const { return selected_; }
   const RECT& selected_rect() const { return regions_[selected_].rect; }
   IDCompositionSurface* frost() const { return frost_.Get(); }
@@ -70,33 +93,32 @@ class Card {
   struct CrispLayer {
     ComPtr<IDCompositionVisual> visual;
     ComPtr<IDCompositionEffectGroup> effect;
-    ComPtr<IDCompositionSurface> surface;
     AnimFloat alpha;
     double retire_at = 0.0;
   };
 
-  void AddCrisp(const RECT& region, int width, int height, const TimeBase& now, double delay);
-  void UpdateShadow(int width, int height);
+  void BuildCaches(const Image& frame, bool with_base);
+  void ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec);
+  void BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip);
   IDCompositionDevice* device() const { return compositor_.device(); }
 
   Compositor& compositor_;
   ComPtr<IDCompositionVisual> parent_;
   std::shared_ptr<Shot> shot_;
   std::vector<Region> regions_;
+  TaskbarInsets insets_;
   float scale_;
+  float border_;
   ComPtr<IDCompositionSurface> frost_;
   int selected_ = 0;
-
-  // Reduced copy kept in memory so that switching regions never touches every full-resolution pixel.
-  Image half_;
 
   ComPtr<IDCompositionVisual> root_;
   ComPtr<IDCompositionEffectGroup> root_effect_;
   ComPtr<IDCompositionVisual> shadow_holder_;
-  ComPtr<IDCompositionVisual> shadow_visual_;
   ComPtr<IDCompositionEffectGroup> shadow_effect_;
-  ComPtr<IDCompositionScaleTransform> shadow_scale_;
-  ComPtr<IDCompositionSurface> shadow_surface_;
+  std::array<ComPtr<IDCompositionVisual>, 8> shadow_slices_;
+  ComPtr<IDCompositionScaleTransform> shadow_edge_x_;
+  ComPtr<IDCompositionScaleTransform> shadow_edge_y_;
   ComPtr<IDCompositionVisual> frame_;
   ComPtr<IDCompositionRectangleClip> frame_clip_;
   ComPtr<IDCompositionVisual> ring_;
@@ -108,22 +130,19 @@ class Card {
   ComPtr<IDCompositionScaleTransform> plane_scale_;
   ComPtr<IDCompositionVisual> full_visual_;
   ComPtr<IDCompositionSurface> full_surface_;
-  ComPtr<IDCompositionVisual> half_visual_;
-  ComPtr<IDCompositionEffectGroup> half_effect_;
-  ComPtr<IDCompositionSurface> half_surface_;
+  ComPtr<IDCompositionVisual> base_visual_;
+  ComPtr<IDCompositionEffectGroup> base_effect_;
+  ComPtr<IDCompositionSurface> base_surface_;
+  std::vector<ComPtr<IDCompositionSurface>> crisp_surfaces_;  // One per region; empty until built.
+  std::vector<SIZE> crisp_sizes_;
   std::vector<std::unique_ptr<CrispLayer>> crisp_layers_;
 
   AnimFloat left_, top_, right_, bottom_, radius_;
   AnimFloat plane_x_, plane_y_, plane_sx_, plane_sy_;
-  AnimFloat opacity_, slide_, ring_alpha_, half_alpha_;
-  AnimFloat shadow_x_, shadow_y_, shadow_sx_, shadow_sy_, shadow_alpha_;
+  AnimFloat opacity_, slide_, ring_alpha_, base_alpha_;
+  AnimFloat shadow_alpha_, shadow_edge_w_, shadow_edge_h_;
 
-  int shadow_width_ = 0;
-  int shadow_height_ = 0;
-  float shadow_pad_ = 0.0f;
-  int shadow_surface_width_ = 1;
-  int shadow_surface_height_ = 1;
-
+  float shadow_reach_ = 0.0f;
   bool hibernating_ = false;
   double full_release_at_ = 0.0;
   double exit_end_time_ = 0.0;

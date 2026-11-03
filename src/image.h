@@ -44,6 +44,9 @@ std::shared_ptr<const Image> CaptureScreen(const RECT& bounds);
 // Fast 2x box reduction.
 Image Halve(const Image& source);
 
+// Exact copy of a rectangle, keeping alpha.
+Image CopyRect(const Image& source, int left, int top, int width, int height);
+
 // Area-weighted reduction of a source rectangle. The rectangle may have fractional edges.
 Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height);
 
@@ -59,13 +62,29 @@ struct ShadowLayer {
 // Soft shadow of a rounded rectangle, premultiplied black. All lengths are in output pixels.
 Image RenderShadow(int box_width, int box_height, float radius, float pad, const ShadowLayer* layers, int layer_count);
 
+enum class GlyphStyle {
+  kWholeScreen,     // A solid slab: everything, taskbar included.
+  kWithoutTaskbar,  // The screen filled, with the taskbar band left faint.
+  kWindow,          // One window, recognizable by its title bar seam.
+  kZone,            // One cell of a snap layout, drawn among its faint neighbors.
+};
+
+enum class GlyphBand { kNone, kLeft, kTop, kRight, kBottom };
+
+struct GlyphBox {
+  float left, top, right, bottom;  // Normalized to the part of the monitor outside the taskbar.
+};
+
 struct GlyphSpec {
+  GlyphStyle style;
+  GlyphBand band;       // The monitor edge holding the taskbar.
   float screen_aspect;  // Width over height of the monitor.
-  float left, top, right, bottom;  // Region in normalized monitor coordinates.
+  GlyphBox box;
+  std::vector<GlyphBox> neighbors;
 };
 
 // One mini-screen glyph per option, laid out left to right at a fixed pitch.
 Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
-                       float color_alpha);
+                       float color_alpha, float faint_alpha);
 
 }  // namespace sstk
