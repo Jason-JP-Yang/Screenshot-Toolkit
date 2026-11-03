@@ -31,6 +31,7 @@ struct WalkState {
   HMONITOR monitor;
   RECT bounds;
   DWORD own_process;
+  HWND taskbar_window;
   std::vector<WindowEntry> windows;
   TaskbarState taskbar;
   bool covered_so_far = false;
@@ -82,18 +83,11 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
   if (GetClassNameW(window, class_name, ARRAYSIZE(class_name)) == 0) return TRUE;
 
   if (IsTaskbarClass(class_name)) {
-    if (!state.taskbar.found && MonitorFromWindow(window, MONITOR_DEFAULTTONULL) == state.monitor) {
-      RECT rect;
-      if (GetWindowRect(window, &rect)) {
-        RECT clipped;
-        IntersectRect(&clipped, &rect, &state.bounds);
-        state.taskbar.found = true;
-        state.taskbar.rect = clipped;
-        // Windows drops the taskbar out of the topmost band only for a real fullscreen app. While it stays
-        // topmost it is on screen, whatever monitor-sized shell surfaces such as open panels sit above it.
-        const bool topmost = (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-        state.taskbar.covered = state.covered_so_far && !topmost;
-      }
+    if (window == state.taskbar_window) {
+      // Windows drops the taskbar out of the topmost band only for a real fullscreen app. While it stays
+      // topmost it is on screen, whatever monitor-sized shell surfaces such as open panels sit above it.
+      const bool topmost = (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+      state.taskbar.covered = state.covered_so_far && !topmost;
     }
     return TRUE;
   }
@@ -201,8 +195,25 @@ TaskbarInsets InsetsFrom(const TaskbarState& taskbar, const RECT& bounds) {
   return insets;
 }
 
+HWND FindTaskbar(HMONITOR monitor) {
+  HWND primary = FindWindowW(L"Shell_TrayWnd", nullptr);
+  if (primary != nullptr && MonitorFromWindow(primary, MONITOR_DEFAULTTONULL) == monitor) return primary;
+  HWND secondary = nullptr;
+  while ((secondary = FindWindowExW(nullptr, secondary, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr) {
+    if (MonitorFromWindow(secondary, MONITOR_DEFAULTTONULL) == monitor) return secondary;
+  }
+  return nullptr;
+}
+
 WalkState WalkDesktop(HMONITOR monitor, const RECT& bounds) {
-  WalkState state{monitor, bounds, GetCurrentProcessId()};
+  // Looked up by name because Start and Task View move the taskbar to a shell band that EnumWindows
+  // does not report. If the walk never meets it, it is above every window the walk can see.
+  WalkState state{monitor, bounds, GetCurrentProcessId(), FindTaskbar(monitor)};
+  RECT taskbar_rect;
+  if (state.taskbar_window != nullptr && IsWindowVisible(state.taskbar_window) && GetWindowRect(state.taskbar_window, &taskbar_rect)) {
+    state.taskbar.found = true;
+    IntersectRect(&state.taskbar.rect, &taskbar_rect, &bounds);
+  }
   state.windows.reserve(32);
   EnumWindows(CollectWindow, reinterpret_cast<LPARAM>(&state));
   return state;
