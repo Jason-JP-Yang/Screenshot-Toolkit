@@ -1,6 +1,6 @@
 #include "store.h"
 
-#include "config.h"
+#include "config/core.h"
 
 #include <knownfolders.h>
 #include <shellapi.h>
@@ -31,8 +31,7 @@ std::wstring AllocateFilePath(const SYSTEMTIME& time) {
   if (folder.empty()) return {};
 
   wchar_t stem[64];
-  swprintf_s(stem, L"Screenshot %04d-%02d-%02d %02d%02d%02d", time.wYear, time.wMonth, time.wDay, time.wHour,
-             time.wMinute, time.wSecond);
+  swprintf_s(stem, config::kFileNameFormat, time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
   std::wstring path = folder + L"\\" + stem + L".png";
   for (int suffix = 2; GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; ++suffix) {
     path = folder + L"\\" + stem + L" (" + std::to_wstring(suffix) + L").png";

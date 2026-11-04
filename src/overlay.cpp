@@ -3,9 +3,12 @@
 #include "bin.h"
 #include "capsule.h"
 #include "card.h"
+#include "config/animation.h"
+#include "config/colors.h"
+#include "config/core.h"
+#include "config/layout.h"
 #include "dragdrop.h"
 #include "sprite.h"
-#include "theme.h"
 
 #include <shellapi.h>
 #include <windowsx.h>
@@ -19,10 +22,7 @@ namespace {
 
 constexpr wchar_t kStageClass[] = L"ScreenshotToolkit.Stage";
 constexpr wchar_t kSinkClass[] = L"ScreenshotToolkit.Sink";
-constexpr UINT kTickIntervalMs = 40;
-constexpr int kTaskbarPollTicks = 3;
 constexpr float kDegreesToRadians = 3.14159265f / 180.0f;
-constexpr float kMaxFrameTime = 0.05f;
 
 }  // namespace
 
@@ -216,7 +216,7 @@ Deck::Deck(Overlay& owner, Compositor& compositor, Store& store, HMONITOR monito
   root_->AddVisual(drag_layer_.Get(), FALSE, nullptr);
   root_->AddVisual(bin_layer_.Get(), FALSE, nullptr);
 
-  flash_ = compositor_.CreateSolidVisual(0xFFFFFFFF, static_cast<float>(size_.cx), static_cast<float>(size_.cy));
+  flash_ = compositor_.CreateSolidVisual(0xFF000000u | config::kFlashColor, static_cast<float>(size_.cx), static_cast<float>(size_.cy));
   flash_effect_ = compositor_.CreateEffectGroup();
   flash_->SetEffect(flash_effect_.Get());
   flash_alpha_.Bind(flash_effect_.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
@@ -241,7 +241,7 @@ Deck::~Deck() {
 }
 
 void Deck::Flash() {
-  flash_alpha_.Pulse(compositor_.device(), compositor_.Now(), theme::kFlashPeak, theme::kFlashRise, theme::kFlashFall);
+  flash_alpha_.Pulse(compositor_.device(), compositor_.Now(), config::kFlashPeak, config::kFlashRise, config::kFlashFall);
   compositor_.Commit();
 
   // Shown after the commit so that the first composed frame already contains the flash.
@@ -268,20 +268,20 @@ RectF Deck::RectForRegion(const RECT& region) const {
   const SIZE size = ThumbnailSize(region, scale_);
   const float width = static_cast<float>(size.cx);
   const float height = static_cast<float>(size.cy);
-  const float left = std::round(static_cast<float>(insets_.left) + Dip(theme::kEdgeMargin));
-  const float bottom = std::round(static_cast<float>(size_.cy - insets_.bottom) - Dip(theme::kEdgeMargin));
+  const float left = std::round(static_cast<float>(insets_.left) + Dip(config::kEdgeMargin));
+  const float bottom = std::round(static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin));
   return RectF{left, bottom - height, left + width, bottom};
 }
 
 RectF Deck::RectBehind(const Card& card, const RectF& front, int depth) const {
   // Each card keeps the shape of its own selection. Only its place in the stack comes from the front card.
   const RectF own = RectForRegion(card.selected_rect());
-  const int level = std::min(depth, theme::kDeckVisibleBehind + 1);
-  const float keep = 1.0f - theme::kDeckShrinkPerLevel * level;
+  const int level = std::min(depth, config::kDeckVisibleBehind + 1);
+  const float keep = 1.0f - config::kDeckShrinkPerLevel * level;
   const float width = own.width() * keep;
   const float height = own.height() * keep;
   const float left = own.left + (own.width() - width) * 0.5f;
-  const float peek = Dip(theme::kDeckPeek) * level;
+  const float peek = Dip(config::kDeckPeek) * level;
   // A card taller than the front rises above it rather than hanging below the deck.
   const float top = std::min(front.top - peek, front.bottom - height - peek);
   return RectF{left, top, left + width, top + height};
@@ -298,15 +298,15 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
     if (depth == 0) {
       cards_[i]->MoveTo(front_rect_, 0, front_spec, now, delay, in_flight);
     } else {
-      cards_[i]->MoveTo(RectBehind(*cards_[i], front_rect_, depth), depth, theme::kReflow, now, 0.0, false);
+      cards_[i]->MoveTo(RectBehind(*cards_[i], front_rect_, depth), depth, config::kReflow, now, 0.0, false);
     }
   }
 
   // The capsule is anchored to the tallest possible card, not the current one, so it does not
   // move under the pointer when the selected region changes the thumbnail's shape.
-  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(theme::kEdgeMargin) - Dip(theme::kCardMaxHeight);
-  const int peeking = std::min(count - 1, theme::kDeckVisibleBehind);
-  const float capsule_y = std::round(box_top - Dip(theme::kDeckPeek) * peeking - Dip(theme::kCapsuleGap) - capsule_->height());
+  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
+  const int peeking = std::min(count - 1, config::kDeckVisibleBehind);
+  const float capsule_y = std::round(box_top - Dip(config::kDeckPeek) * peeking - Dip(config::kCapsuleGap) - capsule_->height());
   capsule_->MoveTo(front_rect_.left, capsule_y, now);
   UpdateSink();
 }
@@ -365,7 +365,7 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
 
   // A card that was paused by hover resumes a full dwell once it stops being the front.
   if (Card* previous = front(); previous != nullptr && hovering_) {
-    previous->expiry = std::max(previous->expiry, now.seconds + theme::kDwellSeconds);
+    previous->expiry = std::max(previous->expiry, now.seconds + config::kDwellSeconds);
   }
 
   auto shot = std::make_shared<Shot>();
@@ -375,18 +375,18 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
 
   ApplyInsets(capture->screen.insets);
   const float capsule_full = capsule_->full_width();
-  const float left = static_cast<float>(insets_.left) + Dip(theme::kEdgeMargin);
-  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(theme::kEdgeMargin) - Dip(theme::kCardMaxHeight);
-  const float frost_top = box_top - Dip(theme::kCapsuleGap) - capsule_->height();
+  const float left = static_cast<float>(insets_.left) + Dip(config::kEdgeMargin);
+  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
+  const float frost_top = box_top - Dip(config::kCapsuleGap) - capsule_->height();
   RECT frost_rect{static_cast<LONG>(left), static_cast<LONG>(frost_top), static_cast<LONG>(left + capsule_full),
                   static_cast<LONG>(frost_top + capsule_->height())};
   RECT monitor_rect{0, 0, size_.cx, size_.cy};
   IntersectRect(&frost_rect, &frost_rect, &monitor_rect);
   ComPtr<IDCompositionSurface> frost;
   if (!IsRectEmpty(&frost_rect)) {
-    uint32_t tint = theme::kGlassTint;
+    uint32_t tint = config::kGlassTint;
     uint32_t tint_bgr = (tint & 0xFF) << 16 | (tint & 0xFF00) | (tint >> 16);
-    Image frost_pixels = RenderFrost(*capture->frame, frost_rect, theme::kFrostDownscale, tint_bgr, theme::kGlassTintAlpha);
+    Image frost_pixels = RenderFrost(*capture->frame, frost_rect, config::kFrostDownscale, tint_bgr, config::kGlassTintAlpha);
     frost = compositor_.CreateSurface(frost_pixels, true);
   }
 
@@ -398,7 +398,7 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
 
   // The first frame only needs the full-resolution surface, so it is committed before anything else is prepared.
   now = compositor_.Now();
-  Layout(theme::kFlight, now, theme::kFlightHold, true);
+  Layout(config::kFlight, now, config::kFlightHold, true);
   BindCapsuleToFront(now);
   UpdateSink();
   compositor_.Commit();
@@ -426,7 +426,7 @@ void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
       if (GetCapture() == sink_) ReleaseCapture();
     }
   }
-  Layout(theme::kReflow, now);
+  Layout(config::kReflow, now);
   if (cards_.empty()) UpdateSink();
 }
 
@@ -437,10 +437,10 @@ void Deck::SelectRegion(int index) {
   // A selection belongs to one screenshot, so the cards behind it stay exactly where they are.
   const TimeBase now = compositor_.Now();
   top->Select(index, now);
-  top->expiry = now.seconds + theme::kDwellSeconds;
+  top->expiry = now.seconds + config::kDwellSeconds;
   capsule_->Select(index, now);
   front_rect_ = RectForRegion(top->selected_rect());
-  top->MoveTo(front_rect_, 0, theme::kMorph, now, 0.0, false);
+  top->MoveTo(front_rect_, 0, config::kMorph, now, 0.0, false);
   UpdateSink();
   compositor_.Commit();
   store_.Submit(top->shot(), top->selected_rect());
@@ -485,7 +485,7 @@ void Deck::Tick() {
     card->Tick(now.seconds, store_);
     // Cards still in sight keep everything, so that dismissing the front card never has to wait for a decode.
     const int depth = static_cast<int>(cards_.size() - 1 - i);
-    if (depth > theme::kDeckVisibleBehind) card->Hibernate(store_);
+    if (depth > config::kDeckVisibleBehind) card->Hibernate(store_);
   }
   for (auto it = exiting_.begin(); it != exiting_.end();) {
     if ((*it)->FinishedExiting(now.seconds)) {
@@ -510,11 +510,11 @@ void Deck::Tick() {
 
 void Deck::PollInsets(const TimeBase& now) {
   // An auto-hiding taskbar can slide in at any moment, and thumbnails must stay clear of it.
-  if (++tick_count_ % kTaskbarPollTicks != 0) return;
+  if (++tick_count_ % config::kTaskbarPollTicks != 0) return;
   const TaskbarInsets insets = QueryTaskbarInsets(monitor_);
   if (insets != insets_) {
     ApplyInsets(insets);
-    Layout(theme::kReflow, now);
+    Layout(config::kReflow, now);
   }
 }
 
@@ -549,14 +549,14 @@ void Deck::SetDragActive(bool active, const TimeBase& now) {
 void Deck::ExtendDwell(double now) {
   for (auto& card : cards_) {
     const double remaining = card->expiry - now;
-    if (remaining < theme::kDwellSeconds) card->expiry = now + std::min(remaining + theme::kDropDwellBonus, theme::kDwellSeconds);
+    if (remaining < config::kDwellSeconds) card->expiry = now + std::min(remaining + config::kDropDwellBonus, config::kDwellSeconds);
   }
 }
 
 void Deck::TakeBack(std::unique_ptr<Card> card, size_t index, const TimeBase& now) {
-  card->expiry = now.seconds + theme::kDwellSeconds;
+  card->expiry = now.seconds + config::kDwellSeconds;
   cards_.insert(cards_.begin() + static_cast<ptrdiff_t>(std::min(index, cards_.size())), std::move(card));
-  Layout(theme::kReflow, now);
+  Layout(config::kReflow, now);
 }
 
 void Deck::Land(Card* card) {
@@ -585,7 +585,7 @@ void Deck::ShowBin() {
   const TaskbarInsets insets = QueryTaskbarInsets(monitor_);
   if (insets != insets_) {
     ApplyInsets(insets);
-    Layout(theme::kReflow, compositor_.Now());
+    Layout(config::kReflow, compositor_.Now());
   }
   PlaceBin();
   bin_->Show();
@@ -659,7 +659,7 @@ void Deck::OnMouseMove(POINT point) {
   if (press_ == Press::kCard) {
     const int dx = point.x - press_point_.x;
     const int dy = point.y - press_point_.y;
-    const int slop = static_cast<int>(Dip(theme::kPressSlop));
+    const int slop = static_cast<int>(Dip(config::kPressSlop));
     if (std::abs(dx) > slop || std::abs(dy) > slop) {
       // Left is dismissal; every other direction is a file drag toward another application.
       if (dx < 0 && std::abs(dx) > std::abs(dy)) {
@@ -678,7 +678,7 @@ void Deck::OnMouseMove(POINT point) {
     Card* top = front();
     if (top == nullptr) return;
     float offset = static_cast<float>(point.x - press_point_.x);
-    if (offset > 0.0f) offset *= theme::kRubberBand;
+    if (offset > 0.0f) offset *= config::kRubberBand;
     const float elapsed = static_cast<float>(now.seconds - swipe_time_);
     if (elapsed > 0.001f) {
       // Smoothed so that one irregular sample does not decide whether a flick dismisses.
@@ -686,7 +686,7 @@ void Deck::OnMouseMove(POINT point) {
       swipe_offset_ = offset;
       swipe_time_ = now.seconds;
     }
-    const float travel = std::max(front_rect_.right + Dip(theme::kExitOvershoot), 1.0f);
+    const float travel = std::max(front_rect_.right + Dip(config::kExitOvershoot), 1.0f);
     top->SetSwipe(offset, std::clamp(-offset / travel, 0.0f, 1.0f));
     compositor_.Commit();
     return;
@@ -729,13 +729,13 @@ void Deck::OnButtonUp(POINT point) {
       Card* top = front();
       if (top == nullptr) break;
       const TimeBase now = compositor_.Now();
-      const bool far_enough = -swipe_offset_ > front_rect_.width() * theme::kSwipeDismissFraction;
-      const bool flicked = swipe_velocity_ < -Dip(theme::kSwipeDismissVelocity);
+      const bool far_enough = -swipe_offset_ > front_rect_.width() * config::kSwipeDismissFraction;
+      const bool flicked = swipe_velocity_ < -Dip(config::kSwipeDismissVelocity);
       if (far_enough || flicked) {
         Dismiss(cards_.size() - 1, now, swipe_velocity_);
       } else {
         top->SnapBack(now, swipe_velocity_);
-        top->expiry = now.seconds + theme::kDwellSeconds;
+        top->expiry = now.seconds + config::kDwellSeconds;
       }
       compositor_.Commit();
       break;
@@ -750,7 +750,7 @@ void Deck::OnMouseLeave() {
   if (press_ != Press::kNone || dragging_) return;
   hovering_ = false;
   const TimeBase now = compositor_.Now();
-  if (Card* top = front(); top != nullptr) top->expiry = now.seconds + theme::kDwellSeconds;
+  if (Card* top = front(); top != nullptr) top->expiry = now.seconds + config::kDwellSeconds;
   capsule_->SetHover(-1, now);
   compositor_.Commit();
 }
@@ -788,7 +788,7 @@ void Deck::LiftFront() {
 
   const POINT press{bounds_.left + press_point_.x, bounds_.top + press_point_.y};
   owner_.BeginDrag(*this, std::move(card), index, press, now);
-  Layout(theme::kReflow, now);
+  Layout(config::kReflow, now);
   compositor_.Commit();
 }
 
@@ -925,7 +925,7 @@ void DragSession::StepHeld(float dt) {
   POINT cursor;
   GetCursorPos(&cursor);
   if (dt > 0.0f) {
-    const float blend = 1.0f - std::exp(-dt / 0.035f);
+    const float blend = 1.0f - std::exp(-dt / config::kDragSpeedSmoothing);
     pointer_vx_ += (static_cast<float>(cursor.x - last_cursor_.x) / dt - pointer_vx_) * blend;
     pointer_vy_ += (static_cast<float>(cursor.y - last_cursor_.y) / dt - pointer_vy_) * blend;
     last_cursor_ = cursor;
@@ -934,54 +934,54 @@ void DragSession::StepHeld(float dt) {
   const bool was_over = over_bin_;
   over_bin_ = TrackBin(cursor);
 
-  catch_x_.Step(theme::kDragCatchUp, dt);
-  catch_y_.Step(theme::kDragCatchUp, dt);
+  catch_x_.Step(config::kDragCatchUp, dt);
+  catch_y_.Step(config::kDragCatchUp, dt);
   x_.value = static_cast<float>(cursor.x) + catch_x_.value;
   y_.value = static_cast<float>(cursor.y) + catch_y_.value;
 
-  scale_.target = theme::kDragScale;
-  scale_.Step(theme::kDragLift, dt);
-  lift_.Step(theme::kDragLift, dt);
+  scale_.target = config::kDragScale;
+  scale_.Step(config::kDragLift, dt);
+  lift_.Step(config::kDragLift, dt);
 
-  const float tilt_limit = theme::kDragTiltMaxDegrees;
-  tilt_.target = std::clamp(pointer_vx_ / dip_ * theme::kDragTiltPerSpeed, -tilt_limit, tilt_limit);
-  tilt_.Step(theme::kDragTilt, dt);
+  const float tilt_limit = config::kDragTiltMaxDegrees;
+  tilt_.target = std::clamp(pointer_vx_ / dip_ * config::kDragTiltPerSpeed, -tilt_limit, tilt_limit);
+  tilt_.Step(config::kDragTilt, dt);
 
   // The card stays on the pointer throughout, and only this one value draws it in and lets it out. Coming close, the
   // pull is already felt. Crossing the edge starts it moving at once, faster the faster the pointer came.
   if (bin_deck_ != nullptr) {
     bin_deck_->AimBin(x_.value + (thumb_width_ * 0.5f - grab_x_) * scale_.value, y_.value + (thumb_height_ * 0.5f - grab_y_) * scale_.value);
-    const float felt = std::max(bin_deck_->BinCloseness() - theme::kBinMagnetFrom, 0.0f) / (1.0f - theme::kBinMagnetFrom);
-    pull_.target = over_bin_ ? 1.0f : theme::kBinMagnetPull * felt * std::sqrt(felt);
+    const float felt = std::max(bin_deck_->BinCloseness() - config::kBinMagnetFrom, 0.0f) / (1.0f - config::kBinMagnetFrom);
+    pull_.target = over_bin_ ? 1.0f : config::kBinMagnetPull * felt * std::sqrt(felt);
   }
   if (over_bin_ != was_over) {
     const float speed = std::sqrt(pointer_vx_ * pointer_vx_ + pointer_vy_ * pointer_vy_) / dip_;
-    const float kick = std::min(theme::kBinPullKick + speed * theme::kBinPullKickPerSpeed, theme::kBinPullKickMax);
+    const float kick = std::min(config::kBinPullKick + speed * config::kBinPullKickPerSpeed, config::kBinPullKickMax);
     pull_.velocity += over_bin_ ? kick : -kick;
   }
-  pull_.Step(theme::kBinPull, dt);
+  pull_.Step(config::kBinPull, dt);
 
-  const bool inside = pull_.value > theme::kBinInsideAt;
+  const bool inside = pull_.value > config::kBinInsideAt;
   if (inside != inside_) {
     inside_ = inside;
-    if (bin_deck_ != nullptr) bin_deck_->NudgeBin(inside ? theme::kBinInsideImpulse : theme::kBinOutsideImpulse);
+    if (bin_deck_ != nullptr) bin_deck_->NudgeBin(inside ? config::kBinInsideImpulse : config::kBinOutsideImpulse);
   }
 
-  badge_.target = accepts_ && !over_bin_ && pull_.value < theme::kBinMagnetPull * 1.5f ? 1.0f : 0.0f;
-  badge_.Step(badge_.target > 0.0f ? theme::kDropBadgeIn : theme::kDropBadgeOut, dt);
+  badge_.target = accepts_ && !over_bin_ && pull_.value < config::kBinMagnetPull * 1.5f ? 1.0f : 0.0f;
+  badge_.Step(badge_.target > 0.0f ? config::kDropBadgeIn : config::kDropBadgeOut, dt);
 }
 
 void DragSession::StepVanishing(float dt) {
-  const float decay = std::exp(-dt * 16.0f);
+  const float decay = std::exp(-dt * config::kDropDriftDecay);
   pointer_vx_ *= decay;
   pointer_vy_ *= decay;
   x_.value += pointer_vx_ * dt;
   y_.value += pointer_vy_ * dt;
 
   tilt_.target = 0.0f;
-  tilt_.Step(theme::kDragTilt, dt);
-  vanish_.Step(theme::kDropVanish, dt);
-  badge_.Step(theme::kDropBadgeOut, dt);
+  tilt_.Step(config::kDragTilt, dt);
+  vanish_.Step(config::kDropVanish, dt);
+  badge_.Step(config::kDropBadgeOut, dt);
   opacity_.value = std::clamp(1.0f - vanish_.value, 0.0f, 1.0f);
   if (vanish_.value > 0.985f) phase_ = Phase::kDone;
 }
@@ -991,9 +991,9 @@ void DragSession::StepSwallowed(float dt) {
     pull_x_ = bin_deck_->BinX();
     pull_y_ = bin_deck_->BinY();
   }
-  pull_.Step(theme::kBinSwallow, dt);
-  tilt_.Step(theme::kBinSwallow, dt);
-  if (!gulped_ && pull_.value >= theme::kBinGulpAt) {
+  pull_.Step(config::kBinSwallow, dt);
+  tilt_.Step(config::kBinSwallow, dt);
+  if (!gulped_ && pull_.value >= config::kBinGulpAt) {
     gulped_ = true;
     if (bin_deck_ != nullptr) bin_deck_->GulpBin();
   }
@@ -1010,22 +1010,22 @@ void DragSession::StepReturning(float dt) {
   scale_.target = home_scale;
   opacity_.target = landing_card_->resting_opacity();
 
-  x_.Step(theme::kFlyHome, dt);
-  y_.Step(theme::kFlyHome, dt);
-  scale_.Step(theme::kFlyHome, dt);
-  opacity_.Step(theme::kFade, dt);
+  x_.Step(config::kFlyHome, dt);
+  y_.Step(config::kFlyHome, dt);
+  scale_.Step(config::kFlyHome, dt);
+  opacity_.Step(config::kFade, dt);
   tilt_.target = 0.0f;
-  tilt_.Step(theme::kDragTilt, dt);
+  tilt_.Step(config::kDragTilt, dt);
   pull_.target = 0.0f;
-  pull_.Step(theme::kBinPull, dt);
+  pull_.Step(config::kBinPull, dt);
   badge_.target = 0.0f;
-  badge_.Step(theme::kDropBadgeOut, dt);
+  badge_.Step(config::kDropBadgeOut, dt);
 
   const float dx = x_.value - x_.target;
   const float dy = y_.value - y_.target;
   const float distance = std::sqrt(dx * dx + dy * dy);
-  lift_.target = std::min(distance / (theme::kDragLandingZone * dip_), 1.0f);
-  lift_.Step(theme::kFade, dt);
+  lift_.target = std::min(distance / (config::kDragLandingZone * dip_), 1.0f);
+  lift_.Step(config::kFade, dt);
 
   const bool arrived = distance < 0.3f && std::fabs(x_.velocity) + std::fabs(y_.velocity) < 8.0f &&
                        std::fabs(scale_.value - scale_.target) < 0.0012f && std::fabs(tilt_.value) < 0.02f &&
@@ -1037,29 +1037,30 @@ void DragSession::StepReturning(float dt) {
 }
 
 void DragSession::Render() {
-  const float shadow_base = theme::kDragShadowRest + (1.0f - theme::kDragShadowRest) * std::clamp(lift_.value, 0.0f, 1.0f);
+  const float shadow_base = config::kDragShadowRest + (1.0f - config::kDragShadowRest) * std::clamp(lift_.value, 0.0f, 1.0f);
   const float vanish = std::clamp(vanish_.value, 0.0f, 1.0f);
 
   SpritePose pose{};
   pose.x = x_.value;
   pose.y = y_.value;
-  pose.scale = scale_.value * (1.0f - theme::kDropVanishShrink * vanish);
+  pose.scale = scale_.value * (1.0f - config::kDropVanishShrink * vanish);
   pose.angle = tilt_.value * kDegreesToRadians;
   pose.pull = std::max(pull_.value, 0.0f);
   pose.pull_x = pull_x_;
   pose.pull_y = pull_y_;
   // Fully inside the bin it stays out of sight until drawn back out.
-  pose.opacity = std::clamp(opacity_.value, 0.0f, 1.0f) * std::clamp((1.0f - pull_.value) / 0.05f, 0.0f, 1.0f);
+  pose.opacity = std::clamp(opacity_.value, 0.0f, 1.0f) * std::clamp((1.0f - pull_.value) / config::kBinHideMargin, 0.0f, 1.0f);
   // The shadow keeps the card's flat shape, so it is gone before the bending shows against it.
-  pose.shadow = shadow_base * std::clamp(1.0f - (pose.pull - theme::kBinMagnetPull) * 7.0f, 0.0f, 1.0f) * std::clamp(1.0f - vanish * 1.8f, 0.0f, 1.0f);
+  pose.shadow = shadow_base * std::clamp(1.0f - (pose.pull - config::kBinMagnetPull) * config::kBinShadowFade, 0.0f, 1.0f) *
+                std::clamp(1.0f - vanish * config::kDropShadowFade, 0.0f, 1.0f);
   pose.shadow_free = lift_.value;
-  pose.shadow_drop = std::clamp(lift_.value, 0.0f, 1.0f) * theme::kDragShadowDrop * dip_;
-  pose.badge = badge_.value * (1.0f + 0.22f * vanish);
+  pose.shadow_drop = std::clamp(lift_.value, 0.0f, 1.0f) * config::kDragShadowDrop * dip_;
+  pose.badge = badge_.value * (1.0f + config::kDropBadgeGrow * vanish);
   sprite_->Render(pose);
 }
 
 bool DragSession::Frame(const TimeBase& now) {
-  const float dt = std::clamp(static_cast<float>(now.seconds - last_time_), 0.0f, kMaxFrameTime);
+  const float dt = std::clamp(static_cast<float>(now.seconds - last_time_), 0.0f, config::kMaxFrameTime);
   last_time_ = now.seconds;
   switch (phase_) {
     case Phase::kHeld: StepHeld(dt); break;
@@ -1171,7 +1172,7 @@ void Overlay::EnsureTicking() {
   active_ = true;
   if (ticking_) return;
   ticking_ = true;
-  SetTimer(controller_, kTickTimer, kTickIntervalMs, nullptr);
+  SetTimer(controller_, kTickTimer, config::kTickIntervalMs, nullptr);
 }
 
 void Overlay::OnFlash(HMONITOR monitor) {
@@ -1247,7 +1248,7 @@ void Overlay::CancelDrags() {
 void Overlay::OnDragFrame() {
   pacer_.Acknowledge();
   const TimeBase now = compositor_.Now();
-  const float dt = std::clamp(static_cast<float>(now.seconds - last_frame_), 0.0f, kMaxFrameTime);
+  const float dt = std::clamp(static_cast<float>(now.seconds - last_frame_), 0.0f, config::kMaxFrameTime);
   last_frame_ = now.seconds;
 
   if (session_) session_->Frame(now);

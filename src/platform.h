@@ -31,7 +31,7 @@ enum Message : UINT {
 double NowSeconds();
 int64_t QpcFrequency();
 
-// True when screenshots show the overlay: chosen in config.h, or forced by SSTK_DEBUG_VISIBLE so that
+// True when screenshots show the overlay: chosen in config/core.h, or forced by SSTK_DEBUG_VISIBLE so that
 // test tooling can sample the overlay from the screen.
 bool OverlayVisibleToCapture();
 

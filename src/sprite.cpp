@@ -1,6 +1,8 @@
 #include "sprite.h"
 
-#include "theme.h"
+#include "config/animation.h"
+#include "config/colors.h"
+#include "config/layout.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -12,12 +14,10 @@ namespace {
 
 constexpr int kMargin = 2;
 constexpr int kShadowDownscale = 4;
-constexpr float kMeshCells = 170.0f;
 constexpr int kMeshMinCuts = 6;
 constexpr float kCellOverlap = 1.0f;
 constexpr float kBentFrom = 0.001f;
 constexpr float kBadgeVisibleFrom = 0.02f;
-constexpr float kFarthestLag = 0.45f;  // How much of the pull passes before the farthest point starts moving, relative to the nearest.
 constexpr float kSmallestQuadArea = 0.25f;
 constexpr float kShallowestDepth = 0.12f;
 
@@ -115,9 +115,9 @@ D3DMATRIX QuadTransform(float left, float top, float width, float height, Vec p0
 
 DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float grab_x, float grab_y, float scale)
     : compositor_(compositor), grab_x_(grab_x + kMargin), grab_y_(grab_y + kMargin) {
-  const float radius = theme::kCardRadius * scale;
-  const float border = std::max(std::round(theme::kCardBorder * scale), 1.0f);
-  const Image sprite = RenderSprite(thumbnail, radius, border, kMargin);
+  const float radius = config::kCardRadius * scale;
+  const float border = std::max(std::round(config::kCardBorder * scale), 1.0f);
+  const Image sprite = RenderSprite(thumbnail, radius, border, config::kCardBorderColor, kMargin);
   surface_ = compositor_.CreateSurface(sprite, false);
   width_ = static_cast<float>(sprite.width());
   height_ = static_cast<float>(sprite.height());
@@ -127,7 +127,7 @@ DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float gra
   reach_ = std::sqrt(far_x * far_x + far_y * far_y);
 
   // Square cells, of about the same number whatever the card's shape.
-  const float pitch = std::sqrt(width_ * height_ / kMeshCells);
+  const float pitch = std::sqrt(width_ * height_ / config::kBinMeshCells);
   columns_ = std::max(static_cast<int>(std::round(width_ / pitch)), kMeshMinCuts);
   rows_ = std::max(static_cast<int>(std::round(height_ / pitch)), kMeshMinCuts);
   column_edges_.resize(columns_ + 1);
@@ -137,9 +137,11 @@ DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float gra
   cell_matrices_.resize(static_cast<size_t>(columns_) * rows_);
 
   const float d = static_cast<float>(kShadowDownscale);
+  const config::ShadowSpec& wide = config::kDragShadowWide;
+  const config::ShadowSpec& tight = config::kDragShadowTight;
   const ShadowLayer layers[] = {
-      {15.0f * scale / d, 0.34f, 11.0f * scale / d},
-      {3.5f * scale / d, 0.16f, 2.5f * scale / d},
+      {wide.sigma * scale / d, wide.alpha, wide.offset * scale / d},
+      {tight.sigma * scale / d, tight.alpha, tight.offset * scale / d},
   };
   const int box_w = std::max(static_cast<int>(std::round(thumbnail.width() / d)), 1);
   const int box_h = std::max(static_cast<int>(std::round(thumbnail.height() / d)), 1);
@@ -150,13 +152,13 @@ DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float gra
   const float ky = static_cast<float>(thumbnail.height()) / box_h;
   shadow_local_ = D2D_MATRIX_3X2_F{kx, 0.0f, 0.0f, ky, kMargin - pad * kx, kMargin - pad * ky};
 
-  const int badge_size = static_cast<int>(std::round(theme::kDropBadgeSize * scale));
+  const int badge_size = static_cast<int>(std::round(config::kDropBadgeSize * scale));
   const int badge_pad = static_cast<int>(std::ceil(7.0f * scale));
-  const Image badge = RenderPlusBadge(badge_size, badge_pad, scale, theme::kDropBlue);
+  const Image badge = RenderPlusBadge(badge_size, badge_pad, scale, config::kDropBlue);
   badge_surface_ = compositor_.CreateSurface(badge, false);
   badge_half_ = badge.width() * 0.5f;
   corner_inset_ = kMargin + radius * 0.22f;
-  neck_ = theme::kBinNeck * scale;
+  neck_ = config::kBinNeck * scale;
 }
 
 DragSprite::~DragSprite() {
@@ -250,7 +252,7 @@ void DragSprite::ComputeMesh(const D2D_MATRIX_3X2_F& rigid, const SpritePose& po
     const Vec point = Transform(rigid, x, y);
     const Vec from_mouth = point - mouth;
     const float along = (-Dot(from_mouth, axis) - nearest) / depth;
-    const float progress = std::clamp((1.0f + kFarthestLag) * pull - kFarthestLag * along, 0.0f, 1.0f);
+    const float progress = std::clamp((1.0f + config::kBinStretch) * pull - config::kBinStretch * along, 0.0f, 1.0f);
     // Slow to come away from the card, quickening into the mouth.
     const float eased = progress * std::sqrt(progress);
     const float offset = Dot(from_mouth, across) / half_span * neck_ * 0.5f;

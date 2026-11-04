@@ -1,5 +1,7 @@
 #include "screen.h"
 
+#include "config/core.h"
+
 #include <dwmapi.h>
 
 #include <algorithm>
@@ -8,11 +10,6 @@
 namespace sstk {
 
 namespace {
-
-constexpr int kMinimumWindowExtent = 48;
-constexpr int kTaskbarHiddenThickness = 4;
-constexpr int kSameRectTolerance = 2;
-constexpr double kMinimumVisibleFraction = 0.5;
 
 struct WindowEntry {
   HWND handle;
@@ -108,7 +105,7 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
 
   RECT clipped;
   if (!IntersectRect(&clipped, &frame, &state.bounds)) return TRUE;
-  if (clipped.right - clipped.left < kMinimumWindowExtent || clipped.bottom - clipped.top < kMinimumWindowExtent) {
+  if (clipped.right - clipped.left < config::kMinimumWindowExtent || clipped.bottom - clipped.top < config::kMinimumWindowExtent) {
     return TRUE;
   }
 
@@ -158,14 +155,14 @@ const WindowEntry* FindTopApp(const std::vector<WindowEntry>& windows) {
   }
   // The desktop or another monitor has focus: fall back to the frontmost window that is actually seen.
   for (const WindowEntry& entry : windows) {
-    if (entry.visible_fraction >= kMinimumVisibleFraction) return &entry;
+    if (entry.visible_fraction >= config::kMinimumVisibleFraction) return &entry;
   }
   return nullptr;
 }
 
 bool NearlyEqual(const RECT& a, const RECT& b) {
-  return std::abs(a.left - b.left) <= kSameRectTolerance && std::abs(a.top - b.top) <= kSameRectTolerance &&
-         std::abs(a.right - b.right) <= kSameRectTolerance && std::abs(a.bottom - b.bottom) <= kSameRectTolerance;
+  return std::abs(a.left - b.left) <= config::kSameRectTolerance && std::abs(a.top - b.top) <= config::kSameRectTolerance &&
+         std::abs(a.right - b.right) <= config::kSameRectTolerance && std::abs(a.bottom - b.bottom) <= config::kSameRectTolerance;
 }
 
 RECT ToMonitorSpace(const RECT& rect, const RECT& bounds) {
@@ -176,7 +173,7 @@ bool TaskbarIsShown(const TaskbarState& taskbar) {
   if (!taskbar.found || taskbar.covered) return false;
   const int width = taskbar.rect.right - taskbar.rect.left;
   const int height = taskbar.rect.bottom - taskbar.rect.top;
-  return std::min(width, height) > kTaskbarHiddenThickness;
+  return std::min(width, height) > config::kTaskbarHiddenThickness;
 }
 
 TaskbarInsets InsetsFrom(const TaskbarState& taskbar, const RECT& bounds) {
@@ -242,7 +239,7 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
 
   std::vector<const WindowEntry*> zones;
   for (const WindowEntry& entry : state.windows) {
-    if (entry.arranged && entry.visible_fraction >= kMinimumVisibleFraction) zones.push_back(&entry);
+    if (entry.arranged && entry.visible_fraction >= config::kMinimumVisibleFraction) zones.push_back(&entry);
   }
 
   const WindowEntry* app = FindTopApp(state.windows);
@@ -250,7 +247,7 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
     // A window floating above a snapped layout is still offered, ahead of the zones it sits on.
     if (app != nullptr && !app->arranged) add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
     std::sort(zones.begin(), zones.end(), [](const WindowEntry* a, const WindowEntry* b) {
-      if (std::abs(a->rect.top - b->rect.top) > kSameRectTolerance) return a->rect.top < b->rect.top;
+      if (std::abs(a->rect.top - b->rect.top) > config::kSameRectTolerance) return a->rect.top < b->rect.top;
       return a->rect.left < b->rect.left;
     });
     for (const WindowEntry* zone : zones) add_region(RegionKind::kZone, ToMonitorSpace(zone->rect, info.bounds));

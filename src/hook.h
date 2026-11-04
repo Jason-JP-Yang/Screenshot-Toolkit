@@ -1,4 +1,5 @@
-// Low-level hooks: PrintScreen and Win+Shift+S always, and while a thumbnail is on screen the chords that act on it.
+// Low-level hooks: the capture keys always, and while a thumbnail is on screen the chords that act on it.
+// Which keys and buttons those are is set in config/hooks.h.
 #pragma once
 
 #include "platform.h"
@@ -7,8 +8,8 @@ namespace sstk {
 
 enum class HookMode {
   kIdle,      // Only the capture keys.
-  kSelector,  // Win+Shift with Left, Right, or a side button steps the region selector.
-  kDrag,      // Escape and the right button cancel the drag, without reaching the application under the pointer.
+  kSelector,  // The selector chords step the region selector.
+  kDrag,      // The cancel key and button call off the drag, without reaching the application under the pointer.
 };
 
 // Any mode but idle also hooks the mouse, which is why it is not left on: that hook wakes this process on every move.

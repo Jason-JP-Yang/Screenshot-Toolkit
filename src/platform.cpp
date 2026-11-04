@@ -1,6 +1,6 @@
 #include "platform.h"
 
-#include "config.h"
+#include "config/core.h"
 
 #include <cstdarg>
 #include <cstdio>

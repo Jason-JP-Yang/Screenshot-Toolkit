@@ -1,6 +1,9 @@
 #include "card.h"
 
-#include "theme.h"
+#include "config/animation.h"
+#include "config/colors.h"
+#include "config/core.h"
+#include "config/layout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,13 +11,6 @@
 namespace sstk {
 
 namespace {
-
-constexpr float kBehindShadowAlpha = 0.5f;
-constexpr double kFlightDecorationDelay = 0.22;
-constexpr double kBaseFadeDelay = 0.13;
-constexpr double kCrispFlightDelay = 0.26;
-constexpr double kCrispMorphDelay = 0.02;
-constexpr double kFullReleaseDelay = 0.45;
 
 void SetAllRadii(void* object, float value, IDCompositionAnimation* animation) {
   auto* clip = static_cast<IDCompositionRectangleClip*>(object);
@@ -44,23 +40,25 @@ void SetAllRadii(void* object, float value, IDCompositionAnimation* animation) {
 SIZE ThumbnailSize(const RECT& region, float scale) {
   const float region_w = static_cast<float>(region.right - region.left);
   const float region_h = static_cast<float>(region.bottom - region.top);
-  const float fit = std::min({1.0f, theme::kCardMaxWidth * scale / region_w, theme::kCardMaxHeight * scale / region_h});
+  const float fit = std::min({1.0f, config::kCardMaxWidth * scale / region_w, config::kCardMaxHeight * scale / region_h});
   return SIZE{std::max(static_cast<LONG>(std::round(region_w * fit)), 1L),
               std::max(static_cast<LONG>(std::round(region_h * fit)), 1L)};
 }
 
 CardShadow BuildCardShadow(Compositor& compositor, float scale) {
   CardShadow result;
-  const float largest_offset = std::max(theme::kShadowAmbientOffset, theme::kShadowContactOffset) * scale;
+  const config::ShadowSpec& ambient = config::kCardShadowAmbient;
+  const config::ShadowSpec& contact = config::kCardShadowContact;
+  const float largest_offset = std::max(ambient.offset, contact.offset) * scale;
   // Past this distance from a corner the shadow no longer varies along the edge.
-  const int reach = static_cast<int>(std::ceil(theme::kCardRadius * scale + largest_offset));
-  const int outer = static_cast<int>(std::ceil(theme::kShadowAmbientSigma * 3.0f * scale + largest_offset));
+  const int reach = static_cast<int>(std::ceil(config::kCardRadius * scale + largest_offset));
+  const int outer = static_cast<int>(std::ceil(ambient.sigma * 3.0f * scale + largest_offset));
   const ShadowLayer layers[] = {
-      {theme::kShadowAmbientSigma * scale, theme::kShadowAmbientAlpha, theme::kShadowAmbientOffset * scale},
-      {theme::kShadowContactSigma * scale, theme::kShadowContactAlpha, theme::kShadowContactOffset * scale},
+      {ambient.sigma * scale, ambient.alpha, ambient.offset * scale},
+      {contact.sigma * scale, contact.alpha, contact.offset * scale},
   };
   const int box = reach * 2 + 1;
-  Image tile = RenderShadow(box, box, theme::kCardRadius * scale, static_cast<float>(outer), layers, ARRAYSIZE(layers));
+  Image tile = RenderShadow(box, box, config::kCardRadius * scale, static_cast<float>(outer), layers, ARRAYSIZE(layers));
   if (!tile) return result;
 
   const int corner = outer + reach;
@@ -85,7 +83,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
            float scale, ComPtr<IDCompositionSurface> frost, const CardShadow& shadow, IDCompositionClip* shadow_clip,
            double created_at)
     : compositor_(compositor), parent_(parent), shot_(std::move(shot)), regions_(screen.regions), insets_(screen.insets),
-      scale_(scale), border_(std::max(std::round(theme::kCardBorder * scale), 1.0f)), frost_(std::move(frost)) {
+      scale_(scale), border_(std::max(std::round(config::kCardBorder * scale), 1.0f)), frost_(std::move(frost)) {
   const Image& frame = *shot_->frame;
 
   root_ = compositor_.CreateVisual();
@@ -100,7 +98,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
 
   // The border is a solid layer showing through the gap between two nested rounded clips,
   // which keeps it the same width at every size the card passes through.
-  const uint32_t ring_color = static_cast<uint32_t>(theme::kCardBorderAlpha * 255.0f) << 24 | 0xFFFFFF;
+  const uint32_t ring_color = static_cast<uint32_t>(config::kCardBorderAlpha * 255.0f) << 24 | config::kCardBorderColor;
   ring_ = compositor_.CreateSolidVisual(ring_color, static_cast<float>(frame.width()), static_cast<float>(frame.height()));
   ring_effect_ = compositor_.CreateEffectGroup();
   ring_->SetEffect(ring_effect_.Get());
@@ -148,7 +146,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
   root_->AddVisual(frame_.Get(), FALSE, nullptr);
 
   parent_->AddVisual(root_.Get(), FALSE, nullptr);
-  expiry = created_at + theme::kFlightLanding + theme::kDwellSeconds;
+  expiry = created_at + config::kFlightLanding + config::kDwellSeconds;
   exit_end_time_ = 1e300;
 }
 
@@ -301,10 +299,10 @@ void Card::BuildDerivedAssets(const TimeBase& now) {
   BuildCaches(*shot_->frame, true);
   if (base_surface_) {
     base_alpha_.Snap(0.0f);
-    base_alpha_.To(device(), now, 1.0f, theme::kQuickFade, kBaseFadeDelay);
+    base_alpha_.To(device(), now, 1.0f, config::kQuickFade, config::kBaseFadeDelay);
   }
-  full_release_at_ = now.seconds + kFullReleaseDelay;
-  ShowCrisp(selected_, now, kCrispFlightDelay, theme::kFade);
+  full_release_at_ = now.seconds + config::kFullReleaseDelay;
+  ShowCrisp(selected_, now, config::kCrispFlightDelay, config::kFade);
 }
 
 void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const TimeBase& now, double delay, bool in_flight) {
@@ -321,7 +319,7 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
   top_.To(dc, now, rect.top, spec, delay);
   right_.To(dc, now, rect.right, spec, delay);
   bottom_.To(dc, now, rect.bottom, spec, delay);
-  radius_.To(dc, now, theme::kCardRadius * scale_, spec, delay);
+  radius_.To(dc, now, config::kCardRadius * scale_, spec, delay);
   plane_x_.To(dc, now, px, spec, delay);
   plane_y_.To(dc, now, py, spec, delay);
   plane_sx_.To(dc, now, sx, spec, delay);
@@ -329,15 +327,15 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
   shadow_edge_w_.To(dc, now, std::max(width - shadow_reach_ * 2.0f, 0.0f), spec, delay);
   shadow_edge_h_.To(dc, now, std::max(height - shadow_reach_ * 2.0f, 0.0f), spec, delay);
 
-  const bool shown = depth <= theme::kDeckVisibleBehind;
-  const double decoration_delay = in_flight ? kFlightDecorationDelay : 0.0;
-  ring_alpha_.To(dc, now, 1.0f, theme::kFade, decoration_delay);
+  const bool shown = depth <= config::kDeckVisibleBehind;
+  const double decoration_delay = in_flight ? config::kFlightDecorationDelay : 0.0;
+  ring_alpha_.To(dc, now, 1.0f, config::kFade, decoration_delay);
   // A card narrower than two shadow corners casts a proportionally weaker shadow, and the corners overlap.
   const float slim = std::clamp(std::min(width, height) / (shadow_reach_ * 2.0f), 0.5f, 1.0f);
-  const float shadow_target = !shown ? 0.0f : (depth == 0 ? 1.0f : kBehindShadowAlpha) * slim;
-  shadow_alpha_.To(dc, now, shadow_target, theme::kFade, decoration_delay);
-  resting_opacity_ = shown ? 1.0f - depth * theme::kDeckOpacityPerLevel : 0.0f;
-  opacity_.To(dc, now, resting_opacity_, theme::kFade);
+  const float shadow_target = !shown ? 0.0f : (depth == 0 ? 1.0f : config::kBehindShadowAlpha) * slim;
+  shadow_alpha_.To(dc, now, shadow_target, config::kFade, decoration_delay);
+  resting_opacity_ = shown ? 1.0f - depth * config::kDeckOpacityPerLevel : 0.0f;
+  opacity_.To(dc, now, resting_opacity_, config::kFade);
 }
 
 void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec) {
@@ -374,24 +372,24 @@ bool Card::CanSelect(int index) const {
 
 void Card::Select(int index, const TimeBase& now) {
   selected_ = index;
-  ShowCrisp(index, now, kCrispMorphDelay, theme::kMorphFade);
+  ShowCrisp(index, now, config::kCrispMorphDelay, config::kMorphFade);
 }
 
 void Card::SetSwipe(float offset, float progress) {
   slide_.Snap(offset);
-  opacity_.Snap(resting_opacity_ + (theme::kSwipeEndOpacity - 1.0f) * progress);
+  opacity_.Snap(resting_opacity_ + (config::kSwipeEndOpacity - 1.0f) * progress);
 }
 
 void Card::SnapBack(const TimeBase& now, float velocity) {
-  slide_.To(device(), now, 0.0f, theme::kSnapBack, 0.0, velocity);
-  opacity_.To(device(), now, resting_opacity_, theme::kFade);
+  slide_.To(device(), now, 0.0f, config::kSnapBack, 0.0, velocity);
+  opacity_.To(device(), now, resting_opacity_, config::kFade);
 }
 
 void Card::SlideOut(const TimeBase& now, float velocity) {
   // Leaving through the screen edge needs no fade of its own, only a slight loss of presence.
-  const float distance = -(right_.target() + theme::kExitOvershoot * scale_);
-  slide_.To(device(), now, distance, theme::kExit, 0.0, velocity);
-  opacity_.To(device(), now, std::min(resting_opacity_, theme::kExitOpacity), theme::kExit);
+  const float distance = -(right_.target() + config::kExitOvershoot * scale_);
+  slide_.To(device(), now, distance, config::kExit, 0.0, velocity);
+  opacity_.To(device(), now, std::min(resting_opacity_, config::kExitOpacity), config::kExit);
   exit_end_time_ = std::max(slide_.end_time(), opacity_.end_time());
 }
 

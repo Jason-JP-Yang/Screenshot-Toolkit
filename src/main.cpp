@@ -6,6 +6,7 @@
 //   --quit           Asks a running instance to exit.
 #include "capture.h"
 #include "compositor.h"
+#include "config/core.h"
 #include "dragdrop.h"
 #include "hook.h"
 #include "install.h"
@@ -27,9 +28,6 @@ namespace {
 constexpr wchar_t kControllerClass[] = L"ScreenshotToolkit.Controller";
 constexpr UINT_PTR kTrimTimer = 2;
 constexpr UINT_PTR kClipboardTimer = 3;
-constexpr UINT kTrimDelayMs = 1500;
-constexpr UINT kClipboardRetryMs = 20;
-constexpr int kClipboardMaxRetries = 25;
 
 // Everything owned by the UI thread.
 struct App {
@@ -46,7 +44,7 @@ struct App {
 
 App* g_app = nullptr;
 
-void ScheduleTrim(App& app) { SetTimer(app.controller, kTrimTimer, kTrimDelayMs, nullptr); }
+void ScheduleTrim(App& app) { SetTimer(app.controller, kTrimTimer, config::kTrimDelayMs, nullptr); }
 
 // Returns every page this process is not actively using. A press after this pays only soft page
 // faults, measured at a few milliseconds, because the pages remain cached in RAM.
@@ -83,11 +81,11 @@ void InstallPendingClipboard(App& app) {
   }
   // Another program may hold the clipboard open for a moment, so this retries on a timer instead of blocking.
   if (!OpenClipboard(app.controller)) {
-    if (++app.clipboard_attempts >= kClipboardMaxRetries) {
+    if (++app.clipboard_attempts >= config::kClipboardMaxRetries) {
       Trace("clipboard stayed busy, giving up");
       DropPendingClipboard(app);
     } else {
-      SetTimer(app.controller, kClipboardTimer, kClipboardRetryMs, nullptr);
+      SetTimer(app.controller, kClipboardTimer, config::kClipboardRetryMs, nullptr);
     }
     return;
   }
@@ -108,12 +106,12 @@ void ClearInstalledClipboard(App& app) {
     return;
   }
   if (!OpenClipboard(app.controller)) {
-    if (++app.clipboard_attempts >= kClipboardMaxRetries) {
+    if (++app.clipboard_attempts >= config::kClipboardMaxRetries) {
       Trace("clipboard stayed busy, giving up on clearing it");
       app.clearing_clipboard = false;
     } else {
       app.clearing_clipboard = true;
-      SetTimer(app.controller, kClipboardTimer, kClipboardRetryMs, nullptr);
+      SetTimer(app.controller, kClipboardTimer, config::kClipboardRetryMs, nullptr);
     }
     return;
   }

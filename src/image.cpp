@@ -1,5 +1,7 @@
 #include "image.h"
 
+#include "config/layout.h"
+
 #include <emmintrin.h>
 
 #include <algorithm>
@@ -58,17 +60,22 @@ float SegmentDistance(float px, float py, float ax, float ay, float bx, float by
   return std::sqrt(dx * dx + dy * dy);
 }
 
-// A white shape on clear pixels. The callback gets icon units and returns coverage, given how many pixels one unit is.
+// Writes one premultiplied pixel of a 0xRRGGBB color at some coverage.
+void WriteCoverage(uint8_t* out, uint32_t color, float coverage) {
+  out[0] = ToByte((color & 0xFF) * coverage);
+  out[1] = ToByte(((color >> 8) & 0xFF) * coverage);
+  out[2] = ToByte(((color >> 16) & 0xFF) * coverage);
+  out[3] = ToByte(coverage * 255.0f);
+}
+
+// A shape on clear pixels. The callback gets icon units and returns coverage, given how many pixels one unit is.
 template <typename Shape>
-Image RenderIcon(int size, float scale, Shape shape) {
+Image RenderIcon(int size, float scale, uint32_t color, Shape shape) {
   Image image = Image::Allocate(size, size);
   if (!image) return image;
   uint8_t* out = image.data();
   for (int y = 0; y < size; ++y) {
-    for (int x = 0; x < size; ++x, out += 4) {
-      const uint8_t value = ToByte(shape((x + 0.5f) / scale, (y + 0.5f) / scale) * 255.0f);
-      out[0] = out[1] = out[2] = out[3] = value;
-    }
+    for (int x = 0; x < size; ++x, out += 4) WriteCoverage(out, color, shape((x + 0.5f) / scale, (y + 0.5f) / scale));
   }
   return image;
 }
@@ -399,7 +406,9 @@ Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int heig
   return strip;
 }
 
-Image RenderSprite(const Image& thumbnail, float radius, float border, int margin) {
+Image RenderSprite(const Image& thumbnail, float radius, float border, uint32_t border_color, int margin) {
+  const float edge[3] = {static_cast<float>(border_color & 0xFF), static_cast<float>((border_color >> 8) & 0xFF),
+                         static_cast<float>((border_color >> 16) & 0xFF)};
   const int width = thumbnail.width() + margin * 2;
   const int height = thumbnail.height() + margin * 2;
   Image sprite = Image::Allocate(width, height);
@@ -423,7 +432,7 @@ Image RenderSprite(const Image& thumbnail, float radius, float border, int margi
       }
       const float inner = Coverage(RoundedBoxDistance(px, py, cx, cy, half_w - border, half_h - border, std::max(radius - border, 0.0f)));
       const uint8_t* source = row + static_cast<ptrdiff_t>(std::clamp(x - margin, 0, thumbnail.width() - 1)) * 4;
-      for (int c = 0; c < 3; ++c) out[c] = ToByte((255.0f + (source[c] - 255.0f) * inner) * outer);
+      for (int c = 0; c < 3; ++c) out[c] = ToByte((edge[c] + (source[c] - edge[c]) * inner) * outer);
       out[3] = ToByte(outer * 255.0f);
     }
   }
@@ -466,8 +475,8 @@ Image RenderPlusBadge(int size, int pad, float scale, uint32_t color) {
   return badge;
 }
 
-Image RenderBinCan(int size, float scale) {
-  return RenderIcon(size, scale, [scale](float x, float y) {
+Image RenderBinCan(int size, float scale, uint32_t color) {
+  return RenderIcon(size, scale, color, [scale](float x, float y) {
     // A solid body narrowing toward its base, with two slots cut out.
     const float taper = 1.0f + 0.15f * std::clamp((y - 9.6f) / 11.8f, 0.0f, 1.0f);
     const float body = RoundedBoxDistance(12.0f + (x - 12.0f) * taper, y, 12.0f, 15.5f, 6.7f, 5.9f, 2.0f);
@@ -476,24 +485,23 @@ Image RenderBinCan(int size, float scale) {
   });
 }
 
-Image RenderBinLid(int size, float scale) {
-  return RenderIcon(size, scale, [scale](float x, float y) {
+Image RenderBinLid(int size, float scale, uint32_t color) {
+  return RenderIcon(size, scale, color, [scale](float x, float y) {
     const float bar = RoundedBoxDistance(x, y, 12.0f, 7.3f, 7.9f, 1.25f, 1.25f);
     const float grip = RoundedBoxDistance(x, y, 12.0f, 5.0f, 2.8f, 1.7f, 1.1f);
     return Coverage(std::min(bar, grip) * scale);
   });
 }
 
-Image RenderLabel(const wchar_t* text, int font_pixels) {
+Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) {
   // Drawn large and reduced, which gives even, unhinted edges at any display scale.
   constexpr int kOversample = 6;
   Image label;
   HDC dc = CreateCompatibleDC(nullptr);
   if (dc == nullptr) return label;
-  // Windows 11's display cut is tighter and cleaner, and older systems have only the static face.
   HFONT font = nullptr;
   HGDIOBJ previous_font = nullptr;
-  for (const wchar_t* face : {L"Segoe UI Variable Display Semib", L"Segoe UI Semibold"}) {
+  for (const wchar_t* face : config::kLabelFaces) {
     font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                        CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
     previous_font = SelectObject(dc, font);
@@ -542,9 +550,7 @@ Image RenderLabel(const wchar_t* text, int font_pixels) {
             const uint8_t* row = source + static_cast<ptrdiff_t>(y * kOversample + sy) * source_stride + static_cast<ptrdiff_t>(x * kOversample) * 4;
             for (int sx = 0; sx < kOversample; ++sx) sum += row[sx * 4];
           }
-          // Light text on a saturated body reads thin without a touch of weight.
-          const float coverage = std::pow(sum / (255.0f * kOversample * kOversample), 0.92f);
-          out[0] = out[1] = out[2] = out[3] = ToByte(coverage * 255.0f);
+          WriteCoverage(out, color, std::pow(sum / (255.0f * kOversample * kOversample), config::kLabelWeight));
         }
       }
     }

@@ -1,6 +1,9 @@
 #include "capsule.h"
 
-#include "theme.h"
+#include "config/animation.h"
+#include "config/colors.h"
+#include "config/core.h"
+#include "config/layout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,7 +14,6 @@ namespace sstk {
 namespace {
 
 constexpr int kShadowDownscale = 4;
-constexpr int kSameAreaTolerance = 2;
 
 uint32_t Argb(uint32_t rgb, float alpha) { return static_cast<uint32_t>(alpha * 255.0f + 0.5f) << 24 | rgb; }
 
@@ -56,7 +58,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   SetClipRadii(frame_clip_.Get(), h * 0.5f);
   root_->AddVisual(frame_.Get(), FALSE, nullptr);
 
-  ring_ = compositor_.CreateSolidVisual(Argb(0xFFFFFF, theme::kCapsuleHairlineAlpha), wide, h);
+  ring_ = compositor_.CreateSolidVisual(Argb(config::kCapsuleHairlineColor, config::kCapsuleHairlineAlpha), wide, h);
   frame_->AddVisual(ring_.Get(), FALSE, nullptr);
 
   inner_ = compositor_.CreateVisual();
@@ -69,7 +71,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   SetClipRadii(inner_clip_.Get(), h * 0.5f - 1.0f);
   frame_->AddVisual(inner_.Get(), FALSE, nullptr);
 
-  fallback_fill_ = compositor_.CreateSolidVisual(Argb(theme::kGlassTint, 1.0f), wide, h);
+  fallback_fill_ = compositor_.CreateSolidVisual(Argb(config::kGlassTint, 1.0f), wide, h);
   inner_->AddVisual(fallback_fill_.Get(), FALSE, nullptr);
   frost_ = compositor_.CreateVisual();
   inner_->AddVisual(frost_.Get(), FALSE, nullptr);
@@ -83,7 +85,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   veil_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
   veil_effect_ = compositor_.CreateEffectGroup();
   veil_->SetEffect(veil_effect_.Get());
-  veil_fill_ = compositor_.CreateSolidVisual(Argb(0xFFFFFF, theme::kHoverVeilAlpha), wide, h);
+  veil_fill_ = compositor_.CreateSolidVisual(Argb(config::kHoverVeilColor, config::kHoverVeilAlpha), wide, h);
   veil_->AddVisual(veil_fill_.Get(), FALSE, nullptr);
   inner_->AddVisual(veil_.Get(), FALSE, nullptr);
 
@@ -92,12 +94,12 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   pill_clip_ = compositor_.CreateClip();
   pill_->SetClip(pill_clip_.Get());
   pill_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
-  const float pad = theme::kCapsulePadding * scale_;
-  const float segment_h = theme::kSegmentHeight * scale_;
+  const float pad = config::kCapsulePadding * scale_;
+  const float segment_h = config::kSegmentHeight * scale_;
   pill_clip_->SetTop(pad);
   pill_clip_->SetBottom(pad + segment_h);
   SetClipRadii(pill_clip_.Get(), segment_h * 0.5f);
-  pill_fill_ = compositor_.CreateSolidVisual(Argb(theme::kPorcelain, 1.0f), wide, h);
+  pill_fill_ = compositor_.CreateSolidVisual(Argb(config::kPorcelain, 1.0f), wide, h);
   pill_->AddVisual(pill_fill_.Get(), FALSE, nullptr);
   dark_layer_ = compositor_.CreateVisual();
   pill_->AddVisual(dark_layer_.Get(), FALSE, nullptr);
@@ -119,16 +121,16 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   shadow_sx_.Snap(1.0f);
 }
 
-float Capsule::height() const { return std::round((theme::kSegmentHeight + theme::kCapsulePadding * 2.0f) * scale_); }
+float Capsule::height() const { return std::round((config::kSegmentHeight + config::kCapsulePadding * 2.0f) * scale_); }
 
 float Capsule::WidthFor(int count) const {
-  return std::round((theme::kCapsulePadding * 2.0f + theme::kSegmentWidth * count) * scale_);
+  return std::round((config::kCapsulePadding * 2.0f + config::kSegmentWidth * count) * scale_);
 }
 
-float Capsule::full_width() const { return WidthFor(theme::kFrostSegments); }
+float Capsule::full_width() const { return WidthFor(config::kFrostSegments); }
 
 float Capsule::SegmentLeft(int index) const {
-  return std::round((theme::kCapsulePadding + theme::kSegmentWidth * index) * scale_);
+  return std::round((config::kCapsulePadding + config::kSegmentWidth * index) * scale_);
 }
 
 void Capsule::PlacePill(int index, const TimeBase& now, bool immediate) {
@@ -142,8 +144,8 @@ void Capsule::PlacePill(int index, const TimeBase& now, bool immediate) {
   // The leading edge springs ahead of the trailing one, giving the pill a soft, liquid stretch.
   const bool moving_right = right > pill_right_.target();
   IDCompositionDevice* dc = compositor_.device();
-  pill_left_.To(dc, now, left, moving_right ? theme::kPillTrailing : theme::kPillLeading);
-  pill_right_.To(dc, now, right, moving_right ? theme::kPillLeading : theme::kPillTrailing);
+  pill_left_.To(dc, now, left, moving_right ? config::kPillTrailing : config::kPillLeading);
+  pill_right_.To(dc, now, right, moving_right ? config::kPillLeading : config::kPillTrailing);
 }
 
 void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& insets, int selected, IDCompositionSurface* frost,
@@ -166,8 +168,8 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
     UINT frost_w = 1;
     UINT frost_h = 1;
     // The frost bitmap spans the full capsule height and the widest capsule at a fixed downscale.
-    frost_w = static_cast<UINT>(full_width() / theme::kFrostDownscale);
-    frost_h = static_cast<UINT>(height() / theme::kFrostDownscale);
+    frost_w = static_cast<UINT>(full_width() / config::kFrostDownscale);
+    frost_h = static_cast<UINT>(height() / config::kFrostDownscale);
     const D2D_MATRIX_3X2_F stretch{full_width() / std::max(frost_w, 1u), 0.0f, 0.0f, height() / std::max(frost_h, 1u), 0.0f, 0.0f};
     frost_->SetTransform(stretch);
   }
@@ -186,17 +188,17 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   for (const Region& region : regions) {
     // A maximized window merges with the "without taskbar" option, so this goes by area rather than by kind.
     const RECT& rect = region.rect;
-    const bool without_taskbar = std::abs(rect.left - usable.left) <= kSameAreaTolerance &&
-                                 std::abs(rect.top - usable.top) <= kSameAreaTolerance &&
-                                 std::abs(rect.right - usable.right) <= kSameAreaTolerance &&
-                                 std::abs(rect.bottom - usable.bottom) <= kSameAreaTolerance;
+    const bool without_taskbar = std::abs(rect.left - usable.left) <= config::kSameRectTolerance &&
+                                 std::abs(rect.top - usable.top) <= config::kSameRectTolerance &&
+                                 std::abs(rect.right - usable.right) <= config::kSameRectTolerance &&
+                                 std::abs(rect.bottom - usable.bottom) <= config::kSameRectTolerance;
     glyphs.push_back({mw / mh, rect.left / mw, rect.top / mh, rect.right / mw, rect.bottom / mh,
                       without_taskbar ? taskbar_edge : GlyphGap::kNone});
   }
-  const int pitch = static_cast<int>(std::round(theme::kSegmentWidth * scale_));
-  const int strip_height = static_cast<int>(std::round(theme::kSegmentHeight * scale_));
-  Image light = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnGlass), theme::kGlyphOnGlassAlpha);
-  Image dark = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(theme::kGlyphOnPorcelain), 1.0f);
+  const int pitch = static_cast<int>(std::round(config::kSegmentWidth * scale_));
+  const int strip_height = static_cast<int>(std::round(config::kSegmentHeight * scale_));
+  Image light = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(config::kGlyphOnGlass), config::kGlyphOnGlassAlpha);
+  Image dark = RenderGlyphStrip(glyphs, pitch, strip_height, scale_, RgbToBgr(config::kGlyphOnPorcelain), 1.0f);
 
   auto layer = std::make_unique<GlyphLayer>();
   layer->light_surface = compositor_.CreateSurface(light, false);
@@ -208,19 +210,19 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   layer->dark->SetContent(layer->dark_surface.Get());
   layer->light->SetEffect(layer->effect.Get());
   layer->dark->SetEffect(layer->effect.Get());
-  const float pad = std::round(theme::kCapsulePadding * scale_);
+  const float pad = std::round(config::kCapsulePadding * scale_);
   layer->light->SetOffsetX(pad);
   layer->light->SetOffsetY(pad);
   layer->dark->SetOffsetX(pad);
   layer->dark->SetOffsetY(pad);
   layer->alpha.Bind(layer->effect.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
   layer->alpha.Snap(was_visible ? 0.0f : 1.0f);
-  if (was_visible) layer->alpha.To(dc, now, 1.0f, theme::kFade, 0.04);
+  if (was_visible) layer->alpha.To(dc, now, 1.0f, config::kFade, 0.04);
   light_layer_->AddVisual(layer->light.Get(), FALSE, nullptr);
   dark_layer_->AddVisual(layer->dark.Get(), FALSE, nullptr);
   for (auto& previous : glyph_layers_) {
     if (previous->retire_at == 0.0) {
-      previous->alpha.To(dc, now, 0.0f, theme::kQuickFade);
+      previous->alpha.To(dc, now, 0.0f, config::kQuickFade);
       previous->retire_at = previous->alpha.end_time();
     }
   }
@@ -230,7 +232,8 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   const float width = WidthFor(count);
   const float h = height();
   const float d = static_cast<float>(kShadowDownscale);
-  const ShadowLayer layers[] = {{9.0f * scale_ / d, 0.34f, 4.0f * scale_ / d}};
+  const config::ShadowSpec& cast = config::kCapsuleShadow;
+  const ShadowLayer layers[] = {{cast.sigma * scale_ / d, cast.alpha, cast.offset * scale_ / d}};
   const float shadow_pad = std::ceil(28.0f * scale_ / d);
   Image shadow = RenderShadow(std::max(static_cast<int>(width / d), 1), std::max(static_cast<int>(h / d), 1), h * 0.5f / d, shadow_pad, layers, 1);
   shadow_surface_ = compositor_.CreateSurface(shadow, false);
@@ -243,28 +246,28 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
 
   const float shadow_scale = (width + shadow_pad_ * 2.0f) / shadow_surface_width_;
   if (was_visible) {
-    width_.To(dc, now, width, theme::kReflow);
-    shadow_sx_.To(dc, now, shadow_scale, theme::kReflow);
+    width_.To(dc, now, width, config::kReflow);
+    shadow_sx_.To(dc, now, shadow_scale, config::kReflow);
     PlacePill(selected, now, false);
-    opacity_.To(dc, now, 1.0f, theme::kFade);
+    opacity_.To(dc, now, 1.0f, config::kFade);
   } else if (opacity_.ValueAt(now.seconds) > 0.02f) {
     // Called back while still leaving: it turns around from where it is.
     width_.Snap(width);
     shadow_sx_.Snap(shadow_scale);
     PlacePill(selected, now, true);
-    x_.To(dc, now, target_x_, theme::kReflow);
-    opacity_.To(dc, now, 1.0f, theme::kFade);
-    y_.To(dc, now, target_y_, theme::kCapsuleEnter);
+    x_.To(dc, now, target_x_, config::kReflow);
+    opacity_.To(dc, now, 1.0f, config::kFade);
+    y_.To(dc, now, target_y_, config::kCapsuleEnter);
   } else {
     width_.Snap(width);
     shadow_sx_.Snap(shadow_scale);
     PlacePill(selected, now, true);
     // The capsule rises into place just after the card starts flying.
     x_.Snap(target_x_);
-    y_.Snap(target_y_ + theme::kCapsuleRise * scale_);
+    y_.Snap(target_y_ + config::kCapsuleRise * scale_);
     opacity_.Snap(0.0f);
-    opacity_.To(dc, now, 1.0f, theme::kFade, theme::kCapsuleEnterDelay);
-    y_.To(dc, now, target_y_, theme::kCapsuleEnter, theme::kCapsuleEnterDelay);
+    opacity_.To(dc, now, 1.0f, config::kFade, config::kCapsuleEnterDelay);
+    y_.To(dc, now, target_y_, config::kCapsuleEnter, config::kCapsuleEnterDelay);
   }
 }
 
@@ -280,8 +283,8 @@ void Capsule::MoveTo(float x, float y, const TimeBase& now) {
   }
   // Out of sight it only remembers: the next showing starts from these.
   if (!visible_) return;
-  x_.To(dc, now, x, theme::kReflow);
-  y_.To(dc, now, y, theme::kReflow);
+  x_.To(dc, now, x, config::kReflow);
+  y_.To(dc, now, y, config::kReflow);
 }
 
 void Capsule::Select(int index, const TimeBase& now) {
@@ -296,16 +299,16 @@ void Capsule::SetHover(int index, const TimeBase& now) {
   hover_ = index;
   IDCompositionDevice* dc = compositor_.device();
   if (index >= 0) {
-    const float pad = theme::kCapsulePadding * scale_;
-    const float segment_h = theme::kSegmentHeight * scale_;
+    const float pad = config::kCapsulePadding * scale_;
+    const float segment_h = config::kSegmentHeight * scale_;
     veil_clip_->SetLeft(SegmentLeft(index));
     veil_clip_->SetRight(SegmentLeft(index + 1));
     veil_clip_->SetTop(pad);
     veil_clip_->SetBottom(pad + segment_h);
     SetClipRadii(veil_clip_.Get(), segment_h * 0.5f);
-    veil_alpha_.To(dc, now, 1.0f, theme::kQuickFade);
+    veil_alpha_.To(dc, now, 1.0f, config::kQuickFade);
   } else {
-    veil_alpha_.To(dc, now, 0.0f, theme::kQuickFade);
+    veil_alpha_.To(dc, now, 0.0f, config::kQuickFade);
   }
 }
 
@@ -314,9 +317,9 @@ void Capsule::Hide(const TimeBase& now) {
   hover_ = -1;
   IDCompositionDevice* dc = compositor_.device();
   // It sinks the way it came as it fades, the mirror of its entrance.
-  opacity_.To(dc, now, 0.0f, theme::kCapsuleLeave);
-  y_.To(dc, now, target_y_ + theme::kCapsuleRise * scale_, theme::kCapsuleLeave);
-  veil_alpha_.To(dc, now, 0.0f, theme::kQuickFade);
+  opacity_.To(dc, now, 0.0f, config::kCapsuleLeave);
+  y_.To(dc, now, target_y_ + config::kCapsuleRise * scale_, config::kCapsuleLeave);
+  veil_alpha_.To(dc, now, 0.0f, config::kQuickFade);
 }
 
 void Capsule::Clear() {

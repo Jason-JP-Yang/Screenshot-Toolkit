@@ -1,5 +1,7 @@
 #include "dragdrop.h"
 
+#include "config/hooks.h"
+
 #include <objidl.h>
 #include <ole2.h>
 #include <shlobj.h>
@@ -8,6 +10,16 @@
 namespace sstk {
 
 namespace {
+
+int CancelButtonKey(bool swapped) {
+  switch (config::kDragCancelButton) {
+    case config::MouseButton::kRight: return swapped ? VK_LBUTTON : VK_RBUTTON;
+    case config::MouseButton::kMiddle: return VK_MBUTTON;
+    case config::MouseButton::kBack: return VK_XBUTTON1;
+    case config::MouseButton::kForward: return VK_XBUTTON2;
+  }
+  return VK_RBUTTON;
+}
 
 class DropSource final : public IDropSource {
  public:
@@ -34,9 +46,9 @@ class DropSource final : public IDropSource {
     // Read from the hardware: this thread never saw the press, and the keyboard belongs to the foreground app.
     // The hooks normally catch these first, and only then does the press not show here.
     const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
-    const bool escape = escape_pressed || (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-    const bool secondary = (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) != 0;
-    if (escape || secondary || id_ <= cancelled_through_.load(std::memory_order_relaxed)) {
+    const bool key = escape_pressed || (GetAsyncKeyState(static_cast<int>(config::kDragCancelKey)) & 0x8000) != 0;
+    const bool button = (GetAsyncKeyState(CancelButtonKey(swapped)) & 0x8000) != 0;
+    if (key || button || id_ <= cancelled_through_.load(std::memory_order_relaxed)) {
       cancelled_ = true;
       GetCursorPos(&release_);
       return DRAGDROP_S_CANCEL;

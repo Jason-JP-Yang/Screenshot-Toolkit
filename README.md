@@ -44,6 +44,18 @@ build.cmd Release
 
 The result is `build\Release\ScreenshotToolkit.exe`.
 
+## Configuration
+
+There is no settings page. The default build's settings live in headers under `src/config/`. Change a value and rebuild.
+
+| File | What it sets |
+|---|---|
+| `src/config/animation.h` | Springs, timing, and the stretch into the rubbish bin |
+| `src/config/colors.h` | Colors, opacities, and shadows |
+| `src/config/core.h` | Dwell time, what a shot contains, how deletion works, and which windows become options |
+| `src/config/hooks.h` | The keys and mouse buttons that capture, step the selector, and cancel a drag |
+| `src/config/layout.h` | Sizes, spacing, label text, and fonts |
+
 ## Releases
 
 The version is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. To publish, run:
@@ -70,7 +82,7 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Mouse hook.** The side buttons and the right-click cancel need a low-level mouse hook, which wakes the process on every pointer move. It therefore exists only while a thumbnail with options or a drag is on screen, and an idle program has only the keyboard hook.
 
-**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config.h` and rebuild.
+**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config/core.h` and rebuild.
 
 **Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
 
@@ -105,8 +117,7 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/bin.cpp` | The rubbish bin capsule |
 | `src/dragdrop.cpp` | The system drag loop, on its own thread |
 | `src/install.cpp` | Logon task registration and starting in the user's session |
-| `src/theme.h` | Design tokens: palette, metrics, and springs |
-| `src/config.h` | Core behavior switches chosen at build time |
+| `src/config/` | The default build's settings. See [Configuration](#configuration) |
 
 ## Debugging
 
