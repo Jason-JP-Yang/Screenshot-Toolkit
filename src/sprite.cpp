@@ -17,7 +17,7 @@ constexpr int kMeshMinCuts = 6;
 constexpr float kCellOverlap = 1.0f;
 constexpr float kBentFrom = 0.001f;
 constexpr float kBadgeVisibleFrom = 0.02f;
-constexpr float kFarthestLag = 1.0f;  // How much of the pull passes before the farthest point starts moving, relative to the nearest.
+constexpr float kFarthestLag = 0.45f;  // How much of the pull passes before the farthest point starts moving, relative to the nearest.
 constexpr float kSmallestQuadArea = 0.25f;
 constexpr float kShallowestDepth = 0.12f;
 
