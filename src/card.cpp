@@ -7,43 +7,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace sstk {
 
 namespace {
 
-void SetAllRadii(void* object, float value, IDCompositionAnimation* animation) {
-  auto* clip = static_cast<IDCompositionRectangleClip*>(object);
-  if (animation != nullptr) {
-    clip->SetTopLeftRadiusX(animation);
-    clip->SetTopLeftRadiusY(animation);
-    clip->SetTopRightRadiusX(animation);
-    clip->SetTopRightRadiusY(animation);
-    clip->SetBottomLeftRadiusX(animation);
-    clip->SetBottomLeftRadiusY(animation);
-    clip->SetBottomRightRadiusX(animation);
-    clip->SetBottomRightRadiusY(animation);
-  } else {
-    clip->SetTopLeftRadiusX(value);
-    clip->SetTopLeftRadiusY(value);
-    clip->SetTopRightRadiusX(value);
-    clip->SetTopRightRadiusY(value);
-    clip->SetBottomLeftRadiusX(value);
-    clip->SetBottomLeftRadiusY(value);
-    clip->SetBottomRightRadiusX(value);
-    clip->SetBottomRightRadiusY(value);
-  }
+bool NearlyEqual(const RECT& a, const RECT& b) {
+  return std::abs(a.left - b.left) <= config::kSameRectTolerance && std::abs(a.top - b.top) <= config::kSameRectTolerance &&
+         std::abs(a.right - b.right) <= config::kSameRectTolerance && std::abs(a.bottom - b.bottom) <= config::kSameRectTolerance;
 }
 
 }  // namespace
-
-SIZE ThumbnailSize(const RECT& region, float scale) {
-  const float region_w = static_cast<float>(region.right - region.left);
-  const float region_h = static_cast<float>(region.bottom - region.top);
-  const float fit = std::min({1.0f, config::kCardMaxWidth * scale / region_w, config::kCardMaxHeight * scale / region_h});
-  return SIZE{std::max(static_cast<LONG>(std::round(region_w * fit)), 1L),
-              std::max(static_cast<LONG>(std::round(region_h * fit)), 1L)};
-}
 
 CardShadow BuildCardShadow(Compositor& compositor, float scale) {
   CardShadow result;
@@ -83,7 +58,8 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
            float scale, ComPtr<IDCompositionSurface> frost, const CardShadow& shadow, IDCompositionClip* shadow_clip,
            double created_at)
     : compositor_(compositor), parent_(parent), shot_(std::move(shot)), regions_(screen.regions), insets_(screen.insets),
-      scale_(scale), border_(std::max(std::round(config::kCardBorder * scale), 1.0f)), frost_(std::move(frost)) {
+      scale_(scale), border_(std::max(std::round(config::kCardBorder * scale), 1.0f)), frost_(std::move(frost)),
+      app_(screen.app), app_rect_(screen.app_rect) {
   const Image& frame = *shot_->frame;
 
   root_ = compositor_.CreateVisual();
@@ -132,8 +108,8 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
   right_.Bind(inner, SSTK_SETTER(IDCompositionRectangleClip, SetRight), -border_);
   bottom_.Bind(clip, SSTK_SETTER(IDCompositionRectangleClip, SetBottom));
   bottom_.Bind(inner, SSTK_SETTER(IDCompositionRectangleClip, SetBottom), -border_);
-  radius_.Bind(clip, SetAllRadii);
-  radius_.Bind(inner, SetAllRadii, -border_);
+  radius_.Bind(clip, SetClipRadii);
+  radius_.Bind(inner, SetClipRadii, -border_);
   plane_x_.Bind(plane_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetX));
   plane_y_.Bind(plane_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY));
   plane_sx_.Bind(plane_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleX));
@@ -275,7 +251,8 @@ void Card::BuildCaches(const Image& frame, bool with_base) {
   crisp_sizes_.resize(regions_.size());
   crisp_pixels_.resize(regions_.size());
   for (size_t i = 0; i < regions_.size(); ++i) {
-    if (crisp_surfaces_[i]) continue;
+    const RegionKind kind = regions_[i].kind;
+    if (crisp_surfaces_[i] || kind == RegionKind::kScroll || kind == RegionKind::kLong) continue;
     const RECT& region = regions_[i].rect;
     const SIZE size = ThumbnailSize(region, scale_);
     const double region_w = region.right - region.left;
@@ -306,13 +283,13 @@ void Card::BuildDerivedAssets(const TimeBase& now) {
 }
 
 void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const TimeBase& now, double delay, bool in_flight) {
-  const RECT& region = selected_rect();
+  const RectF source = SourceRect();
   const float width = rect.width();
   const float height = rect.height();
-  const float sx = width / static_cast<float>(region.right - region.left);
-  const float sy = height / static_cast<float>(region.bottom - region.top);
-  const float px = rect.left - region.left * sx;
-  const float py = rect.top - region.top * sy;
+  const float sx = width / source.width();
+  const float sy = height / source.height();
+  const float px = rect.left - source.left * sx;
+  const float py = rect.top - source.top * sy;
 
   IDCompositionDevice* dc = device();
   left_.To(dc, now, rect.left, spec, delay);
@@ -339,18 +316,30 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
 }
 
 void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec) {
-  if (index >= static_cast<int>(crisp_surfaces_.size()) || !crisp_surfaces_[index]) return;
-  const RECT& region = regions_[index].rect;
-  const SIZE size = crisp_sizes_[index];
+  IDCompositionSurface* surface = nullptr;
+  D2D_MATRIX_3X2_F place{};
+  if (ShowsLong(index)) {
+    // Thumbnail row kLongOrigin is the scrolled area's first row, and the rest follow below and above it.
+    const float stretch = static_cast<float>(1.0 / long_.scale);
+    surface = long_.surface.Get();
+    place = D2D_MATRIX_3X2_F{stretch, 0.0f, 0.0f, stretch, static_cast<float>(long_.area.left),
+                             static_cast<float>(long_.area.top - kLongOrigin / long_.scale)};
+  } else {
+    const int crisp = CrispIndex(index);
+    if (crisp < 0 || crisp >= static_cast<int>(crisp_surfaces_.size()) || !crisp_surfaces_[crisp]) return;
+    const RECT& region = regions_[crisp].rect;
+    const SIZE size = crisp_sizes_[crisp];
+    surface = crisp_surfaces_[crisp].Get();
+    place = D2D_MATRIX_3X2_F{static_cast<float>(region.right - region.left) / size.cx, 0.0f, 0.0f,
+                             static_cast<float>(region.bottom - region.top) / size.cy, static_cast<float>(region.left),
+                             static_cast<float>(region.top)};
+  }
 
   auto layer = std::make_unique<CrispLayer>();
   layer->visual = compositor_.CreateVisual();
   layer->effect = compositor_.CreateEffectGroup();
-  layer->visual->SetContent(crisp_surfaces_[index].Get());
+  layer->visual->SetContent(surface);
   layer->visual->SetEffect(layer->effect.Get());
-  const D2D_MATRIX_3X2_F place{static_cast<float>(region.right - region.left) / size.cx, 0.0f, 0.0f,
-                               static_cast<float>(region.bottom - region.top) / size.cy, static_cast<float>(region.left),
-                               static_cast<float>(region.top)};
   layer->visual->SetTransform(place);
   layer->alpha.Bind(layer->effect.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
   layer->alpha.Snap(0.0f);
@@ -367,13 +356,111 @@ void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringS
 }
 
 bool Card::CanSelect(int index) const {
-  return !hibernating_ && index < static_cast<int>(crisp_surfaces_.size()) && crisp_surfaces_[index];
+  if (hibernating_ || index < 0 || index >= static_cast<int>(regions_.size())) return false;
+  if (regions_[index].kind == RegionKind::kLong) return long_.surface != nullptr;
+  const int crisp = CrispIndex(index);
+  return crisp >= 0 && crisp < static_cast<int>(crisp_surfaces_.size()) && crisp_surfaces_[crisp];
 }
 
 void Card::Select(int index, const TimeBase& now) {
+  if (regions_[index].kind == RegionKind::kScroll && regions_[selected_].kind != RegionKind::kScroll) before_scroll_ = selected_;
   selected_ = index;
   ShowCrisp(index, now, config::kCrispMorphDelay, config::kMorphFade);
 }
+
+int Card::CrispIndex(int index) const { return regions_[index].kind == RegionKind::kScroll ? scroll_source_ : index; }
+
+bool Card::ShowsLong(int index) const {
+  const RegionKind kind = regions_[index].kind;
+  return long_.surface && (kind == RegionKind::kScroll || kind == RegionKind::kLong);
+}
+
+SIZE Card::DisplaySize() const {
+  if (ShowsLong(selected_)) return SIZE{long_.thumb_width, std::max(long_.view_bottom - long_.view_top, 1)};
+  return ThumbnailSize(regions_[selected_].rect, scale_);
+}
+
+RectF Card::SourceRect() const {
+  if (ShowsLong(selected_)) {
+    const double stretch = 1.0 / long_.scale;
+    const double top = long_.area.top + (long_.view_top - kLongOrigin) * stretch;
+    const double bottom = long_.area.top + (long_.view_bottom - kLongOrigin) * stretch;
+    return RectF{static_cast<float>(long_.area.left), static_cast<float>(top), static_cast<float>(long_.area.right),
+                 static_cast<float>(bottom)};
+  }
+  const RECT& rect = regions_[selected_].rect;
+  return RectF{static_cast<float>(rect.left), static_cast<float>(rect.top), static_cast<float>(rect.right),
+               static_cast<float>(rect.bottom)};
+}
+
+bool Card::OfferScroll(std::vector<RECT> areas) {
+  if (app_ == nullptr || scroll_source_ >= 0) return false;
+  for (size_t i = 0; i < regions_.size(); ++i) {
+    if (!NearlyEqual(regions_[i].rect, app_rect_)) continue;
+    scroll_source_ = static_cast<int>(i);
+    scroll_areas_ = std::move(areas);
+    regions_.push_back(Region{RegionKind::kScroll, regions_[i].rect});
+    crisp_surfaces_.resize(regions_.size());
+    crisp_sizes_.resize(regions_.size());
+    crisp_pixels_.resize(regions_.size());
+    return true;
+  }
+  return false;
+}
+
+void Card::SetLongView(int content_top, int content_bottom, int view_bottom) {
+  long_.content_top = content_top;
+  long_.content_bottom = content_bottom;
+  const int rows = std::max(std::min(content_bottom - content_top, long_.max_rows), 1);
+  long_.view_bottom = std::clamp(view_bottom, content_top + rows, std::max(content_bottom, content_top + rows));
+  long_.view_top = long_.view_bottom - rows;
+}
+
+bool Card::BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& now) {
+  long_.surface = compositor_.CreateVirtualSurface(update.thumb_width, kLongRows, true);
+  if (!long_.surface) return false;
+  long_.area = update.area;
+  long_.thumb_width = update.thumb_width;
+  long_.scale = static_cast<double>(update.thumb_width) / (update.area.right - update.area.left);
+  long_.max_rows = max_rows;
+  DrawLong(update);
+  ShowCrisp(selected_, now, config::kCrispMorphDelay, config::kMorphFade);
+  return true;
+}
+
+void Card::DrawLong(const ScrollUpdate& update) {
+  if (!long_.surface) return;
+  if (update.rows) compositor_.Upload(long_.surface.Get(), POINT{0, update.at}, update.rows);
+  SetLongView(update.content_top, update.content_bottom, update.view_bottom);
+}
+
+void Card::KeepLong(const ScrollUpdate& update) {
+  const int index = static_cast<int>(regions_.size()) - 1;
+  regions_[index].kind = RegionKind::kLong;
+  long_size_ = SIZE{update.image->width(), update.image->height()};
+  // Finished, it shows from the top, as the image does when opened.
+  SetLongView(update.content_top, update.content_bottom, update.content_top);
+  const double stretch = 1.0 / long_.scale;
+  const double skipped = update.image_rect.top - long_.area.top;
+  const double top = (long_.view_top - kLongOrigin) * stretch - skipped;
+  const double bottom = (long_.view_bottom - kLongOrigin) * stretch - skipped;
+  long_.pixels = ResampleArea(*update.image, 0.0, top, update.image->width(), bottom, long_.thumb_width, long_.view_bottom - long_.view_top);
+}
+
+void Card::DropLong(const TimeBase& now) {
+  long_ = Long{};
+  if (scroll_source_ >= 0 && regions_.back().kind == RegionKind::kScroll) {
+    // One image takes one scrolling screenshot, so the option goes with the attempt.
+    regions_.pop_back();
+    crisp_surfaces_.pop_back();
+    crisp_sizes_.pop_back();
+    crisp_pixels_.pop_back();
+  }
+  selected_ = std::min(before_scroll_, static_cast<int>(regions_.size()) - 1);
+  ShowCrisp(selected_, now, config::kCrispMorphDelay, config::kMorphFade);
+}
+
+float Card::long_height() const { return long_.surface ? static_cast<float>(long_.view_bottom - long_.view_top) : 0.0f; }
 
 void Card::SetSwipe(float offset, float progress) {
   slide_.Snap(offset);
@@ -418,8 +505,10 @@ RectF Card::RectAt(double time) const {
 RectF Card::target_rect() const { return RectF{left_.target(), top_.target(), right_.target(), bottom_.target()}; }
 
 const Image* Card::thumbnail() const {
-  if (selected_ >= static_cast<int>(crisp_pixels_.size()) || !crisp_pixels_[selected_]) return nullptr;
-  return &crisp_pixels_[selected_];
+  if (ShowsLong(selected_)) return long_.pixels ? &long_.pixels : nullptr;
+  const int crisp = CrispIndex(selected_);
+  if (crisp < 0 || crisp >= static_cast<int>(crisp_pixels_.size()) || !crisp_pixels_[crisp]) return nullptr;
+  return &crisp_pixels_[crisp];
 }
 
 void Card::Tick(double now, Store& store) {
@@ -434,7 +523,7 @@ void Card::Tick(double now, Store& store) {
     }
   }
   // The thumbnails exist from here on, and later crops can come from the archive.
-  if (!crisp_surfaces_.empty() && shot_->frame) store.ReleaseFrame(shot_);
+  if (!crisp_surfaces_.empty() && (shot_->frame || shot_->long_frame)) store.ReleaseFrame(shot_);
   for (auto it = crisp_layers_.begin(); it != crisp_layers_.end();) {
     if ((*it)->retire_at != 0.0 && now >= (*it)->retire_at) {
       plane_scaled_->RemoveVisual((*it)->visual.Get());
@@ -450,8 +539,9 @@ void Card::Hibernate(Store& store) {
   if (hibernating_ || full_release_at_ != 0.0 || crisp_surfaces_.empty()) return;
   if (!store.ReleaseFrame(shot_)) return;
   hibernating_ = true;
+  const int kept = CrispIndex(selected_);
   for (size_t i = 0; i < crisp_surfaces_.size(); ++i) {
-    if (static_cast<int>(i) != selected_) {
+    if (static_cast<int>(i) != kept) {
       crisp_surfaces_[i].Reset();
       crisp_pixels_[i] = Image();
     }

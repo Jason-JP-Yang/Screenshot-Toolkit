@@ -25,6 +25,10 @@ enum Message : UINT {
   kMsgDragFinished,            // lParam: FileDragOutcome*, ownership moves to the receiver
   kMsgDragCancel,              // The keyboard or right button called off the drag.
   kMsgSelectorStep,            // lParam: -1 for the previous option, 1 for the next.
+  kMsgScrollAreas,             // lParam: ScrollAreas*, ownership moves to the receiver
+  kMsgScrollChord,             // wParam: 1 when a capture chord sent it, 0 for the scroll chord.
+  kMsgScrollWheel,             // lParam: where the wheel turned, in virtual screen coordinates, as two signed halves.
+  kMsgScrollUpdate,            // lParam: ScrollUpdate*, ownership moves to the receiver
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

@@ -25,6 +25,7 @@ std::atomic<DWORD> g_hook_thread{0};
 bool g_capture_held[std::size(config::kCaptureChords)] = {};
 bool g_previous_key_held = false;
 bool g_next_key_held = false;
+bool g_scroll_key_held = false;
 bool g_cancel_key_held = false;
 bool g_button_held[kMouseButtonCount] = {};
 
@@ -66,6 +67,19 @@ bool CancelDrag(int) {
   return true;
 }
 
+bool ScrollChord(int) {
+  PostMessageW(g_controller, kMsgScrollChord, 0, 0);
+  if (config::kScrollChord.modifiers.win) MaskWinKeyRelease();
+  return true;
+}
+
+// While a scrolling screenshot runs, a capture chord finishes it instead of taking another screenshot.
+bool FinishScrolling(int chord) {
+  PostMessageW(g_controller, kMsgScrollChord, 1, 0);
+  if (config::kCaptureChords[chord].modifiers.win) MaskWinKeyRelease();
+  return true;
+}
+
 // Returns true when the event must not reach the rest of the system. A press taken here keeps its release too,
 // even if the mode has moved on: a stray right button release would open a context menu under the pointer.
 bool HandleChord(bool& held, bool is_down, bool allowed, bool (*fire)(int), int argument) {
@@ -80,16 +94,29 @@ bool HandleChord(bool& held, bool is_down, bool allowed, bool (*fire)(int), int 
   return held;
 }
 
-bool IsSelecting() { return g_mode.load(std::memory_order_relaxed) == HookMode::kSelector && AreHeld(config::kSelectorModifiers); }
+HookMode Mode() { return g_mode.load(std::memory_order_relaxed); }
 
-bool IsDragging() { return g_mode.load(std::memory_order_relaxed) == HookMode::kDrag; }
+bool IsSelecting() {
+  return (Mode() == HookMode::kSelector || Mode() == HookMode::kScrollReady) && AreHeld(config::kSelectorModifiers);
+}
+
+bool IsScrolling() { return Mode() == HookMode::kScrolling; }
+
+bool IsScrollChord() {
+  return (Mode() == HookMode::kScrollReady || Mode() == HookMode::kScrolling) && AreHeld(config::kScrollChord.modifiers);
+}
+
+bool IsDragging() { return Mode() == HookMode::kDrag; }
 
 // Returns true when the key event must not reach the rest of the system.
 bool HandleKey(DWORD virtual_key, bool is_down) {
   for (int i = 0; i < static_cast<int>(std::size(config::kCaptureChords)); ++i) {
     const config::Chord& chord = config::kCaptureChords[i];
-    if (virtual_key == chord.key) return HandleChord(g_capture_held[i], is_down, AreHeld(chord.modifiers), Capture, i);
+    if (virtual_key == chord.key) {
+      return HandleChord(g_capture_held[i], is_down, AreHeld(chord.modifiers), IsScrolling() ? FinishScrolling : Capture, i);
+    }
   }
+  if (virtual_key == config::kScrollChord.key) return HandleChord(g_scroll_key_held, is_down, IsScrollChord(), ScrollChord, 0);
   if (virtual_key == config::kSelectorPreviousKey) return HandleChord(g_previous_key_held, is_down, IsSelecting(), StepSelector, -1);
   if (virtual_key == config::kSelectorNextKey) return HandleChord(g_next_key_held, is_down, IsSelecting(), StepSelector, 1);
   if (virtual_key == config::kDragCancelKey) return HandleChord(g_cancel_key_held, is_down, IsDragging(), CancelDrag, 0);
@@ -136,10 +163,16 @@ bool HandleButton(WPARAM message, const MSLLHOOKSTRUCT& info) {
 }
 
 LRESULT CALLBACK MouseProc(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && HandleButton(wparam, *reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam))) {
-    // The hook may have been outliving its mode only to catch this release.
-    PostThreadMessageW(GetCurrentThreadId(), kMsgSyncMouseHook, 0, 0);
-    return 1;
+  if (code == HC_ACTION) {
+    const auto& info = *reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam);
+    if (wparam == WM_MOUSEWHEEL) {
+      // Reported, never taken: the scroll itself is what a scrolling screenshot records.
+      if (IsScrolling()) PostMessageW(g_controller, kMsgScrollWheel, 0, MAKELPARAM(info.pt.x, info.pt.y));
+    } else if (HandleButton(wparam, info)) {
+      // The hook may have been outliving its mode only to catch this release.
+      PostThreadMessageW(GetCurrentThreadId(), kMsgSyncMouseHook, 0, 0);
+      return 1;
+    }
   }
   return CallNextHookEx(g_mouse_hook, code, wparam, lparam);
 }

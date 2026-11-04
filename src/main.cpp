@@ -16,6 +16,7 @@
 
 #include <psapi.h>
 #include <shellapi.h>
+#include <windowsx.h>
 
 #include <cwchar>
 #include <memory>
@@ -160,6 +161,18 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
       return 0;
     case kMsgSelectorStep:
       app->overlay->OnSelectorStep(static_cast<int>(lparam));
+      return 0;
+    case kMsgScrollAreas:
+      app->overlay->OnScrollAreas(std::unique_ptr<ScrollAreas>(reinterpret_cast<ScrollAreas*>(lparam)));
+      return 0;
+    case kMsgScrollChord:
+      app->overlay->OnScrollChord(wparam != 0);
+      return 0;
+    case kMsgScrollWheel:
+      app->overlay->OnScrollWheel(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
+      return 0;
+    case kMsgScrollUpdate:
+      app->overlay->OnScrollUpdate(std::unique_ptr<ScrollUpdate>(reinterpret_cast<ScrollUpdate*>(lparam)));
       return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {

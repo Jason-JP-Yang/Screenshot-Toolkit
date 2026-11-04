@@ -19,7 +19,34 @@ inline constexpr float kSegmentWidth = 38.0f;
 inline constexpr float kSegmentHeight = 28.0f;
 inline constexpr float kCapsulePadding = 3.0f;
 inline constexpr int kFrostDownscale = 8;
-inline constexpr int kFrostSegments = 8;
+inline constexpr float kFrostWidth = 640.0f;  // Wide enough for the widest selector.
+
+// The selected option's label, and the states of a scrolling screenshot. Gaps measure between what is visibly drawn.
+inline constexpr float kCapsuleFontSize = 13.0f;
+inline constexpr float kLabelGap = 6.0f;
+inline constexpr float kKeycapHeight = 15.0f;
+inline constexpr float kKeycapGap = 2.5f;
+inline constexpr float kKeycapTextGap = 5.0f;
+inline constexpr float kRecordingDot = 8.0f;
+inline constexpr float kStatusIconSize = 14.0f;
+inline constexpr float kStatusGap = 8.0f;
+inline constexpr float kFinishHintGap = 14.0f;
+inline constexpr wchar_t kLabelFullscreen[] = L"Fullscreen";
+inline constexpr wchar_t kLabelWindow[] = L"Window";
+inline constexpr wchar_t kLabelNoTaskbar[] = L"No Taskbar";
+inline constexpr wchar_t kLabelScrolling[] = L"Scrolling Screenshot";
+inline constexpr wchar_t kScrollHintBefore[] = L"Press again /";  // The keycaps of the scroll chord follow.
+inline constexpr wchar_t kScrollHintAfter[] = L"to activate Scrolling Screenshot";
+inline constexpr wchar_t kRecordingWaiting[] = L"Scroll to capture";
+inline constexpr wchar_t kRecordingActive[] = L"Recording";
+inline constexpr wchar_t kRecordingFinish[] = L"to finish";
+inline constexpr wchar_t kResultSucceeded[] = L"Scrolling Screenshot Saved";
+inline constexpr wchar_t kResultPartial[] = L"Stopped Early, Saved";
+inline constexpr wchar_t kResultFailed[] = L"Scrolling Screenshot Failed";
+
+// A thumbnail growing with a scrolling screenshot keeps its width, and stops growing at the lower of these.
+inline constexpr float kScrollCardMaxHeight = 460.0f;
+inline constexpr float kScrollCardMaxShare = 0.5f;  // Of the screen height left free by the taskbar.
 
 // The badge on a thumbnail in the air.
 inline constexpr float kDropBadgeSize = 22.0f;

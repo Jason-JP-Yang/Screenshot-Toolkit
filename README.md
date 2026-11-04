@@ -7,7 +7,8 @@ There is no window, tray icon, editor, or settings page, by design.
 ## Using it
 
 - **Capture:** press PrintScreen or Win+Shift+S. Press as fast as you like: each shot stacks into a deck and leaves on its own 3-second timer.
-- **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
+- **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. The selected option shows its name beside its icon, and the capsule springs to its new width as the selection moves. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
+- **Take a scrolling screenshot:** when the top app has anything that scrolls vertically, the capsule also offers a page icon. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
 - **Switch regions without the mouse:** while a thumbnail with options is on screen, Win+Shift+Left and Win+Shift+Right step through them, as do Win+Shift with side buttons 4 and 5. The steps wrap around. With nothing to switch, those keys keep their Windows meaning.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
@@ -19,6 +20,29 @@ There is no window, tray icon, editor, or settings page, by design.
 Screenshots are lossless PNGs in `Pictures\Screenshots`. Alt+PrintScreen and Win+PrintScreen keep their native Windows behavior.
 
 With several monitors, the one under the cursor is captured. Options covering an identical area are merged, and the capsule is hidden when only one option is left, as with a true fullscreen app.
+
+## Scrolling screenshots
+
+Each screenshot asks UI Automation, in the background, which parts of the top app window scroll vertically, nested ones included, and also checks classic scroll bars. Nothing is scrolled or clicked to find out, so no window on screen reacts. If anything scrolls, the page icon appears at the end of the capsule.
+
+Selected, the icon shows how to start: press it again, or press Win+Enter. While recording:
+
+- Scroll with the wheel, the touchpad, or the scroll bar, with the pointer over the area. The first scroll decides which area is captured: the largest area under the pointer whose content moved as a whole. From then on the keyboard scrolls it too.
+- Fixed headers and footers inside the area appear once, and a scroll bar at its right edge is left out.
+- Scrolling up past the start adds content above it as well.
+- The thumbnail follows along, growing up to about half the screen and then showing the part you are on.
+
+It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the captured area, or when the content stops matching for a moment, for example after a click opens another page.
+
+The capsule then shows the outcome for 1.5 seconds before turning back into the selector:
+
+| Color | Outcome |
+|---|---|
+| Green | Finished normally. The scrolling screenshot is saved and copied |
+| Dark green | Ended early, but it had already grown by at least 10%. That part is kept |
+| Red | Nothing worth keeping. The thumbnail goes back to the option chosen before |
+
+A kept scrolling screenshot stays as an option of its own, so switching away and back still works. Each screenshot takes at most one scrolling screenshot.
 
 ## Install
 
@@ -50,10 +74,10 @@ There is no settings page. The default build's settings live in headers under `s
 
 | File | What it sets |
 |---|---|
-| `src/config/animation.h` | Springs, timing, and the stretch into the rubbish bin |
-| `src/config/colors.h` | Colors, opacities, and shadows |
-| `src/config/core.h` | Dwell time, what a shot contains, how deletion works, and which windows become options |
-| `src/config/hooks.h` | The keys and mouse buttons that capture, step the selector, and cancel a drag |
+| `src/config/animation.h` | Springs, timing, the stretch into the rubbish bin, and the recording dot's breathing |
+| `src/config/colors.h` | Colors, opacities, shadows, and the outcome colors of a scrolling screenshot |
+| `src/config/core.h` | Dwell time, what a shot contains, how deletion works, which windows become options, and how scrolling screenshots sample, match, and end |
+| `src/config/hooks.h` | The keys and mouse buttons that capture, step the selector, start and finish a scrolling screenshot, and cancel a drag |
 | `src/config/layout.h` | Sizes, spacing, label text, and fonts |
 
 ## Releases
@@ -81,6 +105,8 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 **Dragging.** The system drag loop calls into whichever application is under the pointer and can block there, so it runs on its own thread. The UI thread wakes once per composed frame only while a thumbnail is in the air, reads the pointer, and moves a finished bitmap. Nothing is drawn or uploaded after the lift.
 
 **Mouse hook.** The side buttons and the right-click cancel need a low-level mouse hook, which wakes the process on every pointer move. It therefore exists only while a thumbnail with options or a drag is on screen, and an idle program has only the keyboard hook.
+
+**Scrolling screenshots.** Finding scrollable areas runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads three columns four pixels wide from the area about every 90 ms, and every 40 ms while things move. Only when they change is the whole area read, its rows fingerprinted, and the scroll distance found by letting rows vote for the shift that lines them up. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
 
 **Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config/core.h` and rebuild.
 
@@ -111,7 +137,9 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/motion.cpp` | Damped springs emitted as DirectComposition cubic animations |
 | `src/compositor.cpp` | WARP device and composition helpers |
 | `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
-| `src/capsule.cpp` | The region selector and its sliding pill |
+| `src/capsule.cpp` | The region selector, its sliding pill and labels, and a scrolling screenshot's recording and outcome |
+| `src/scrollable.cpp` | Finding the areas of the top app that scroll vertically |
+| `src/recorder.cpp` | Recording a scrolling screenshot: sampling, matching, stitching, and its thumbnail |
 | `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
 | `src/sprite.cpp` | The thumbnail in the air, and the mesh that draws it into the bin |
 | `src/bin.cpp` | The rubbish bin capsule |

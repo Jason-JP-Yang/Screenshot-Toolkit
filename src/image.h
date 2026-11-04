@@ -9,6 +9,14 @@
 
 namespace sstk {
 
+// Rows of pixels that something else owns.
+struct PixelView {
+  const uint8_t* data = nullptr;
+  int width = 0;
+  int height = 0;
+  int stride = 0;
+};
+
 class Image {
  public:
   Image() = default;
@@ -26,6 +34,7 @@ class Image {
   int stride() const { return width_ * 4; }
   uint8_t* data() { return data_; }
   const uint8_t* data() const { return data_; }
+  PixelView view() const { return PixelView{data_, width_, height_, stride()}; }
   explicit operator bool() const { return data_ != nullptr; }
 
  private:
@@ -48,7 +57,10 @@ Image Halve(const Image& source);
 Image CopyRect(const Image& source, int left, int top, int width, int height);
 
 // Area-weighted reduction of a source rectangle. The rectangle may have fractional edges.
-Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height);
+Image ResampleArea(const PixelView& source, double left, double top, double right, double bottom, int width, int height);
+inline Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height) {
+  return ResampleArea(source.view(), left, top, right, bottom, width, height);
+}
 
 // Tinted, heavily blurred copy of a screen rectangle, used as frosted glass.
 Image RenderFrost(const Image& frame, const RECT& rect, int downscale, uint32_t tint_bgr, float tint_alpha);
@@ -69,11 +81,19 @@ struct GlyphSpec {
   float screen_aspect;  // Width over height of the monitor.
   float left, top, right, bottom;  // Region in normalized monitor coordinates.
   GlyphGap gap;
+  bool scroll = false;  // A page with an arrow down, for scrolling screenshots, instead of a mini screen.
 };
 
-// One mini-screen glyph per option, laid out left to right at a fixed pitch.
-Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
-                       float color_alpha);
+// One option's glyph, centered on a cell. Color is 0xRRGGBB.
+Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, uint32_t color, float color_alpha);
+
+// A key's outline around its symbol, `height` pixels tall. Color is 0xRRGGBB.
+enum class Keycap { kWindows, kEnter };
+Image RenderKeycap(Keycap key, int height, float scale, uint32_t color);
+
+// A check, cross, or exclamation mark on a `size` pixel square. Color is 0xRRGGBB.
+enum class StatusIcon { kCheck, kCross, kExclamation };
+Image RenderStatusIcon(StatusIcon icon, int size, float scale, uint32_t color);
 
 // A thumbnail with rounded corners and border. The clear margin keeps transformed edges antialiased. Color is 0xRRGGBB.
 Image RenderSprite(const Image& thumbnail, float radius, float border, uint32_t border_color, int margin);
@@ -85,8 +105,14 @@ Image RenderPlusBadge(int size, int pad, float scale, uint32_t color);
 Image RenderBinCan(int size, float scale, uint32_t color);
 Image RenderBinLid(int size, float scale, uint32_t color);
 
-// One line of text on clear pixels. Color is 0xRRGGBB.
-Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color);
+// One line of text on clear pixels, with what it takes to set it on a baseline. Color is 0xRRGGBB.
+struct TextLine {
+  Image image;
+  float baseline = 0.0f;  // Pixels from the top.
+  float cap_height = 0.0f;
+};
+TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color);
+inline Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) { return RenderText(text, font_pixels, color).image; }
 
 // The box of a bitmap's visible shape, whatever clear space its canvas leaves around it.
 RECT InkBounds(const Image& image);

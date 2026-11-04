@@ -38,6 +38,21 @@ inline constexpr double kCapsuleEnterDelay = 0.14;
 inline constexpr float kCapsuleRise = 10.0f;
 inline constexpr SpringSpec kPillLeading{0.24f, 0.80f};
 inline constexpr SpringSpec kPillTrailing{0.34f, 0.84f};
+inline constexpr SpringSpec kCapsuleResize{0.42f, 0.74f};  // The width, as labels come and go.
+inline constexpr SpringSpec kSegmentSlide{0.34f, 0.82f};
+inline constexpr double kLabelDelay = 0.05;
+
+// The scrolling screenshot on the selector: the pill gathers into a breathing dot, and the outcome pops in.
+inline constexpr SpringSpec kPillMorph{0.40f, 0.80f};
+inline constexpr double kBreathDelay = 0.38;
+inline constexpr float kBreathHertz = 0.75f;
+inline constexpr float kBreathLow = 0.30f;
+inline constexpr SpringSpec kResultPop{0.40f, 0.62f};
+inline constexpr float kResultPopFrom = 0.45f;
+inline constexpr double kResultReturnDelay = 0.06;
+
+// The thumbnail following a scrolling screenshot as it grows.
+inline constexpr SpringSpec kScrollFollow{0.26f, 1.0f};
 
 // The thumbnail in the air.
 inline constexpr float kMaxFrameTime = 0.05f;

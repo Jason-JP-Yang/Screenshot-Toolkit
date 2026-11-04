@@ -39,6 +39,25 @@ inline constexpr double kMinimumVisibleFraction = 0.5;
 inline constexpr int kSameRectTolerance = 2;
 inline constexpr int kTaskbarHiddenThickness = 4;
 
+// Scrolling screenshots. Times are in seconds, and lengths in physical pixels unless they say otherwise.
+inline constexpr double kScrollStartSeconds = 8.0;     // Waiting for the first scroll.
+inline constexpr double kScrollIdleSeconds = 5.0;      // No scrolling for this long finishes it.
+inline constexpr double kScrollMismatchSeconds = 1.5;  // Content that cannot be stitched for this long ends it early.
+inline constexpr double kScrollResultSeconds = 1.5;    // How long the selector shows the outcome.
+inline constexpr double kScrollPartialShare = 0.10;    // An early end still keeps a capture grown by this share.
+inline constexpr unsigned kScrollActiveMs = 40;        // Sampling while content moves,
+inline constexpr unsigned kScrollRestingMs = 90;       // and while it rests.
+inline constexpr double kScrollActiveHold = 0.6;
+inline constexpr int kScrollMaxHeight = 30000;
+inline constexpr int kScrollMaxPixels = 40'000'000;
+inline constexpr float kScrollMatchShare = 0.55f;      // Of the comparable rows, how many must agree on a shift.
+inline constexpr int kScrollMatchMinRows = 6;
+inline constexpr int kScrollRepeatLimit = 6;           // A row repeating more often than this cannot place a shift.
+inline constexpr double kScrollBandMinShare = 0.25;    // The moving part between a fixed header and footer.
+inline constexpr float kScrollAreaMinWidth = 96.0f;    // Device independent pixels, as is the next one.
+inline constexpr float kScrollAreaMinHeight = 72.0f;
+inline constexpr unsigned kScrollDetectTimeoutMs = 1500;
+
 // Housekeeping.
 inline constexpr unsigned kTickIntervalMs = 40;
 inline constexpr int kTaskbarPollTicks = 3;

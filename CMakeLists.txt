@@ -24,7 +24,9 @@ add_executable(ScreenshotToolkit WIN32
   src/motion.cpp
   src/overlay.cpp
   src/platform.cpp
+  src/recorder.cpp
   src/screen.cpp
+  src/scrollable.cpp
   src/sprite.cpp
   src/store.cpp
   res/app.rc

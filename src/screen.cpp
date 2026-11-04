@@ -1,10 +1,12 @@
 #include "screen.h"
 
 #include "config/core.h"
+#include "config/layout.h"
 
 #include <dwmapi.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cwchar>
 
 namespace sstk {
@@ -243,6 +245,10 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
   }
 
   const WindowEntry* app = FindTopApp(state.windows);
+  if (app != nullptr) {
+    info.app = app->handle;
+    info.app_rect = ToMonitorSpace(app->rect, info.bounds);
+  }
   if (zones.size() >= 2) {
     // A window floating above a snapped layout is still offered, ahead of the zones it sits on.
     if (app != nullptr && !app->arranged) add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
@@ -272,6 +278,14 @@ TaskbarInsets QueryTaskbarInsets(HMONITOR monitor) {
   if (!GetMonitorInfoW(monitor, &monitor_info)) return {};
   WalkState state = WalkDesktop(monitor, monitor_info.rcMonitor);
   return InsetsFrom(state.taskbar, monitor_info.rcMonitor);
+}
+
+SIZE ThumbnailSize(const RECT& region, float scale) {
+  const float region_w = static_cast<float>(region.right - region.left);
+  const float region_h = static_cast<float>(region.bottom - region.top);
+  const float fit = std::min({1.0f, config::kCardMaxWidth * scale / region_w, config::kCardMaxHeight * scale / region_h});
+  return SIZE{std::max(static_cast<LONG>(std::round(region_w * fit)), 1L),
+              std::max(static_cast<LONG>(std::round(region_h * fit)), 1L)};
 }
 
 }  // namespace sstk

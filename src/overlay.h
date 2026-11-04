@@ -4,6 +4,8 @@
 #include "capture.h"
 #include "compositor.h"
 #include "hook.h"
+#include "recorder.h"
+#include "scrollable.h"
 #include "store.h"
 
 #include <memory>
@@ -36,6 +38,11 @@ class Overlay {
   void OnDragCancel();
   void OnSelectorStep(int direction);
 
+  void OnScrollAreas(std::unique_ptr<ScrollAreas> found);
+  void OnScrollChord(bool from_capture);
+  void OnScrollWheel(POINT point);
+  void OnScrollUpdate(std::unique_ptr<ScrollUpdate> update);
+
   // True when nothing is on screen, so memory can be returned.
   bool IsIdle() const;
 
@@ -53,6 +60,11 @@ class Overlay {
   void SyncHookMode();
   bool drag_held() const { return session_ != nullptr; }
 
+  void StartScroll(Deck& deck);
+  void FinishScroll();
+  void CancelScroll();
+  bool scrolling() const { return recorder_ != nullptr; }
+
   HWND controller_;
   Compositor& compositor_;
   Store& store_;
@@ -67,6 +79,12 @@ class Overlay {
   uint64_t next_drag_id_ = 1;
   double last_frame_ = 0.0;
   HookMode hook_mode_ = HookMode::kIdle;
+
+  uint64_t next_shot_id_ = 1;
+  std::unique_ptr<ScrollDetector> detector_;
+  std::unique_ptr<ScrollRecorder> recorder_;  // The scrolling screenshot in progress, if any.
+  Deck* scroll_deck_ = nullptr;
+  uint64_t scroll_session_ = 0;
 };
 
 }  // namespace sstk

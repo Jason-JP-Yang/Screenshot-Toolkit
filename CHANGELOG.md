@@ -2,6 +2,23 @@
 
 Built programs are kept per version in the local `release/` folder, created by `release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
+## Unreleased
+
+### Added
+
+- Scrolling screenshots. When the top app has anything that scrolls vertically, nested areas included, the selector offers a page icon. UI Automation finds these areas in the background without touching any window, and classic scroll bars fill in where it sees nothing.
+- Selecting the icon shows "Press again / Win Enter to activate Scrolling Screenshot", with Win and Enter drawn as keycaps. Pressing it again or pressing Win+Enter starts recording.
+- While recording, the selector's pill gathers into a breathing dot beside "Scroll to capture", which turns into "Recording" once the first scroll picks the area. Fixed headers and footers appear once, a scroll bar at the right edge is left out, and scrolling above the start adds content there too.
+- The thumbnail grows with the capture at an unchanged width and scale, up to about half the screen, and then follows the part on screen.
+- PrintScreen, Win+Shift+S, Win+Enter, a click on the selector, or 5 seconds without scrolling finish it. Moving or closing the window, turning the wheel outside the captured area, or content that stops matching ends it early.
+- The outcome fills the selector for 1.5 seconds: green when saved, dark green when it ended early after growing by at least 10%, and red when nothing was kept. The selector then returns, with the scrolling screenshot as an option of its own. Each screenshot takes at most one.
+
+### Changed
+
+- The selected option shows its name beside its icon, laid out by what is visibly drawn, and the selector springs to its new width as the selection moves.
+- The selector's shadow is cut into caps and a stretching middle, so it follows any width without being stretched.
+- The selector's labels are drawn after the first frame of a shot, which they never delay.
+
 ## 0.1.2
 
 ### Added

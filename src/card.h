@@ -8,10 +8,14 @@
 // The plane holds three kinds of bitmap, all in exact registration, so crossfading between them
 // only ever changes sharpness: the full frame for the start of the flight, a base copy filtered
 // for thumbnail scales that is always underneath, and one crisp 1:1 thumbnail per region.
+//
+// A scrolling screenshot is one more such bitmap. It starts where the scrolled area sits in the
+// screenshot and reaches past it, so the card shows it by moving its window over the plane too.
 #pragma once
 
 #include "compositor.h"
 #include "motion.h"
+#include "recorder.h"
 #include "screen.h"
 #include "store.h"
 
@@ -26,9 +30,6 @@ struct RectF {
   float width() const { return right - left; }
   float height() const { return bottom - top; }
 };
-
-// Pixel size of the thumbnail showing a region.
-SIZE ThumbnailSize(const RECT& region, float scale);
 
 // One soft shadow cut into corners and edges, so that it can follow a card of any size without its
 // blur or corners ever being stretched. Shared by every card on a monitor.
@@ -61,6 +62,25 @@ class Card {
   // Crossfades to another region's thumbnail. MoveTo carries out the matching camera move.
   void Select(int index, const TimeBase& now);
   bool CanSelect(int index) const;
+
+  // The size the card takes for its selection, and the part of the plane it shows there.
+  SIZE DisplaySize() const;
+  RectF SourceRect() const;
+
+  // Adds the option of a scrolling screenshot of the app window, once its scrollable areas are known. It shows the
+  // app window until the screenshot starts. Returns false if there is no such window among the options.
+  bool OfferScroll(std::vector<RECT> areas);
+  const std::vector<RECT>& scroll_areas() const { return scroll_areas_; }
+  HWND app() const { return app_; }
+
+  // A scrolling screenshot growing in place of the selected scroll option: started, extended, and then kept as
+  // the option's picture or dropped along with the option.
+  bool BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& now);
+  void DrawLong(const ScrollUpdate& update);
+  void KeepLong(const ScrollUpdate& update);
+  void DropLong(const TimeBase& now);
+  float long_height() const;  // Of the scrolling screenshot's view, or 0 without one.
+  RECT long_rect() const { return RECT{0, 0, long_size_.cx, long_size_.cy}; }
 
   void SetSwipe(float offset, float progress);
   void SnapBack(const TimeBase& now, float velocity);
@@ -95,11 +115,11 @@ class Card {
   const std::vector<Region>& regions() const { return regions_; }
   const TaskbarInsets& insets() const { return insets_; }
   int selected() const { return selected_; }
-  const RECT& selected_rect() const { return regions_[selected_].rect; }
   IDCompositionSurface* frost() const { return frost_.Get(); }
 
   double expiry = 0.0;
   bool floating = false;  // Its sprite is still flying home, so the card can be neither grabbed nor dismissed.
+  bool busy = false;      // A scrolling screenshot is recording or showing its outcome, which holds the card in place.
 
  private:
   struct CrispLayer {
@@ -109,6 +129,23 @@ class Card {
     double retire_at = 0.0;
   };
 
+  // A scrolling screenshot's thumbnail: rows on a tall sparse surface, numbered as in recorder.h, and the part on show.
+  struct Long {
+    RECT area{};  // Monitor pixels of the scrolled area.
+    int thumb_width = 0;
+    double scale = 1.0;  // Thumbnail pixels per screen pixel.
+    int content_top = 0;
+    int content_bottom = 0;
+    int view_top = 0;
+    int view_bottom = 0;
+    int max_rows = 0;
+    ComPtr<IDCompositionVirtualSurface> surface;
+    Image pixels;  // The finished view in memory, kept for the moment the card is lifted.
+  };
+
+  int CrispIndex(int index) const;  // The scroll option borrows the app window's thumbnail.
+  bool ShowsLong(int index) const;
+  void SetLongView(int content_top, int content_bottom, int view_bottom);
   void BuildCaches(const Image& frame, bool with_base);
   void ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec);
   void BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip);
@@ -154,6 +191,14 @@ class Card {
   AnimFloat plane_x_, plane_y_, plane_sx_, plane_sy_;
   AnimFloat opacity_, slide_, ring_alpha_, base_alpha_;
   AnimFloat shadow_alpha_, shadow_edge_w_, shadow_edge_h_;
+
+  HWND app_ = nullptr;
+  RECT app_rect_{};
+  std::vector<RECT> scroll_areas_;
+  int scroll_source_ = -1;
+  int before_scroll_ = 0;  // The selection to go back to if the scrolling screenshot fails.
+  Long long_;
+  SIZE long_size_{};
 
   float shadow_reach_ = 0.0f;
   bool hibernating_ = false;

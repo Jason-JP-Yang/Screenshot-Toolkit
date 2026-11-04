@@ -159,20 +159,28 @@ void Store::ReleaseCodec() {
   saved_.wait(lock, [&] { return !codec_release_requested_ || stopping_; });
 }
 
-void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region) {
+void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long) {
   {
     std::lock_guard lock(mutex_);
     shot->region = region;
+    shot->region_in_long = in_long;
     ++shot->requested_version;
     if (std::find(pending_saves_.begin(), pending_saves_.end(), shot) == pending_saves_.end()) {
       pending_saves_.push_back(shot);
     }
     pending_clipboard_ = shot;
     pending_clipboard_region_ = region;
+    pending_clipboard_in_long_ = in_long;
     clipboard_shot_ = shot.get();
     clipboard_sequence_.fetch_add(1, std::memory_order_relaxed);
   }
   wake_.notify_all();
+}
+
+void Store::SetLongFrame(const std::shared_ptr<Shot>& shot, std::shared_ptr<const Image> image) {
+  std::lock_guard lock(mutex_);
+  shot->long_frame = std::move(image);
+  shot->long_archive.clear();
 }
 
 bool Store::Discard(const std::shared_ptr<Shot>& shot) {
@@ -207,20 +215,22 @@ bool Store::IsIdle() {
   return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr && pending_discards_.empty();
 }
 
-std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot) {
+std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot, bool in_long) {
   {
     std::lock_guard lock(mutex_);
-    if (shot->frame) return shot->frame;
+    const std::shared_ptr<const Image>& raw = in_long ? shot->long_frame : shot->frame;
+    if (raw) return raw;
   }
-  if (work_frame_shot_ != shot.get()) {
-    work_frame_ = DecodeArchive(shot->archive);
+  if (work_frame_shot_ != shot.get() || work_frame_in_long_ != in_long) {
+    work_frame_ = DecodeArchive(in_long ? shot->long_archive : shot->archive);
     work_frame_shot_ = shot.get();
+    work_frame_in_long_ = in_long;
   }
   return work_frame_;
 }
 
-void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, uint64_t sequence) {
-  std::shared_ptr<const Image> frame = FrameForWork(shot);
+void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence) {
+  std::shared_ptr<const Image> frame = FrameForWork(shot, in_long);
   if (!frame) return;
   HGLOBAL dib = BuildDib(*frame, region);
   if (dib == nullptr) return;
@@ -229,7 +239,7 @@ void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& regi
   }
 }
 
-bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_pointer, const RECT& region) {
+bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_pointer, const RECT& region, bool in_long) {
   if (shot.path.empty()) shot.path = AllocateFilePath(shot.local_time);
   if (shot.path.empty()) {
     Trace("save: no gallery path");
@@ -299,7 +309,8 @@ bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_poi
       std::vector<uint8_t> archive(first, first + static_cast<size_t>(stat.cbSize.QuadPart));
       GlobalUnlock(memory);
       std::lock_guard lock(mutex_);
-      if (shot.archive.empty()) shot.archive = std::move(archive);
+      std::vector<uint8_t>& kept = in_long ? shot.long_archive : shot.archive;
+      if (kept.empty()) kept = std::move(archive);
     }
   }
   return true;
@@ -336,11 +347,12 @@ std::shared_ptr<const Image> Store::DecodeArchive(const std::vector<uint8_t>& ar
 
 bool Store::ReleaseFrame(const std::shared_ptr<Shot>& shot) {
   std::lock_guard lock(mutex_);
-  if (!shot->frame) return true;
-  if (shot->archive.empty() || shot->saved_version < shot->requested_version) return false;
+  if (!shot->frame && !shot->long_frame) return true;
+  if (shot->saved_version < shot->requested_version) return false;
   if (pending_clipboard_ == shot || active_shot_ == shot.get()) return false;
-  shot->frame.reset();
-  return true;
+  if (!shot->archive.empty()) shot->frame.reset();
+  if (!shot->long_archive.empty()) shot->long_frame.reset();
+  return !shot->frame && !shot->long_frame;
 }
 
 std::shared_ptr<const Image> Store::AcquireFrame(const std::shared_ptr<Shot>& shot) {
@@ -408,9 +420,10 @@ void Store::WorkerMain() {
       pending_clipboard_ = nullptr;
       active_shot_ = shot.get();
       const RECT region = pending_clipboard_region_;
+      const bool in_long = pending_clipboard_in_long_;
       const uint64_t sequence = clipboard_sequence_.load(std::memory_order_relaxed);
       lock.unlock();
-      PrepareClipboard(shot, region, sequence);
+      PrepareClipboard(shot, region, in_long, sequence);
       shot.reset();
       lock.lock();
       continue;
@@ -437,11 +450,12 @@ void Store::WorkerMain() {
       pending_saves_.erase(pending_saves_.begin());
       active_shot_ = shot.get();
       const RECT region = shot->region;
+      const bool in_long = shot->region_in_long;
       const uint64_t version = shot->requested_version;
       lock.unlock();
       const double started = NowSeconds();
-      std::shared_ptr<const Image> frame = FrameForWork(shot);
-      const bool saved = frame != nullptr && SaveToDisk(*shot, frame, region);
+      std::shared_ptr<const Image> frame = FrameForWork(shot, in_long);
+      const bool saved = frame != nullptr && SaveToDisk(*shot, frame, region, in_long);
       Trace("save: %s in %.1f ms", saved ? "ok" : "FAILED", (NowSeconds() - started) * 1000.0);
       frame.reset();
       lock.lock();

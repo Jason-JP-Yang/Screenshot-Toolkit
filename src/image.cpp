@@ -68,16 +68,27 @@ void WriteCoverage(uint8_t* out, uint32_t color, float coverage) {
   out[3] = ToByte(coverage * 255.0f);
 }
 
-// A shape on clear pixels. The callback gets icon units and returns coverage, given how many pixels one unit is.
+// A shape on clear pixels. The callback gets pixel centers and returns coverage.
 template <typename Shape>
-Image RenderIcon(int size, float scale, uint32_t color, Shape shape) {
-  Image image = Image::Allocate(size, size);
+Image RenderShape(int width, int height, uint32_t color, Shape shape) {
+  Image image = Image::Allocate(width, height);
   if (!image) return image;
   uint8_t* out = image.data();
-  for (int y = 0; y < size; ++y) {
-    for (int x = 0; x < size; ++x, out += 4) WriteCoverage(out, color, shape((x + 0.5f) / scale, (y + 0.5f) / scale));
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x, out += 4) WriteCoverage(out, color, shape(x + 0.5f, y + 0.5f));
   }
   return image;
+}
+
+// As RenderShape, on a square, with the callback in icon units given how many pixels one unit is.
+template <typename Shape>
+Image RenderIcon(int size, float scale, uint32_t color, Shape shape) {
+  return RenderShape(size, size, color, [&](float x, float y) { return shape(x / scale, y / scale); });
+}
+
+// The ring of a rounded box, `stroke` wide, drawn inside its edge.
+float Outline(float px, float py, float cx, float cy, float half_w, float half_h, float radius, float stroke) {
+  return Coverage(std::fabs(RoundedBoxDistance(px, py, cx, cy, half_w, half_h, radius) + stroke * 0.5f) - stroke * 0.5f);
 }
 
 }  // namespace
@@ -202,14 +213,14 @@ Image CopyRect(const Image& source, int left, int top, int width, int height) {
   return result;
 }
 
-Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height) {
+Image ResampleArea(const PixelView& source, double left, double top, double right, double bottom, int width, int height) {
   Image result = Image::Allocate(width, height);
   if (!result) return result;
 
-  left = std::clamp(left, 0.0, static_cast<double>(source.width()));
-  right = std::clamp(right, left, static_cast<double>(source.width()));
-  top = std::clamp(top, 0.0, static_cast<double>(source.height()));
-  bottom = std::clamp(bottom, top, static_cast<double>(source.height()));
+  left = std::clamp(left, 0.0, static_cast<double>(source.width));
+  right = std::clamp(right, left, static_cast<double>(source.width));
+  top = std::clamp(top, 0.0, static_cast<double>(source.height));
+  bottom = std::clamp(bottom, top, static_cast<double>(source.height));
 
   struct Span {
     int first;
@@ -237,7 +248,7 @@ Image ResampleArea(const Image& source, double left, double top, double right, d
   std::vector<Span> columns(width);
   std::vector<float> column_norm(width);
   for (int x = 0; x < width; ++x) {
-    columns[x] = make_span(left + x * step_x, left + (x + 1) * step_x, source.width());
+    columns[x] = make_span(left + x * step_x, left + (x + 1) * step_x, source.width);
     const Span& span = columns[x];
     column_norm[x] = span.first == span.last ? span.first_weight
                                              : span.first_weight + span.last_weight + (span.last - span.first - 1);
@@ -247,7 +258,7 @@ Image ResampleArea(const Image& source, double left, double top, double right, d
   const __m128i zero = _mm_setzero_si128();
 
   for (int y = 0; y < height; ++y) {
-    const Span rows = make_span(top + y * step_y, top + (y + 1) * step_y, source.height());
+    const Span rows = make_span(top + y * step_y, top + (y + 1) * step_y, source.height);
     std::fill(accumulator.begin(), accumulator.end(), 0.0f);
     float row_norm = 0.0f;
 
@@ -258,7 +269,7 @@ Image ResampleArea(const Image& source, double left, double top, double right, d
       if (row_weight <= 0.0f) continue;
       row_norm += row_weight;
 
-      const uint32_t* pixels = reinterpret_cast<const uint32_t*>(source.data() + static_cast<ptrdiff_t>(sy) * source.stride());
+      const uint32_t* pixels = reinterpret_cast<const uint32_t*>(source.data + static_cast<ptrdiff_t>(sy) * source.stride);
       float* acc = accumulator.data();
       for (int x = 0; x < width; ++x, acc += 4) {
         const Span& span = columns[x];
@@ -333,77 +344,114 @@ Image RenderShadow(int box_width, int box_height, float radius, float pad, const
   return shadow;
 }
 
-Image RenderGlyphStrip(const std::vector<GlyphSpec>& glyphs, int pitch, int height, float scale, uint32_t color_bgr,
-                       float color_alpha) {
-  const int width = std::max<int>(pitch * static_cast<int>(glyphs.size()), 1);
-  Image strip = Image::Allocate(width, height);
-  if (!strip) return strip;
-
-  const float color[3] = {static_cast<float>(color_bgr & 0xFF), static_cast<float>((color_bgr >> 8) & 0xFF),
-                          static_cast<float>((color_bgr >> 16) & 0xFF)};
+Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, uint32_t color, float color_alpha) {
   const float stroke = 1.1f * scale;
   const float corner = 2.8f * scale;
+
+  if (glyph.scroll) {
+    // A page with an arrow running down it, at the weight of the screens beside it.
+    const float page_w = std::round(11.0f * scale);
+    const float page_h = std::round(14.0f * scale);
+    const float cx = std::round((width - page_w) * 0.5f) + page_w * 0.5f;
+    const float cy = std::round((height - page_h) * 0.5f) + page_h * 0.5f;
+    return RenderShape(width, height, color, [&](float px, float py) {
+      const float ux = (px - cx) / scale;
+      const float uy = (py - cy) / scale;
+      const float arrow = std::min({SegmentDistance(ux, uy, 0.0f, -3.6f, 0.0f, 3.0f), SegmentDistance(ux, uy, -2.5f, 0.6f, 0.0f, 3.1f),
+                                    SegmentDistance(ux, uy, 2.5f, 0.6f, 0.0f, 3.1f)});
+      const float page = Outline(px, py, cx, cy, page_w * 0.5f, page_h * 0.5f, corner, stroke);
+      return std::max(page, Coverage((arrow - 0.58f) * scale)) * color_alpha;
+    });
+  }
+
+  float screen_w = 20.0f * scale;
+  float screen_h = screen_w / glyph.screen_aspect;
+  if (screen_h > 15.0f * scale) {
+    screen_h = 15.0f * scale;
+    screen_w = screen_h * glyph.screen_aspect;
+  }
+  // Snap the outline to whole pixels so that the strokes stay crisp at any display scale.
+  const float origin_x = std::round((width - screen_w) * 0.5f);
+  const float origin_y = std::round((height - screen_h) * 0.5f);
+  screen_w = std::round(screen_w);
+  screen_h = std::round(screen_h);
+  const float cx = origin_x + screen_w * 0.5f;
+  const float cy = origin_y + screen_h * 0.5f;
+
   const float gutter = 2.1f * scale;
-  const float fill_corner = 1.0f * scale;
   const float minimum_fill = 2.2f * scale;
   const float taskbar_gap = std::round(2.6f * scale);
-
-  for (size_t index = 0; index < glyphs.size(); ++index) {
-    const GlyphSpec& glyph = glyphs[index];
-    float screen_w = 20.0f * scale;
-    float screen_h = screen_w / glyph.screen_aspect;
-    if (screen_h > 15.0f * scale) {
-      screen_h = 15.0f * scale;
-      screen_w = screen_h * glyph.screen_aspect;
-    }
-
-    // Snap the outline to whole pixels so that the strokes stay crisp at any display scale.
-    const float origin_x = std::round(pitch * static_cast<float>(index) + (pitch - screen_w) * 0.5f);
-    const float origin_y = std::round((height - screen_h) * 0.5f);
-    screen_w = std::round(screen_w);
-    screen_h = std::round(screen_h);
-    const float cx = origin_x + screen_w * 0.5f;
-    const float cy = origin_y + screen_h * 0.5f;
-
-    const float inner_x = origin_x + gutter;
-    const float inner_y = origin_y + gutter;
-    const float inner_w = screen_w - gutter * 2.0f;
-    const float inner_h = screen_h - gutter * 2.0f;
-    float fill_l = std::round(inner_x + glyph.left * inner_w);
-    float fill_r = std::round(inner_x + glyph.right * inner_w);
-    float fill_t = std::round(inner_y + glyph.top * inner_h);
-    float fill_b = std::round(inner_y + glyph.bottom * inner_h);
-    // At this size the real taskbar is a sliver, so its absence is drawn as a clear gap along its edge.
-    switch (glyph.gap) {
-      case GlyphGap::kLeft: fill_l = std::round(inner_x) + taskbar_gap; break;
-      case GlyphGap::kTop: fill_t = std::round(inner_y) + taskbar_gap; break;
-      case GlyphGap::kRight: fill_r = std::round(inner_x + inner_w) - taskbar_gap; break;
-      case GlyphGap::kBottom: fill_b = std::round(inner_y + inner_h) - taskbar_gap; break;
-      case GlyphGap::kNone: break;
-    }
-    if (fill_r - fill_l < minimum_fill) fill_r = fill_l + minimum_fill;
-    if (fill_b - fill_t < minimum_fill) fill_b = fill_t + minimum_fill;
-    const float fill_cx = (fill_l + fill_r) * 0.5f;
-    const float fill_cy = (fill_t + fill_b) * 0.5f;
-    const float fill_hw = (fill_r - fill_l) * 0.5f;
-    const float fill_hh = (fill_b - fill_t) * 0.5f;
-
-    const int start_x = pitch * static_cast<int>(index);
-    for (int y = 0; y < height; ++y) {
-      uint8_t* out = strip.data() + static_cast<ptrdiff_t>(y) * strip.stride() + static_cast<ptrdiff_t>(start_x) * 4;
-      for (int x = start_x; x < start_x + pitch; ++x, out += 4) {
-        const float px = x + 0.5f;
-        const float py = y + 0.5f;
-        const float box = RoundedBoxDistance(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner);
-        const float outline = Coverage(std::fabs(box + stroke * 0.5f) - stroke * 0.5f);
-        const float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
-        const float alpha = std::max(outline, fill) * color_alpha;
-        for (int c = 0; c < 3; ++c) out[c] = ToByte(color[c] * alpha);
-        out[3] = ToByte(alpha * 255.0f);
-      }
-    }
+  const float inner_x = origin_x + gutter;
+  const float inner_y = origin_y + gutter;
+  const float inner_w = screen_w - gutter * 2.0f;
+  const float inner_h = screen_h - gutter * 2.0f;
+  float fill_l = std::round(inner_x + glyph.left * inner_w);
+  float fill_r = std::round(inner_x + glyph.right * inner_w);
+  float fill_t = std::round(inner_y + glyph.top * inner_h);
+  float fill_b = std::round(inner_y + glyph.bottom * inner_h);
+  // At this size the real taskbar is a sliver, so its absence is drawn as a clear gap along its edge.
+  switch (glyph.gap) {
+    case GlyphGap::kLeft: fill_l = std::round(inner_x) + taskbar_gap; break;
+    case GlyphGap::kTop: fill_t = std::round(inner_y) + taskbar_gap; break;
+    case GlyphGap::kRight: fill_r = std::round(inner_x + inner_w) - taskbar_gap; break;
+    case GlyphGap::kBottom: fill_b = std::round(inner_y + inner_h) - taskbar_gap; break;
+    case GlyphGap::kNone: break;
   }
-  return strip;
+  if (fill_r - fill_l < minimum_fill) fill_r = fill_l + minimum_fill;
+  if (fill_b - fill_t < minimum_fill) fill_b = fill_t + minimum_fill;
+  const float fill_cx = (fill_l + fill_r) * 0.5f;
+  const float fill_cy = (fill_t + fill_b) * 0.5f;
+  const float fill_hw = (fill_r - fill_l) * 0.5f;
+  const float fill_hh = (fill_b - fill_t) * 0.5f;
+  const float fill_corner = 1.0f * scale;
+  return RenderShape(width, height, color, [&](float px, float py) {
+    const float outline = Outline(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner, stroke);
+    const float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
+    return std::max(outline, fill) * color_alpha;
+  });
+}
+
+Image RenderKeycap(Keycap key, int height, float scale, uint32_t color) {
+  const int width = static_cast<int>(std::round(height * 17.0f / 15.0f));
+  const float cx = width * 0.5f;
+  const float cy = height * 0.5f;
+  const float stroke = std::max(scale, 1.0f);
+  return RenderShape(width, height, color, [&](float px, float py) {
+    const float cap = Outline(px, py, cx, cy, width * 0.5f, height * 0.5f, 3.4f * scale, stroke);
+    const float ux = (px - cx) / scale;
+    const float uy = (py - cy) / scale;
+    float symbol;
+    if (key == Keycap::kWindows) {
+      float pane = 1e9f;
+      for (const float sx : {-1.88f, 1.88f}) {
+        for (const float sy : {-1.88f, 1.88f}) pane = std::min(pane, RoundedBoxDistance(ux, uy, sx, sy, 1.45f, 1.45f, 0.35f));
+      }
+      symbol = Coverage(pane * scale);
+    } else {
+      const float arrow = std::min({SegmentDistance(ux, uy, 2.8f, -2.6f, 2.8f, 1.1f), SegmentDistance(ux, uy, 2.8f, 1.1f, -2.9f, 1.1f),
+                                    SegmentDistance(ux, uy, -2.9f, 1.1f, -0.9f, -0.9f), SegmentDistance(ux, uy, -2.9f, 1.1f, -0.9f, 3.1f)});
+      symbol = Coverage((arrow - 0.52f) * scale);
+    }
+    return std::max(cap, symbol);
+  });
+}
+
+Image RenderStatusIcon(StatusIcon icon, int size, float scale, uint32_t color) {
+  const float center = size * 0.5f;
+  return RenderShape(size, size, color, [&](float px, float py) {
+    const float ux = (px - center) / scale;
+    const float uy = (py - center) / scale;
+    float distance;
+    if (icon == StatusIcon::kCheck) {
+      distance = std::min(SegmentDistance(ux, uy, -4.3f, 0.2f, -1.4f, 3.1f), SegmentDistance(ux, uy, -1.4f, 3.1f, 4.3f, -3.2f)) - 0.85f;
+    } else if (icon == StatusIcon::kCross) {
+      distance = std::min(SegmentDistance(ux, uy, -3.5f, -3.5f, 3.5f, 3.5f), SegmentDistance(ux, uy, -3.5f, 3.5f, 3.5f, -3.5f)) - 0.85f;
+    } else {
+      const float dot = std::sqrt(ux * ux + (uy - 4.0f) * (uy - 4.0f)) - 1.1f;
+      distance = std::min(SegmentDistance(ux, uy, 0.0f, -4.6f, 0.0f, 1.0f) - 0.92f, dot);
+    }
+    return Coverage(distance * scale);
+  });
 }
 
 Image RenderSprite(const Image& thumbnail, float radius, float border, uint32_t border_color, int margin) {
@@ -493,12 +541,13 @@ Image RenderBinLid(int size, float scale, uint32_t color) {
   });
 }
 
-Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) {
+TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
   // Drawn large and reduced, which gives even, unhinted edges at any display scale.
   constexpr int kOversample = 6;
-  Image label;
+  TextLine line;
+  Image& label = line.image;
   HDC dc = CreateCompatibleDC(nullptr);
-  if (dc == nullptr) return label;
+  if (dc == nullptr) return line;
   HFONT font = nullptr;
   HGDIOBJ previous_font = nullptr;
   for (const wchar_t* face : config::kLabelFaces) {
@@ -514,7 +563,18 @@ Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) {
   }
   if (font == nullptr) {
     DeleteDC(dc);
-    return label;
+    return line;
+  }
+  TEXTMETRICW metrics{};
+  GetTextMetricsW(dc, &metrics);
+  line.baseline = static_cast<float>(metrics.tmAscent) / kOversample;
+  line.cap_height = font_pixels * 0.7f;
+  if (const UINT size = GetOutlineTextMetricsW(dc, 0, nullptr); size >= sizeof(OUTLINETEXTMETRICW)) {
+    std::vector<uint8_t> buffer(size);
+    auto* outline = reinterpret_cast<OUTLINETEXTMETRICW*>(buffer.data());
+    if (GetOutlineTextMetricsW(dc, size, outline) != 0 && outline->otmsCapEmHeight > 0) {
+      line.cap_height = static_cast<float>(outline->otmsCapEmHeight) / kOversample;
+    }
   }
   const int length = lstrlenW(text);
   SIZE extent{};
@@ -560,7 +620,7 @@ Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) {
   SelectObject(dc, previous_font);
   DeleteObject(font);
   DeleteDC(dc);
-  return label;
+  return line;
 }
 
 RECT InkBounds(const Image& image) {

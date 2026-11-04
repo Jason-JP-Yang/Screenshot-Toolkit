@@ -30,6 +30,14 @@ inline constexpr uint32_t kGlyphOnPorcelain = 0x16171A;
 inline constexpr uint32_t kHoverVeilColor = 0xFFFFFF;
 inline constexpr float kHoverVeilAlpha = 0.10f;
 
+// The outcome of a scrolling screenshot, filling the selector for a moment, and the ink on it.
+inline constexpr uint32_t kScrollSucceeded = 0x1C7C43;
+inline constexpr uint32_t kScrollPartial = 0x0D4527;
+inline constexpr uint32_t kScrollFailed = 0x8E1519;
+inline constexpr uint32_t kStatusInk = 0xFFFFFF;
+inline constexpr float kStatusInkAlpha = 0.94f;
+inline constexpr float kFinishHintAlpha = 0.58f;
+
 // The hairline around the selector and the rubbish bin.
 inline constexpr uint32_t kCapsuleHairlineColor = 0xFFFFFF;
 inline constexpr float kCapsuleHairlineAlpha = 0.14f;

@@ -34,6 +34,12 @@ class Compositor {
   // Uploads pixels into a new composition surface. Returns null on failure.
   ComPtr<IDCompositionSurface> CreateSurface(const Image& image, bool opaque);
 
+  // A sparse surface that only holds memory for the parts drawn into it, for a picture that keeps growing.
+  ComPtr<IDCompositionVirtualSurface> CreateVirtualSurface(int width, int height, bool opaque);
+
+  // Copies pixels into part of a surface, with their top-left corner at `at`.
+  bool Upload(IDCompositionSurface* surface, POINT at, const Image& image);
+
   // A shared 1x1 surface of a color that is stretched by the visual showing it. Colors are 0xAARRGGBB, straight alpha.
   IDCompositionSurface* SolidColor(uint32_t argb);
 
@@ -52,6 +58,9 @@ class Compositor {
   ComPtr<IDCompositionDevice> device_;
   std::unordered_map<uint32_t, ComPtr<IDCompositionSurface>> solid_colors_;
 };
+
+// Sets every corner radius of a rectangle clip, to a value or to an animation. Fits AnimFloat::Setter.
+void SetClipRadii(void* clip, float value, IDCompositionAnimation* animation);
 
 // Posts a message to the UI thread once per composed frame, for the moments when something on screen
 // follows the pointer. It samples nothing itself, and at most one message is ever waiting.

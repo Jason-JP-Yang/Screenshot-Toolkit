@@ -7,9 +7,11 @@
 namespace sstk {
 
 enum class HookMode {
-  kIdle,      // Only the capture keys.
-  kSelector,  // The selector chords step the region selector.
-  kDrag,      // The cancel key and button call off the drag, without reaching the application under the pointer.
+  kIdle,         // Only the capture keys.
+  kSelector,     // The selector chords step the region selector.
+  kScrollReady,  // As kSelector, and the scroll chord starts a scrolling screenshot.
+  kScrolling,    // The scroll and capture chords finish the scrolling screenshot, and wheel turns are reported.
+  kDrag,         // The cancel key and button call off the drag, without reaching the application under the pointer.
 };
 
 // Any mode but idle also hooks the mouse, which is why it is not left on: that hook wakes this process on every move.

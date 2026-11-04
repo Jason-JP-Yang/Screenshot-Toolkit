@@ -39,7 +39,7 @@ class Deck {
   bool ready() const { return window_ != nullptr; }
 
   void Flash();
-  void AddShot(std::unique_ptr<CaptureResult> capture);
+  uint64_t AddShot(std::unique_ptr<CaptureResult> capture);  // Returns the shot's id.
   void Tick();
   bool IsIdle() const;
   void Rest();
@@ -47,6 +47,14 @@ class Deck {
   // Whether the front card offers anything to switch to, and moves to its next option if it can.
   bool HasOptions() const;
   void StepRegion(int direction);
+
+  // Scrolling screenshots. The option appears once the shot's scrollable areas are known, and is ready while it is
+  // selected. Beginning fills in the request.
+  bool OfferScroll(uint64_t shot, std::vector<RECT>& areas);
+  bool ScrollReady() const;
+  bool BeginScroll(ScrollRequest& request);
+  void ScrollUpdated(const ScrollUpdate& update);
+  void EndScroll(const ScrollUpdate& update);
 
   LRESULT HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
@@ -79,13 +87,18 @@ class Deck {
 
   float Dip(float value) const { return value * scale_; }
   void ApplyInsets(const TaskbarInsets& insets);
-  RectF RectForRegion(const RECT& region) const;
+  RectF RectForSize(SIZE size) const;
   RectF RectBehind(const Card& card, const RectF& front, int depth) const;
   void Layout(const SpringSpec& front_spec, const TimeBase& now, double delay = 0.0, bool in_flight = false);
   void UpdateSink();
   void Dismiss(size_t index, const TimeBase& now, float velocity);
   void SelectRegion(int index);
+  void SubmitSelection(Card& card);
   void BindCapsuleToFront(const TimeBase& now);
+  void EndOutcome(const TimeBase& now);
+  void ExcludeWhileScrolling(bool exclude);
+  int LongMaxRows() const;
+  bool Holds(const Card* card) const;
   POINT StagePoint(LPARAM lparam) const;
   Card* front() const { return cards_.empty() ? nullptr : cards_.back().get(); }
 
@@ -138,6 +151,9 @@ class Deck {
   bool bin_showing_ = false;
   bool bin_over_ = false;
 
+  Card* scroll_card_ = nullptr;  // Recording or showing its outcome.
+  double outcome_until_ = 0.0;
+
   bool hovering_ = false;
   bool tracking_leave_ = false;
   Press press_ = Press::kNone;
@@ -176,6 +192,14 @@ void RegisterClasses() {
 
 void ExcludeFromCapture(HWND window) {
   if (!OverlayVisibleToCapture()) SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE);
+}
+
+// Takes a screenshot the way the capture keys do.
+void SignalCapture() {
+  HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, kTriggerEventName);
+  if (event == nullptr) return;
+  SetEvent(event);
+  CloseHandle(event);
 }
 
 }  // namespace
@@ -264,8 +288,7 @@ void Deck::ApplyInsets(const TaskbarInsets& insets) {
   }
 }
 
-RectF Deck::RectForRegion(const RECT& region) const {
-  const SIZE size = ThumbnailSize(region, scale_);
+RectF Deck::RectForSize(SIZE size) const {
   const float width = static_cast<float>(size.cx);
   const float height = static_cast<float>(size.cy);
   const float left = std::round(static_cast<float>(insets_.left) + Dip(config::kEdgeMargin));
@@ -275,7 +298,7 @@ RectF Deck::RectForRegion(const RECT& region) const {
 
 RectF Deck::RectBehind(const Card& card, const RectF& front, int depth) const {
   // Each card keeps the shape of its own selection. Only its place in the stack comes from the front card.
-  const RectF own = RectForRegion(card.selected_rect());
+  const RectF own = RectForSize(card.DisplaySize());
   const int level = std::min(depth, config::kDeckVisibleBehind + 1);
   const float keep = 1.0f - config::kDeckShrinkPerLevel * level;
   const float width = own.width() * keep;
@@ -291,7 +314,7 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
   Card* top = front();
   if (top == nullptr) return;
 
-  front_rect_ = RectForRegion(top->selected_rect());
+  front_rect_ = RectForSize(top->DisplaySize());
   const int count = static_cast<int>(cards_.size());
   for (int i = count - 1; i >= 0; --i) {
     const int depth = count - 1 - i;
@@ -303,8 +326,11 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
   }
 
   // The capsule is anchored to the tallest possible card, not the current one, so it does not
-  // move under the pointer when the selected region changes the thumbnail's shape.
-  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
+  // move under the pointer when the selected region changes the thumbnail's shape. A scrolling
+  // screenshot in sight raises that ceiling, as the capsule passes under the cards.
+  float tallest = Dip(config::kCardMaxHeight);
+  for (int i = std::max(count - 1 - config::kDeckVisibleBehind, 0); i < count; ++i) tallest = std::max(tallest, cards_[i]->long_height());
+  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - tallest;
   const int peeking = std::min(count - 1, config::kDeckVisibleBehind);
   const float capsule_y = std::round(box_top - Dip(config::kDeckPeek) * peeking - Dip(config::kCapsuleGap) - capsule_->height());
   capsule_->MoveTo(front_rect_.left, capsule_y, now);
@@ -314,17 +340,19 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
 void Deck::UpdateSink() {
   if (dragging_) return;
   Card* top = front();
-  if (top == nullptr) {
+  // While a scrolling screenshot runs, presses and wheel turns over the thumbnail go through to the app beneath it.
+  const bool card_input = top != nullptr && !top->busy;
+  if (top == nullptr || (!card_input && !capsule_->visible())) {
     ShowWindow(sink_, SW_HIDE);
     return;
   }
 
   RECT card{static_cast<LONG>(front_rect_.left), static_cast<LONG>(front_rect_.top),
             static_cast<LONG>(front_rect_.right), static_cast<LONG>(front_rect_.bottom)};
-  RECT bounding = card;
-  HRGN shape = CreateRectRgnIndirect(&card);
+  RECT bounding = card_input ? card : capsule_->Bounds();
+  HRGN shape = CreateRectRgnIndirect(&bounding);
 
-  if (capsule_->visible()) {
+  if (card_input && capsule_->visible()) {
     const RECT capsule = capsule_->Bounds();
     // The gap between the capsule and the card stays interactive, so crossing it keeps hover alive.
     RECT bridge{std::max(card.left, capsule.left), capsule.bottom, std::min(card.right, capsule.right), card.top};
@@ -355,11 +383,13 @@ void Deck::BindCapsuleToFront(const TimeBase& now) {
     capsule_->Hide(now);
     return;
   }
+  // The capsule tells the scrolling screenshot's story until it is over.
+  if (top->busy) return;
   top->Wake(store_);
   capsule_->Bind(top->regions(), top->insets(), top->selected(), top->frost(), now);
 }
 
-void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
+uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   const double started = NowSeconds();
   TimeBase now = compositor_.Now();
 
@@ -367,14 +397,21 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   if (Card* previous = front(); previous != nullptr && hovering_) {
     previous->expiry = std::max(previous->expiry, now.seconds + config::kDwellSeconds);
   }
+  // A scrolling screenshot's card gives way to the new one.
+  if (outcome_until_ != 0.0) {
+    EndOutcome(now);
+  } else if (scroll_card_ != nullptr) {
+    owner_.FinishScroll();
+  }
 
   auto shot = std::make_shared<Shot>();
   shot->frame = capture->frame;
   shot->local_time = capture->local_time;
+  shot->id = owner_.next_shot_id_++;
   store_.Submit(shot, capture->screen.regions.front().rect);
 
   ApplyInsets(capture->screen.insets);
-  const float capsule_full = capsule_->full_width();
+  const float capsule_full = capsule_->frost_width();
   const float left = static_cast<float>(insets_.left) + Dip(config::kEdgeMargin);
   const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
   const float frost_top = box_top - Dip(config::kCapsuleGap) - capsule_->height();
@@ -397,18 +434,20 @@ void Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   cards_.push_back(std::move(card));
 
   // The first frame only needs the full-resolution surface, so it is committed before anything else is prepared.
+  // The selector rises in a moment later, so drawing its labels after that frame costs it nothing.
   now = compositor_.Now();
   Layout(config::kFlight, now, config::kFlightHold, true);
-  BindCapsuleToFront(now);
-  UpdateSink();
   compositor_.Commit();
   const double committed = NowSeconds();
 
+  BindCapsuleToFront(now);
+  UpdateSink();
   raw->BuildDerivedAssets(now);
   compositor_.Commit();
   Trace("shot: trigger->commit %.1f ms (ui %.1f ms), derived %.1f ms, options %zu",
         (committed - capture->trigger_time) * 1000.0, (committed - started) * 1000.0, (NowSeconds() - committed) * 1000.0,
         capture->screen.regions.size());
+  return shot->id;
 }
 
 void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
@@ -432,18 +471,28 @@ void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
 
 void Deck::SelectRegion(int index) {
   Card* top = front();
-  if (top == nullptr || index == top->selected() || !top->CanSelect(index)) return;
+  if (top == nullptr || top->busy || index == top->selected() || !top->CanSelect(index)) return;
 
   // A selection belongs to one screenshot, so the cards behind it stay exactly where they are.
   const TimeBase now = compositor_.Now();
   top->Select(index, now);
   top->expiry = now.seconds + config::kDwellSeconds;
   capsule_->Select(index, now);
-  front_rect_ = RectForRegion(top->selected_rect());
+  front_rect_ = RectForSize(top->DisplaySize());
   top->MoveTo(front_rect_, 0, config::kMorph, now, 0.0, false);
   UpdateSink();
   compositor_.Commit();
-  store_.Submit(top->shot(), top->selected_rect());
+  SubmitSelection(*top);
+  owner_.SyncHookMode();
+}
+
+void Deck::SubmitSelection(Card& card) {
+  const Region& region = card.regions()[card.selected()];
+  if (region.kind == RegionKind::kLong) {
+    store_.Submit(card.shot(), card.long_rect(), true);
+  } else {
+    store_.Submit(card.shot(), region.rect);
+  }
 }
 
 bool Deck::HasOptions() const {
@@ -451,9 +500,119 @@ bool Deck::HasOptions() const {
   return top != nullptr && top->regions().size() >= 2;
 }
 
+bool Deck::Holds(const Card* card) const {
+  return std::any_of(cards_.begin(), cards_.end(), [&](const auto& each) { return each.get() == card; });
+}
+
+bool Deck::OfferScroll(uint64_t shot, std::vector<RECT>& areas) {
+  const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& card) { return card->shot()->id == shot; });
+  if (found == cards_.end()) return false;
+  Card* card = found->get();
+  if (card->OfferScroll(std::move(areas)) && card == front() && !card->busy) {
+    const TimeBase now = compositor_.Now();
+    BindCapsuleToFront(now);
+    UpdateSink();
+    compositor_.Commit();
+  }
+  return true;
+}
+
+bool Deck::ScrollReady() const {
+  const Card* top = front();
+  return top != nullptr && !top->busy && !top->floating && !dragging_ && press_ == Press::kNone &&
+         top->regions()[top->selected()].kind == RegionKind::kScroll;
+}
+
+bool Deck::BeginScroll(ScrollRequest& request) {
+  if (!ScrollReady()) return false;
+  Card* top = front();
+  request.frame = store_.AcquireFrame(top->shot());
+  if (!request.frame) return false;
+  request.window = top->app();
+  request.monitor = bounds_;
+  request.areas = top->scroll_areas();
+  request.scale = scale_;
+
+  const TimeBase now = compositor_.Now();
+  top->busy = true;
+  scroll_card_ = top;
+  capsule_->ShowRecording(false, now);
+  ExcludeWhileScrolling(true);
+  UpdateSink();
+  compositor_.Commit();
+  return true;
+}
+
+void Deck::ScrollUpdated(const ScrollUpdate& update) {
+  Card* card = scroll_card_;
+  if (card == nullptr || card != front()) return;
+  const TimeBase now = compositor_.Now();
+  if (update.locked) {
+    if (!card->BeginLong(update, LongMaxRows(), now)) return;
+    capsule_->ShowRecording(true, now);
+  } else {
+    card->DrawLong(update);
+  }
+  Layout(config::kScrollFollow, now);
+  compositor_.Commit();
+}
+
+void Deck::EndScroll(const ScrollUpdate& update) {
+  ExcludeWhileScrolling(false);
+  Card* card = scroll_card_;
+  if (card == nullptr || !Holds(card)) {
+    scroll_card_ = nullptr;
+    return;
+  }
+  const TimeBase now = compositor_.Now();
+  if (update.outcome != ScrollOutcome::kFailed && update.image != nullptr) {
+    store_.SetLongFrame(card->shot(), update.image);
+    card->KeepLong(update);
+  } else {
+    card->DropLong(now);
+  }
+  SubmitSelection(*card);
+  if (card == front()) {
+    capsule_->ShowOutcome(update.outcome, now);
+    outcome_until_ = now.seconds + config::kScrollResultSeconds;
+    Layout(config::kMorph, now);
+  } else {
+    // A newer shot came to the front while this one was still recording.
+    card->busy = false;
+    card->expiry = now.seconds + config::kDwellSeconds;
+    scroll_card_ = nullptr;
+    Layout(config::kReflow, now);
+  }
+  compositor_.Commit();
+}
+
+// The outcome has had its moment, and the card goes back to being an ordinary screenshot.
+void Deck::EndOutcome(const TimeBase& now) {
+  outcome_until_ = 0.0;
+  if (scroll_card_ != nullptr && Holds(scroll_card_)) {
+    scroll_card_->busy = false;
+    scroll_card_->expiry = now.seconds + config::kDwellSeconds;
+  }
+  scroll_card_ = nullptr;
+}
+
+// Screenshots may be set to show the overlay, but a scrolling screenshot must never stitch in its own thumbnail.
+void Deck::ExcludeWhileScrolling(bool exclude) {
+  if (!OverlayVisibleToCapture()) return;
+  const DWORD affinity = exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+  SetWindowDisplayAffinity(window_, affinity);
+  SetWindowDisplayAffinity(sink_, affinity);
+}
+
+int Deck::LongMaxRows() const {
+  const float free = static_cast<float>(size_.cy - insets_.top - insets_.bottom);
+  const float tallest = std::min(Dip(config::kScrollCardMaxHeight), free * config::kScrollCardMaxShare);
+  return static_cast<int>(std::max(tallest, Dip(config::kCardMaxHeight)));
+}
+
 void Deck::StepRegion(int direction) {
   Card* top = front();
-  if (!HasOptions() || top->floating || press_ != Press::kNone) return;
+  if (!HasOptions() || top->floating || top->busy || press_ != Press::kNone) return;
   const int count = static_cast<int>(top->regions().size());
   for (int step = 1; step < count; ++step) {
     const int index = (top->selected() + direction * step + count) % count;
@@ -467,6 +626,13 @@ void Deck::StepRegion(int direction) {
 void Deck::Tick() {
   const TimeBase now = compositor_.Now();
 
+  if (outcome_until_ != 0.0 && now.seconds >= outcome_until_) {
+    EndOutcome(now);
+    BindCapsuleToFront(now);
+    UpdateSink();
+    owner_.SyncHookMode();
+  }
+
   // Checked in place from the back so that dismissing the front cannot invalidate older indices.
   const double elapsed = std::min(now.seconds - last_tick_, 0.25);
   last_tick_ = now.seconds;
@@ -476,7 +642,7 @@ void Deck::Tick() {
       card->expiry += elapsed;
       continue;
     }
-    const bool paused = card->floating || (hovering_ && card == front());
+    const bool paused = card->floating || card->busy || (hovering_ && card == front());
     if (!paused && now.seconds >= card->expiry) Dismiss(i, now, 0.0f);
   }
 
@@ -633,6 +799,8 @@ bool Deck::IsIdle() const {
 void Deck::Rest() {
   if (!shown_) return;
   shown_ = false;
+  scroll_card_ = nullptr;
+  outcome_until_ = 0.0;
   capsule_->Clear();
   if (bin_) bin_->Reset();
   bin_running_ = false;
@@ -693,16 +861,28 @@ void Deck::OnMouseMove(POINT point) {
   }
 
   if (press_ == Press::kNone) {
-    capsule_->SetHover(capsule_->HitTest(point.x, point.y), now);
+    const bool over_recording = capsule_->recording() && capsule_->Contains(point.x, point.y);
+    capsule_->SetHover(capsule_->recording() ? (over_recording ? 0 : -1) : capsule_->HitTest(point.x, point.y), now);
     compositor_.Commit();
   }
 }
 
 void Deck::OnButtonDown(POINT point) {
-  if (front() == nullptr || front()->floating) return;
+  Card* top = front();
+  if (top == nullptr || top->floating) return;
+  if (top->busy) {
+    // While recording, the capsule is one button that finishes. Nothing else takes a press.
+    if (capsule_->recording() && capsule_->Contains(point.x, point.y)) owner_.FinishScroll();
+    return;
+  }
   const int segment = capsule_->HitTest(point.x, point.y);
   Trace("sink: down at %ld,%ld segment %d", point.x, point.y, segment);
   if (segment >= 0) {
+    // Pressing the scrolling option again starts the scrolling screenshot it offers.
+    if (segment == top->selected() && top->regions()[segment].kind == RegionKind::kScroll) {
+      owner_.StartScroll(*this);
+      return;
+    }
     // Switching is reversible and costs nothing, so it happens on press rather than making the user wait for release.
     SelectRegion(segment);
     return;
@@ -773,7 +953,7 @@ void Deck::OpenFront() {
 
 void Deck::LiftFront() {
   press_ = Press::kNone;
-  if (front() == nullptr || front()->thumbnail() == nullptr) {
+  if (front() == nullptr || front()->thumbnail() == nullptr || owner_.scrolling()) {
     if (GetCapture() == sink_) ReleaseCapture();
     return;
   }
@@ -1144,6 +1324,8 @@ Overlay::Overlay(HWND controller, Compositor& compositor, Store& store)
 
 Overlay::~Overlay() {
   CancelDrags();
+  CancelScroll();
+  detector_.reset();
   file_drag_.reset();
   decks_.clear();
 }
@@ -1179,6 +1361,7 @@ void Overlay::OnFlash(HMONITOR monitor) {
   if (!compositor_.IsHealthy()) {
     // DWM restarted underneath us: every composition object is gone, so start over.
     CancelDrags();
+    CancelScroll();
     decks_.clear();
     compositor_.Shutdown();
     compositor_.Initialize();
@@ -1192,7 +1375,14 @@ void Overlay::OnFlash(HMONITOR monitor) {
 void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   if (!capture->frame || capture->screen.regions.empty()) return;
   if (Deck* deck = DeckFor(capture->screen.monitor); deck != nullptr) {
-    deck->AddShot(std::move(capture));
+    const HWND app = capture->screen.app;
+    const RECT bounds = capture->screen.bounds;
+    const uint64_t shot = deck->AddShot(std::move(capture));
+    // Looked for after the shot is on screen, so that a slow app never delays it.
+    if (app != nullptr) {
+      if (!detector_) detector_ = std::make_unique<ScrollDetector>(controller_);
+      detector_->Request(shot, app, bounds, deck->scale());
+    }
     EnsureTicking();
     SyncHookMode();
   }
@@ -1202,6 +1392,10 @@ void Overlay::SyncHookMode() {
   HookMode mode = HookMode::kIdle;
   if (session_) {
     mode = HookMode::kDrag;
+  } else if (recorder_) {
+    mode = HookMode::kScrolling;
+  } else if (std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->ScrollReady(); })) {
+    mode = HookMode::kScrollReady;
   } else if (std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->HasOptions(); })) {
     mode = HookMode::kSelector;
   }
@@ -1212,7 +1406,7 @@ void Overlay::SyncHookMode() {
 
 void Overlay::OnSelectorStep(int direction) {
   Trace("selector: step %d", direction);
-  if (session_) return;
+  if (session_ || recorder_) return;
   POINT cursor{};
   GetCursorPos(&cursor);
   const HMONITOR under = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
@@ -1221,6 +1415,76 @@ void Overlay::OnSelectorStep(int direction) {
     if (deck->HasOptions() && (chosen == nullptr || deck->monitor() == under)) chosen = deck.get();
   }
   if (chosen != nullptr) chosen->StepRegion(direction);
+}
+
+void Overlay::OnScrollAreas(std::unique_ptr<ScrollAreas> found) {
+  for (auto& deck : decks_) {
+    if (deck->OfferScroll(found->shot, found->areas)) break;
+  }
+  SyncHookMode();
+}
+
+void Overlay::OnScrollChord(bool from_capture) {
+  if (recorder_) {
+    Trace("scroll: finished by a chord");
+    recorder_->Finish();
+    return;
+  }
+  // A capture chord comes here only when a scrolling screenshot ended a moment before, and still takes a screenshot.
+  if (from_capture) {
+    SignalCapture();
+    return;
+  }
+  if (session_) return;
+  POINT cursor{};
+  GetCursorPos(&cursor);
+  const HMONITOR under = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+  Deck* chosen = nullptr;
+  for (auto& deck : decks_) {
+    if (deck->ScrollReady() && (chosen == nullptr || deck->monitor() == under)) chosen = deck.get();
+  }
+  if (chosen != nullptr) StartScroll(*chosen);
+}
+
+void Overlay::OnScrollWheel(POINT point) {
+  if (recorder_) recorder_->Wheel(point);
+}
+
+void Overlay::OnScrollUpdate(std::unique_ptr<ScrollUpdate> update) {
+  if (!recorder_ || scroll_deck_ == nullptr || update->session != scroll_session_) return;
+  Deck* deck = scroll_deck_;
+  if (!update->finished) {
+    deck->ScrollUpdated(*update);
+    return;
+  }
+  // Its thread has already ended, so this only joins it.
+  recorder_.reset();
+  scroll_deck_ = nullptr;
+  deck->EndScroll(*update);
+  SyncHookMode();
+}
+
+void Overlay::StartScroll(Deck& deck) {
+  if (recorder_ || session_) return;
+  ScrollRequest request;
+  if (!deck.BeginScroll(request)) return;
+  request.session = ++scroll_session_;
+  request.controller = controller_;
+  Trace("scroll: started over %zu areas", request.areas.size());
+  scroll_deck_ = &deck;
+  recorder_ = std::make_unique<ScrollRecorder>(std::move(request));
+  EnsureTicking();
+  SyncHookMode();
+}
+
+void Overlay::FinishScroll() {
+  if (recorder_) recorder_->Finish();
+}
+
+// Calls a scrolling screenshot off with nothing to show for it, as when the screens change under it along with the decks.
+void Overlay::CancelScroll() {
+  recorder_.reset();
+  scroll_deck_ = nullptr;
 }
 
 void Overlay::BeginDrag(Deck& deck, std::unique_ptr<Card> card, size_t index, POINT press, const TimeBase& now) {
@@ -1316,6 +1580,7 @@ void Overlay::OnTick() {
 
 void Overlay::OnDisplayChange() {
   CancelDrags();
+  CancelScroll();
   // Geometry is stale for every monitor, so everything on screen is dropped; files and clipboard are already safe.
   decks_.clear();
   SyncHookMode();

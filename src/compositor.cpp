@@ -69,9 +69,25 @@ ComPtr<IDCompositionSurface> Compositor::CreateSurface(const Image& image, bool 
                                     opaque ? DXGI_ALPHA_MODE_IGNORE : DXGI_ALPHA_MODE_PREMULTIPLIED, &surface))) {
     return nullptr;
   }
+  if (!Upload(surface.Get(), POINT{0, 0}, image)) return nullptr;
+  return surface;
+}
+
+ComPtr<IDCompositionVirtualSurface> Compositor::CreateVirtualSurface(int width, int height, bool opaque) {
+  ComPtr<IDCompositionVirtualSurface> surface;
+  if (FAILED(device_->CreateVirtualSurface(static_cast<UINT>(width), static_cast<UINT>(height), DXGI_FORMAT_B8G8R8A8_UNORM,
+                                           opaque ? DXGI_ALPHA_MODE_IGNORE : DXGI_ALPHA_MODE_PREMULTIPLIED, &surface))) {
+    return nullptr;
+  }
+  return surface;
+}
+
+bool Compositor::Upload(IDCompositionSurface* surface, POINT at, const Image& image) {
+  if (surface == nullptr || !image) return false;
+  const RECT area{at.x, at.y, at.x + image.width(), at.y + image.height()};
   ComPtr<ID3D11Texture2D> texture;
   POINT offset{};
-  if (FAILED(surface->BeginDraw(nullptr, IID_PPV_ARGS(&texture), &offset))) return nullptr;
+  if (FAILED(surface->BeginDraw(&area, IID_PPV_ARGS(&texture), &offset))) return false;
   const D3D11_BOX box{static_cast<UINT>(offset.x),
                       static_cast<UINT>(offset.y),
                       0,
@@ -81,7 +97,7 @@ ComPtr<IDCompositionSurface> Compositor::CreateSurface(const Image& image, bool 
   d3d_context_->UpdateSubresource(texture.Get(), 0, &box, image.data(), image.stride(), 0);
   texture.Reset();
   surface->EndDraw();
-  return surface;
+  return true;
 }
 
 IDCompositionSurface* Compositor::SolidColor(uint32_t argb) {
@@ -133,6 +149,29 @@ void Compositor::ReleaseUnusedMemory() {
   d3d_context_->Flush();
   ComPtr<IDXGIDevice3> dxgi;
   if (SUCCEEDED(d3d_device_.As(&dxgi))) dxgi->Trim();
+}
+
+void SetClipRadii(void* object, float value, IDCompositionAnimation* animation) {
+  auto* clip = static_cast<IDCompositionRectangleClip*>(object);
+  if (animation != nullptr) {
+    clip->SetTopLeftRadiusX(animation);
+    clip->SetTopLeftRadiusY(animation);
+    clip->SetTopRightRadiusX(animation);
+    clip->SetTopRightRadiusY(animation);
+    clip->SetBottomLeftRadiusX(animation);
+    clip->SetBottomLeftRadiusY(animation);
+    clip->SetBottomRightRadiusX(animation);
+    clip->SetBottomRightRadiusY(animation);
+  } else {
+    clip->SetTopLeftRadiusX(value);
+    clip->SetTopLeftRadiusY(value);
+    clip->SetTopRightRadiusX(value);
+    clip->SetTopRightRadiusY(value);
+    clip->SetBottomLeftRadiusX(value);
+    clip->SetBottomLeftRadiusY(value);
+    clip->SetBottomRightRadiusX(value);
+    clip->SetBottomRightRadiusY(value);
+  }
 }
 
 void FramePacer::Start(HWND target, UINT message) {

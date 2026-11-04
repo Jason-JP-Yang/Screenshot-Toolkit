@@ -33,6 +33,10 @@ inline constexpr DWORD kSelectorNextKey = VK_RIGHT;
 inline constexpr MouseButton kSelectorPreviousButton = MouseButton::kBack;
 inline constexpr MouseButton kSelectorNextButton = MouseButton::kForward;
 
+// Start a scrolling screenshot while its option is selected, and finish one. While one runs, the capture chords
+// finish it as well instead of taking a screenshot.
+inline constexpr Chord kScrollChord{VK_RETURN, {.win = true}};
+
 // Call off a drag. Active while a thumbnail is held, and takes no modifiers.
 inline constexpr DWORD kDragCancelKey = VK_ESCAPE;
 inline constexpr MouseButton kDragCancelButton = MouseButton::kRight;
