@@ -33,7 +33,9 @@ class FileDragThread {
 
   // Posts kMsgDragFeedback as the window under the pointer changes its mind, and one kMsgDragFinished at the end.
   void Begin(std::shared_ptr<Shot> shot, uint64_t id);
-  void Cancel() { cancel_.store(true, std::memory_order_relaxed); }
+
+  // Calls off the latest drag, waking the loop so that it lets go of the pointer now.
+  void Cancel();
 
  private:
   void Main();
@@ -47,8 +49,9 @@ class FileDragThread {
   std::mutex mutex_;
   std::shared_ptr<Shot> pending_;
   uint64_t pending_id_ = 0;
+  uint64_t latest_id_ = 0;
   bool stopping_ = false;
-  std::atomic<bool> cancel_{false};
+  std::atomic<uint64_t> cancelled_through_{0};
 };
 
 }  // namespace sstk

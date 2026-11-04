@@ -157,6 +157,12 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
     case kMsgDragFinished:
       app->overlay->OnDragFinished(std::unique_ptr<FileDragOutcome>(reinterpret_cast<FileDragOutcome*>(lparam)));
       return 0;
+    case kMsgDragCancel:
+      app->overlay->OnDragCancel();
+      return 0;
+    case kMsgSelectorStep:
+      app->overlay->OnSelectorStep(static_cast<int>(lparam));
+      return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {
         app->overlay->OnTick();
@@ -215,7 +221,7 @@ int RunApplication() {
   app.store.Warmup();
   ScheduleTrim(app);
 
-  std::thread hook_thread([quit] { RunKeyboardHook(quit); });
+  std::thread hook_thread([&app, quit] { RunKeyboardHook(app.controller, quit); });
   std::thread capture_thread([&app, trigger, quit] { RunCaptureLoop(app.controller, trigger, quit); });
   Trace("application ready");
 

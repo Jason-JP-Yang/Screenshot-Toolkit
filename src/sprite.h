@@ -1,11 +1,11 @@
-// The thumbnail in the air: a free-standing bitmap that follows the pointer. To go into the bin it is cut
-// into thin bands: its near edge stretches out to a narrow neck at the bin, then the whole card runs down
-// that funnel and through the neck. The same motion backward draws it out again.
+// The thumbnail in the air: a free-standing bitmap that follows the pointer. To go into the bin it becomes a fine
+// mesh, so that it can be drawn in from wherever it happens to be. Each point runs straight at the bin's mouth, and
+// the nearer ones leave first, which stretches the card out into a funnel. Lowering the pull plays the same motion
+// backward, and because the card keeps following the pointer, every moment of it depends on where the pointer is.
 #pragma once
 
 #include "compositor.h"
 
-#include <array>
 #include <vector>
 
 namespace sstk {
@@ -39,9 +39,7 @@ class DragSprite {
   float reach() const { return reach_; }
 
  private:
-  static constexpr int kBandCount = 28;
-
-  struct Band {
+  struct Cell {
     ComPtr<IDCompositionVisual> holder;
     ComPtr<IDCompositionEffectGroup> effect;
     ComPtr<IDCompositionMatrixTransform3D> transform;
@@ -57,8 +55,8 @@ class DragSprite {
     ComPtr<IDCompositionVisual> shadow;
     ComPtr<IDCompositionEffectGroup> shadow_effect;
     ComPtr<IDCompositionVisual> whole;
-    ComPtr<IDCompositionVisual> bands_root;
-    std::array<Band, kBandCount> bands;
+    ComPtr<IDCompositionVisual> mesh_root;
+    std::vector<Cell> cells;  // Built when first needed: most drags never come near the bin.
     ComPtr<IDCompositionVisual> badge;
     ComPtr<IDCompositionEffectGroup> badge_effect;
     RECT bounds{};
@@ -66,7 +64,8 @@ class DragSprite {
     bool bent = false;
   };
 
-  void ComputeBands(const D2D_MATRIX_3X2_F& rigid, const SpritePose& pose);
+  void BuildMesh(View& view);
+  void ComputeMesh(const D2D_MATRIX_3X2_F& rigid, const SpritePose& pose);
 
   Compositor& compositor_;
   std::vector<View> views_;
@@ -74,8 +73,11 @@ class DragSprite {
   ComPtr<IDCompositionSurface> shadow_surface_;
   ComPtr<IDCompositionSurface> badge_surface_;
   D2D_MATRIX_3X2_F shadow_local_{};
-  std::array<int, kBandCount + 1> band_edges_{};
-  std::array<D3DMATRIX, kBandCount> band_matrices_{};
+  int columns_ = 1;
+  int rows_ = 1;
+  std::vector<float> column_edges_;
+  std::vector<float> row_edges_;
+  std::vector<D3DMATRIX> cell_matrices_;
   float width_ = 0.0f;
   float height_ = 0.0f;
   float grab_x_ = 0.0f;

@@ -94,7 +94,7 @@ void AnimFloat::To(IDCompositionDevice* device, const TimeBase& now, float targe
   Sample(now.seconds, &value, &velocity);
   // Re-issuing the same destination must not restart a curve already heading there.
   if (std::fabs(target - target_) < 1e-3f) return;
-  Start(device, now, value, velocity, target, spec, delay);
+  Start(device, now, value, value, velocity, target, spec, delay);
 }
 
 void AnimFloat::To(IDCompositionDevice* device, const TimeBase& now, float target, const SpringSpec& spec, double delay,
@@ -102,10 +102,14 @@ void AnimFloat::To(IDCompositionDevice* device, const TimeBase& now, float targe
   float value;
   float velocity;
   Sample(now.seconds, &value, &velocity);
-  Start(device, now, value, initial_velocity, target, spec, delay);
+  Start(device, now, value, value, initial_velocity, target, spec, delay);
 }
 
-void AnimFloat::Start(IDCompositionDevice* device, const TimeBase& now, float start, float velocity, float target,
+void AnimFloat::Pulse(IDCompositionDevice* device, const TimeBase& now, float peak, double rise, const SpringSpec& fall) {
+  Start(device, now, ValueAt(now.seconds), peak, 0.0f, 0.0f, fall, rise);
+}
+
+void AnimFloat::Start(IDCompositionDevice* device, const TimeBase& now, float lead, float start, float velocity, float target,
                       const SpringSpec& spec, double delay) {
   target_ = target;
   displacement_ = start - target;
@@ -123,7 +127,11 @@ void AnimFloat::Start(IDCompositionDevice* device, const TimeBase& now, float st
       continue;
     }
     animation->SetAbsoluteBeginTime(now.ticks);
-    if (delay > 0.0) animation->AddCubic(0.0, start + sink.bias, 0.0f, 0.0f, 0.0f);
+    if (delay > 0.0) {
+      const double climb = start - lead;
+      animation->AddCubic(0.0, lead + sink.bias, 0.0f, static_cast<float>(3.0 * climb / (delay * delay)),
+                          static_cast<float>(-2.0 * climb / (delay * delay * delay)));
+    }
 
     // Hermite cubics over a schedule that packs segments into the fast early part of the curve.
     double t0 = 0.0;

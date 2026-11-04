@@ -23,6 +23,8 @@ enum Message : UINT {
   kMsgDragFrame,               // Sent once per composed frame while a thumbnail is in the air.
   kMsgDragFeedback,            // wParam: drag id, lParam: whether the window under the pointer accepts the drop.
   kMsgDragFinished,            // lParam: FileDragOutcome*, ownership moves to the receiver
+  kMsgDragCancel,              // The keyboard or right button called off the drag.
+  kMsgSelectorStep,            // lParam: -1 for the previous option, 1 for the next.
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

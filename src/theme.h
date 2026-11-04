@@ -51,32 +51,32 @@ inline constexpr float kDragLandingZone = 44.0f;
 inline constexpr float kDropVanishShrink = 0.20f;
 inline constexpr float kDropBadgeSize = 22.0f;
 
-// Rubbish bin.
-inline constexpr float kBinHeight = 44.0f;
+// Rubbish bin. The insets measure to what is visibly drawn, not to the bitmaps carrying it.
+inline constexpr float kBinHeight = 38.0f;
 inline constexpr float kBinMargin = 18.0f;
-inline constexpr float kBinIconSize = 24.0f;
+inline constexpr float kBinIconSize = 20.0f;
 inline constexpr float kBinFontSize = 14.0f;
-inline constexpr float kBinLabelStart = 40.0f;
-inline constexpr float kBinLabelEnd = 18.0f;
+inline constexpr float kBinTextGap = 7.5f;
+inline constexpr float kBinTextInset = 13.5f;
 inline constexpr float kBinNearDistance = 170.0f;
 inline constexpr float kBinNearHysteresis = 30.0f;
 inline constexpr float kBinHotMargin = 16.0f;
 inline constexpr float kBinHotMarginEngaged = 38.0f;
-inline constexpr float kBinGrowNear = 1.03f;
-inline constexpr float kBinGrowEngaged = 1.08f;
-inline constexpr float kBinMagnet = 0.035f;
-inline constexpr float kBinMagnetMax = 5.0f;
-inline constexpr float kBinLidNearDegrees = 8.0f;
-inline constexpr float kBinLidOpenDegrees = 34.0f;
-inline constexpr float kBinLidLift = 2.0f;
-inline constexpr float kBinHeldScale = 0.80f;
-inline constexpr float kBinDockGap = 36.0f;
+inline constexpr float kBinLidNearOpen = 0.34f;
+inline constexpr float kBinLidTiltDegrees = 40.0f;
+inline constexpr float kBinLidFullAimDegrees = 55.0f;
+inline constexpr float kBinMagnetFrom = 0.35f;
+inline constexpr float kBinMagnetPull = 0.22f;
+inline constexpr float kBinPullKick = 3.0f;
+inline constexpr float kBinPullKickPerSpeed = 0.0012f;  // Per DIP/s of pointer speed.
+inline constexpr float kBinPullKickMax = 6.0f;
 inline constexpr float kBinNeck = 12.0f;
 inline constexpr float kBinInsideAt = 0.85f;
-inline constexpr float kBinInsideImpulse = 1.1f;
-inline constexpr float kBinOutsideImpulse = -0.7f;
+inline constexpr float kBinInsideImpulse = 2.2f;
+inline constexpr float kBinOutsideImpulse = -1.6f;
+inline constexpr float kBinGulpImpulse = 3.4f;
 inline constexpr float kBinGulpAt = 0.90f;
-inline constexpr double kBinGulpHold = 0.24;
+inline constexpr double kBinGulpHold = 0.30;
 
 // Palette, 0xRRGGBB unless noted. Alpha is premultiplied when rendered.
 inline constexpr uint32_t kGlassTint = 0x16171A;
@@ -88,12 +88,12 @@ inline constexpr uint32_t kGlyphOnPorcelain = 0x16171A;
 inline constexpr float kCardBorderAlpha = 1.0f;
 inline constexpr float kCapsuleHairlineAlpha = 0.14f;
 inline constexpr float kHoverVeilAlpha = 0.10f;
-inline constexpr float kFlashPeak = 0.36f;
+inline constexpr float kFlashPeak = 0.26f;
 inline constexpr float kSwipeEndOpacity = 0.90f;
 inline constexpr float kExitOpacity = 0.86f;
 inline constexpr uint32_t kDropBlue = 0x0A84FF;
-inline constexpr uint32_t kBinRed = 0xC9352F;
-inline constexpr float kBinEngagedVeil = 0.08f;
+inline constexpr uint32_t kBinRed = 0x8E1519;
+inline constexpr uint32_t kBinRedOver = 0x9E181D;
 
 // Thumbnail shadow: a wide ambient layer and a tight contact layer. Shadows never fall on the taskbar.
 inline constexpr float kShadowAmbientSigma = 9.0f;
@@ -104,7 +104,8 @@ inline constexpr float kShadowContactAlpha = 0.14f;
 inline constexpr float kShadowContactOffset = 1.0f;
 
 // Motion.
-inline constexpr SpringSpec kFlash{0.18f, 1.0f};
+inline constexpr double kFlashRise = 0.06;
+inline constexpr SpringSpec kFlashFall{0.62f, 1.0f};
 inline constexpr SpringSpec kFlight{0.50f, 0.86f};
 inline constexpr SpringSpec kReflow{0.42f, 0.86f};
 inline constexpr SpringSpec kMorph{0.36f, 0.86f};
@@ -124,14 +125,13 @@ inline constexpr SpringSpec kDropVanish{0.30f, 1.0f};
 inline constexpr SpringSpec kDropBadgeIn{0.32f, 0.54f};
 inline constexpr SpringSpec kDropBadgeOut{0.15f, 1.0f};
 inline constexpr SpringSpec kFlyHome{0.52f, 0.80f};
-inline constexpr SpringSpec kBinPullIn{0.56f, 0.96f};
-inline constexpr SpringSpec kBinPullOut{0.48f, 0.84f};
+inline constexpr SpringSpec kBinPull{0.42f, 0.88f};
 inline constexpr SpringSpec kBinSwallow{0.30f, 1.0f};
-inline constexpr SpringSpec kBinDock{0.24f, 1.0f};
-inline constexpr SpringSpec kBinGrow{0.34f, 0.78f};
-inline constexpr SpringSpec kBinLid{0.30f, 0.66f};
-inline constexpr SpringSpec kBinLidSlam{0.20f, 0.70f};
-inline constexpr SpringSpec kBinSquash{0.38f, 0.58f};
+inline constexpr SpringSpec kBinMorph{0.34f, 0.84f};
+inline constexpr SpringSpec kBinLid{0.26f, 0.58f};
+inline constexpr SpringSpec kBinLidAim{0.30f, 0.62f};
+inline constexpr SpringSpec kBinLidSlam{0.18f, 0.62f};
+inline constexpr SpringSpec kBinCan{0.30f, 0.52f};
 inline constexpr double kFlightHold = 0.02;
 inline constexpr double kCapsuleEnterDelay = 0.14;
 inline constexpr double kFlightLanding = 0.45;

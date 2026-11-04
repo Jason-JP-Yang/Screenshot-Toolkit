@@ -3,6 +3,7 @@
 #include "theme.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 namespace sstk {
@@ -11,16 +12,26 @@ namespace {
 
 constexpr int kMargin = 2;
 constexpr int kShadowDownscale = 4;
-constexpr float kStretchEnd = 0.55f;
-constexpr float kRunStart = 0.30f;
-constexpr float kStretchLength = 0.24f;
-constexpr float kBandOverlap = 1.0f;
+constexpr float kMeshCells = 170.0f;
+constexpr int kMeshMinCuts = 6;
+constexpr float kCellOverlap = 1.0f;
 constexpr float kBentFrom = 0.001f;
 constexpr float kBadgeVisibleFrom = 0.02f;
+constexpr float kFarthestLag = 1.0f;  // How much of the pull passes before the farthest point starts moving, relative to the nearest.
+constexpr float kSmallestQuadArea = 0.25f;
+constexpr float kShallowestDepth = 0.12f;
 
 struct Vec {
   float x, y;
 };
+
+Vec operator-(Vec a, Vec b) { return Vec{a.x - b.x, a.y - b.y}; }
+
+float Dot(Vec a, Vec b) { return a.x * b.x + a.y * b.y; }
+
+float Length(Vec a) { return std::sqrt(Dot(a, a)); }
+
+float Cross(Vec a, Vec b) { return a.x * b.y - a.y * b.x; }
 
 Vec Transform(const D2D_MATRIX_3X2_F& m, float x, float y) {
   return Vec{x * m._11 + y * m._21 + m._31, x * m._12 + y * m._22 + m._32};
@@ -40,46 +51,63 @@ D2D_MATRIX_3X2_F Multiply(const D2D_MATRIX_3X2_F& a, const D2D_MATRIX_3X2_F& b) 
 
 float Mix(float a, float b, float t) { return a + (b - a) * t; }
 
-float Smooth(float t) {
-  t = std::clamp(t, 0.0f, 1.0f);
-  return t * t * (3.0f - 2.0f * t);
-}
+// The perspective transform taking one rectangle onto a quad, so that a cell's sides meet its neighbors' exactly
+// however hard the mesh is pulled. A quad too thin to see, or folded over itself, becomes a speck.
+D3DMATRIX QuadTransform(float left, float top, float width, float height, Vec p0, Vec p1, Vec p2, Vec p3) {
+  D3DMATRIX m{};
+  m._33 = 1.0f;
 
-// The perspective transform taking the rectangle (0, top)-(width, top + height) onto a quad, so that a band's
-// sides meet its neighbors' exactly however fast the funnel narrows. A collapsed quad becomes a speck.
-D3DMATRIX QuadTransform(float width, float top, float height, Vec p0, Vec p1, Vec p2, Vec p3) {
+  const float z0 = Cross(p1 - p0, p2 - p1);
+  const float z1 = Cross(p2 - p1, p3 - p2);
+  const float z2 = Cross(p3 - p2, p0 - p3);
+  const float z3 = Cross(p0 - p3, p1 - p0);
+  const bool convex = (z0 >= 0.0f && z1 >= 0.0f && z2 >= 0.0f && z3 >= 0.0f) || (z0 <= 0.0f && z1 <= 0.0f && z2 <= 0.0f && z3 <= 0.0f);
+  const float area = std::fabs(Cross(p2 - p0, p3 - p1)) * 0.5f;
+
   const float dx1 = p1.x - p2.x;
   const float dy1 = p1.y - p2.y;
   const float dx2 = p3.x - p2.x;
   const float dy2 = p3.y - p2.y;
-  const float sx = p0.x - p1.x + p2.x - p3.x;
-  const float sy = p0.y - p1.y + p2.y - p3.y;
   const float det = dx1 * dy2 - dx2 * dy1;
-
-  D3DMATRIX m{};
-  m._33 = 1.0f;
-  if (std::fabs(det) < 0.01f) {
+  if (!convex || area < kSmallestQuadArea || std::fabs(det) < 0.01f) {
     m._11 = m._22 = 1e-3f;
     m._41 = p0.x;
     m._42 = p0.y;
     m._44 = 1.0f;
     return m;
   }
+
+  const float sx = p0.x - p1.x + p2.x - p3.x;
+  const float sy = p0.y - p1.y + p2.y - p3.y;
   const float g = (sx * dy2 - dx2 * sy) / det;
   const float h = (dx1 * sy - sx * dy1) / det;
-  const float a = p1.x - p0.x + g * p1.x;
-  const float b = p3.x - p0.x + h * p3.x;
-  const float d = p1.y - p0.y + g * p1.y;
-  const float e = p3.y - p0.y + h * p3.y;
-  m._11 = a / width;
-  m._12 = d / width;
+
+  // The clip reaches one pixel past the cell. Perspective steep enough to pass zero depth out there
+  // would throw the image across the screen, so such a cell goes flat.
+  const float depth = 1.0f + std::min(g * (1.0f + kCellOverlap / width), 0.0f) + std::min(h * (1.0f + kCellOverlap / height), 0.0f);
+  if (depth < kShallowestDepth) {
+    const Vec along{(p1.x - p0.x + p2.x - p3.x) * 0.5f, (p1.y - p0.y + p2.y - p3.y) * 0.5f};
+    const Vec down{(p3.x - p0.x + p2.x - p1.x) * 0.5f, (p3.y - p0.y + p2.y - p1.y) * 0.5f};
+    const Vec origin{(p0.x + p1.x + p2.x + p3.x - 2.0f * (along.x + down.x)) * 0.25f, (p0.y + p1.y + p2.y + p3.y - 2.0f * (along.y + down.y)) * 0.25f};
+    m._11 = along.x / width;
+    m._12 = along.y / width;
+    m._21 = down.x / height;
+    m._22 = down.y / height;
+    m._41 = origin.x - left * m._11 - top * m._21;
+    m._42 = origin.y - left * m._12 - top * m._22;
+    m._44 = 1.0f;
+    return m;
+  }
+
+  m._11 = (p1.x - p0.x + g * p1.x) / width;
+  m._12 = (p1.y - p0.y + g * p1.y) / width;
   m._14 = g / width;
-  m._21 = b / height;
-  m._22 = e / height;
+  m._21 = (p3.x - p0.x + h * p3.x) / height;
+  m._22 = (p3.y - p0.y + h * p3.y) / height;
   m._24 = h / height;
-  m._41 = p0.x - top * m._21;
-  m._42 = p0.y - top * m._22;
-  m._44 = 1.0f - top * m._24;
+  m._41 = p0.x - left * m._11 - top * m._21;
+  m._42 = p0.y - left * m._12 - top * m._22;
+  m._44 = 1.0f - left * m._14 - top * m._24;
   return m;
 }
 
@@ -98,9 +126,15 @@ DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float gra
   const float far_y = std::max(grab_y_, height_ - grab_y_);
   reach_ = std::sqrt(far_x * far_x + far_y * far_y);
 
-  for (int i = 0; i <= kBandCount; ++i) {
-    band_edges_[i] = static_cast<int>(std::round(height_ * i / kBandCount));
-  }
+  // Square cells, of about the same number whatever the card's shape.
+  const float pitch = std::sqrt(width_ * height_ / kMeshCells);
+  columns_ = std::max(static_cast<int>(std::round(width_ / pitch)), kMeshMinCuts);
+  rows_ = std::max(static_cast<int>(std::round(height_ / pitch)), kMeshMinCuts);
+  column_edges_.resize(columns_ + 1);
+  row_edges_.resize(rows_ + 1);
+  for (int i = 0; i <= columns_; ++i) column_edges_[i] = std::round(width_ * i / columns_);
+  for (int i = 0; i <= rows_; ++i) row_edges_[i] = std::round(height_ * i / rows_);
+  cell_matrices_.resize(static_cast<size_t>(columns_) * rows_);
 
   const float d = static_cast<float>(kShadowDownscale);
   const ShadowLayer layers[] = {
@@ -156,24 +190,6 @@ void DragSprite::AddView(IDCompositionVisual* layer, const RECT& bounds, const R
   view.whole->SetContent(surface_.Get());
   view.root->AddVisual(view.whole.Get(), FALSE, nullptr);
 
-  view.bands_root = compositor_.CreateVisual();
-  for (int i = 0; i < kBandCount; ++i) {
-    Band& band = view.bands[i];
-    band.holder = compositor_.CreateVisual();
-    band.effect = compositor_.CreateEffectGroup();
-    compositor_.device()->CreateMatrixTransform3D(&band.transform);
-    band.effect->SetTransform3D(band.transform.Get());
-    band.holder->SetEffect(band.effect.Get());
-    band.image = compositor_.CreateVisual();
-    band.image->SetContent(surface_.Get());
-    // One row past its own, so that neighbors overlap instead of leaving a seam.
-    const float bottom = std::min(band_edges_[i + 1] + kBandOverlap, height_);
-    band.image->SetClip(D2D_RECT_F{0.0f, static_cast<float>(band_edges_[i]), width_, bottom});
-    band.image->SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD);
-    band.holder->AddVisual(band.image.Get(), FALSE, nullptr);
-    view.bands_root->AddVisual(band.holder.Get(), FALSE, nullptr);
-  }
-
   view.badge = compositor_.CreateVisual();
   view.badge->SetContent(badge_surface_.Get());
   view.badge_effect = compositor_.CreateEffectGroup();
@@ -184,51 +200,76 @@ void DragSprite::AddView(IDCompositionVisual* layer, const RECT& bounds, const R
   views_.push_back(std::move(view));
 }
 
-void DragSprite::ComputeBands(const D2D_MATRIX_3X2_F& rigid, const SpritePose& pose) {
+void DragSprite::BuildMesh(View& view) {
+  view.mesh_root = compositor_.CreateVisual();
+  view.cells.resize(cell_matrices_.size());
+  size_t index = 0;
+  for (int row = 0; row < rows_; ++row) {
+    for (int column = 0; column < columns_; ++column, ++index) {
+      Cell& cell = view.cells[index];
+      cell.holder = compositor_.CreateVisual();
+      cell.effect = compositor_.CreateEffectGroup();
+      compositor_.device()->CreateMatrixTransform3D(&cell.transform);
+      cell.effect->SetTransform3D(cell.transform.Get());
+      cell.holder->SetEffect(cell.effect.Get());
+      cell.image = compositor_.CreateVisual();
+      cell.image->SetContent(surface_.Get());
+      // One pixel past its own on two sides, so that neighbors overlap instead of leaving a seam.
+      cell.image->SetClip(D2D_RECT_F{column_edges_[column], row_edges_[row], std::min(column_edges_[column + 1] + kCellOverlap, width_),
+                                     std::min(row_edges_[row + 1] + kCellOverlap, height_)});
+      cell.image->SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD);
+      cell.holder->AddVisual(cell.image.Get(), FALSE, nullptr);
+      view.mesh_root->AddVisual(cell.holder.Get(), FALSE, nullptr);
+    }
+  }
+}
+
+void DragSprite::ComputeMesh(const D2D_MATRIX_3X2_F& rigid, const SpritePose& pose) {
   const float pull = std::clamp(pose.pull, 0.0f, 1.0f);
-  const float stretch = Smooth(pull / kStretchEnd);
-  const float run = Smooth((pull - kRunStart) / (1.0f - kRunStart));
+  const Vec mouth{pose.pull_x, pose.pull_y};
 
-  const float top_y = Transform(rigid, width_ * 0.5f, 0.0f).y;
-  const float bottom_y = Transform(rigid, width_ * 0.5f, height_).y;
-  const bool bottom_is_near = std::fabs(bottom_y - pose.pull_y) <= std::fabs(top_y - pose.pull_y);
-  const float far_y = bottom_is_near ? top_y : bottom_y;
-  const float near_y = bottom_is_near ? bottom_y : top_y;
-  const float span = pose.pull_y - far_y;
-  // Drawn out before it goes: the far edge first pulls away as the near edge reaches for the bin.
-  const float length = std::sqrt(rigid._21 * rigid._21 + rigid._22 * rigid._22) * height_;
-  const float far_out = far_y - std::copysign(length * kStretchLength * stretch, span);
-  const float far_now = Mix(far_out, pose.pull_y, run);
-  const float near_now = Mix(near_y, pose.pull_y, stretch);
-  const Vec width_axis{rigid._11 * width_, rigid._12 * width_};
-  const float neck = std::min(neck_ / std::max(std::sqrt(width_axis.x * width_axis.x + width_axis.y * width_axis.y), 1.0f), 1.0f);
+  // Points leave in order along the line from the card to the mouth, which keeps the far edge from
+  // breaking into horns as it runs in. Everything arrives on a short line across the mouth.
+  const Vec toward = mouth - Transform(rigid, width_ * 0.5f, height_ * 0.5f);
+  const float toward_length = std::max(Length(toward), 1.0f);
+  const Vec axis{toward.x / toward_length, toward.y / toward_length};
+  const Vec across{-axis.y, axis.x};
+  const Vec corners[4] = {Transform(rigid, 0.0f, 0.0f), Transform(rigid, width_, 0.0f), Transform(rigid, width_, height_), Transform(rigid, 0.0f, height_)};
+  float nearest = FLT_MAX;
+  float farthest = -FLT_MAX;
+  float half_span = 1.0f;
+  for (const Vec& corner : corners) {
+    const float away = -Dot(corner - mouth, axis);
+    nearest = std::min(nearest, away);
+    farthest = std::max(farthest, away);
+    half_span = std::max(half_span, std::fabs(Dot(corner - mouth, across)));
+  }
+  const float depth = std::max(farthest - nearest, 1.0f);
 
-  // A band's place along the funnel decides its width and how far it has swung toward the bin.
-  auto bend = [&](float row, Vec* left, Vec* right) {
-    const float t = bottom_is_near ? row / height_ : 1.0f - row / height_;
-    const float y = Mix(far_now, near_now, t);
-    const float along = std::fabs(span) > 1.0f ? std::clamp((y - far_y) / span, 0.0f, 1.0f) : 1.0f;
-    const float inward = Smooth(along) * stretch;
-    const Vec mid = Transform(rigid, width_ * 0.5f, row);
-    const float half = Mix(1.0f, neck, inward) * 0.5f;
-    const float x = Mix(mid.x, pose.pull_x, inward);
-    *left = Vec{x - width_axis.x * half, y - width_axis.y * half};
-    *right = Vec{x + width_axis.x * half, y + width_axis.y * half};
+  auto place = [&](float x, float y) {
+    const Vec point = Transform(rigid, x, y);
+    const Vec from_mouth = point - mouth;
+    const float along = (-Dot(from_mouth, axis) - nearest) / depth;
+    const float progress = std::clamp((1.0f + kFarthestLag) * pull - kFarthestLag * along, 0.0f, 1.0f);
+    // Slow to come away from the card, quickening into the mouth.
+    const float eased = progress * std::sqrt(progress);
+    const float offset = Dot(from_mouth, across) / half_span * neck_ * 0.5f;
+    return Vec{Mix(point.x, mouth.x + across.x * offset, eased), Mix(point.y, mouth.y + across.y * offset, eased)};
   };
 
-  Vec top_left;
-  Vec top_right;
-  bend(0.0f, &top_left, &top_right);
-  for (int i = 0; i < kBandCount; ++i) {
-    const float top = static_cast<float>(band_edges_[i]);
-    const float bottom = static_cast<float>(band_edges_[i + 1]);
-    Vec bottom_left;
-    Vec bottom_right;
-    bend(bottom, &bottom_left, &bottom_right);
-    band_matrices_[i] = QuadTransform(width_, top, std::max(bottom - top, 1.0f), top_left, top_right, bottom_right, bottom_left);
-
-    top_left = bottom_left;
-    top_right = bottom_right;
+  std::vector<Vec> above(columns_ + 1);
+  std::vector<Vec> below(columns_ + 1);
+  for (int column = 0; column <= columns_; ++column) above[column] = place(column_edges_[column], row_edges_[0]);
+  size_t index = 0;
+  for (int row = 0; row < rows_; ++row) {
+    for (int column = 0; column <= columns_; ++column) below[column] = place(column_edges_[column], row_edges_[row + 1]);
+    for (int column = 0; column < columns_; ++column, ++index) {
+      const float left = column_edges_[column];
+      const float top = row_edges_[row];
+      cell_matrices_[index] = QuadTransform(left, top, std::max(column_edges_[column + 1] - left, 1.0f), std::max(row_edges_[row + 1] - top, 1.0f),
+                                            above[column], above[column + 1], below[column + 1], below[column]);
+    }
+    above.swap(below);
   }
 }
 
@@ -240,7 +281,7 @@ void DragSprite::Render(const SpritePose& pose) {
   rigid._32 = pose.y - (grab_x_ * rigid._12 + grab_y_ * rigid._22);
 
   const bool bent = pose.pull > kBentFrom;
-  if (bent) ComputeBands(rigid, pose);
+  if (bent) ComputeMesh(rigid, pose);
 
   D2D_MATRIX_3X2_F shadow = Multiply(shadow_local_, rigid);
   shadow._32 += pose.shadow_drop;
@@ -264,15 +305,16 @@ void DragSprite::Render(const SpritePose& pose) {
     if (bent != view.bent) {
       view.bent = bent;
       if (bent) {
+        if (view.cells.empty()) BuildMesh(view);
         view.root->RemoveVisual(view.whole.Get());
-        view.root->AddVisual(view.bands_root.Get(), TRUE, view.shadow_holder.Get());
+        view.root->AddVisual(view.mesh_root.Get(), TRUE, view.shadow_holder.Get());
       } else {
-        view.root->RemoveVisual(view.bands_root.Get());
+        view.root->RemoveVisual(view.mesh_root.Get());
         view.root->AddVisual(view.whole.Get(), TRUE, view.shadow_holder.Get());
       }
     }
     if (bent) {
-      for (int i = 0; i < kBandCount; ++i) view.bands[i].transform->SetMatrix(band_matrices_[i]);
+      for (size_t i = 0; i < view.cells.size(); ++i) view.cells[i].transform->SetMatrix(cell_matrices_[i]);
     } else {
       view.whole->SetTransform(rigid);
     }

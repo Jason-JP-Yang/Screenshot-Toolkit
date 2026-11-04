@@ -44,6 +44,10 @@ class Deck {
   bool IsIdle() const;
   void Rest();
 
+  // Whether the front card offers anything to switch to, and moves to its next option if it can.
+  bool HasOptions() const;
+  void StepRegion(int direction);
+
   LRESULT HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
   // While a thumbnail is held by the pointer. Screen positions are in virtual screen coordinates.
@@ -64,8 +68,10 @@ class Deck {
   void NudgeBin(float impulse) { bin_->Nudge(impulse); }
   bool TrackBin(POINT screen);
   bool BinContains(POINT screen) const;
-  float BinX() const { return static_cast<float>(bounds_.left) + bin_->x(); }
-  float BinY() const { return static_cast<float>(bounds_.top) + bin_->y(); }
+  void AimBin(float screen_x, float screen_y) { bin_->Aim(screen_x - static_cast<float>(bounds_.left), screen_y - static_cast<float>(bounds_.top)); }
+  float BinCloseness() const { return bin_->closeness(); }
+  float BinX() const { return static_cast<float>(bounds_.left) + bin_->mouth_x(); }
+  float BinY() const { return static_cast<float>(bounds_.top) + bin_->mouth_y(); }
   bool FrameBin(float dt);
 
  private:
@@ -235,9 +241,7 @@ Deck::~Deck() {
 }
 
 void Deck::Flash() {
-  const TimeBase now = compositor_.Now();
-  flash_alpha_.Snap(theme::kFlashPeak);
-  flash_alpha_.To(compositor_.device(), now, 0.0f, theme::kFlash);
+  flash_alpha_.Pulse(compositor_.device(), compositor_.Now(), theme::kFlashPeak, theme::kFlashRise, theme::kFlashFall);
   compositor_.Commit();
 
   // Shown after the commit so that the first composed frame already contains the flash.
@@ -440,6 +444,24 @@ void Deck::SelectRegion(int index) {
   UpdateSink();
   compositor_.Commit();
   store_.Submit(top->shot(), top->selected_rect());
+}
+
+bool Deck::HasOptions() const {
+  const Card* top = front();
+  return top != nullptr && top->regions().size() >= 2;
+}
+
+void Deck::StepRegion(int direction) {
+  Card* top = front();
+  if (!HasOptions() || top->floating || press_ != Press::kNone) return;
+  const int count = static_cast<int>(top->regions().size());
+  for (int step = 1; step < count; ++step) {
+    const int index = (top->selected() + direction * step + count) % count;
+    if (top->CanSelect(index)) {
+      SelectRegion(index);
+      return;
+    }
+  }
 }
 
 void Deck::Tick() {
@@ -833,7 +855,7 @@ class DragSession {
   float pull_x_ = 0.0f;
   float pull_y_ = 0.0f;
 
-  SpringValue x_, y_, catch_x_, catch_y_, scale_, tilt_, lift_, pull_, dock_, badge_, vanish_, opacity_;
+  SpringValue x_, y_, catch_x_, catch_y_, scale_, tilt_, lift_, pull_, badge_, vanish_, opacity_;
 };
 
 DragSession::DragSession(Overlay& overlay, Compositor& compositor, Store& store, Deck& deck, std::unique_ptr<Card> card, size_t index,
@@ -909,41 +931,43 @@ void DragSession::StepHeld(float dt) {
     last_cursor_ = cursor;
   }
 
+  const bool was_over = over_bin_;
   over_bin_ = TrackBin(cursor);
 
   catch_x_.Step(theme::kDragCatchUp, dt);
   catch_y_.Step(theme::kDragCatchUp, dt);
+  x_.value = static_cast<float>(cursor.x) + catch_x_.value;
+  y_.value = static_cast<float>(cursor.y) + catch_y_.value;
 
-  scale_.target = theme::kDragScale * (over_bin_ ? theme::kBinHeldScale : 1.0f);
+  scale_.target = theme::kDragScale;
   scale_.Step(theme::kDragLift, dt);
   lift_.Step(theme::kDragLift, dt);
 
   const float tilt_limit = theme::kDragTiltMaxDegrees;
-  tilt_.target = over_bin_ ? 0.0f : std::clamp(pointer_vx_ / dip_ * theme::kDragTiltPerSpeed, -tilt_limit, tilt_limit);
+  tilt_.target = std::clamp(pointer_vx_ / dip_ * theme::kDragTiltPerSpeed, -tilt_limit, tilt_limit);
   tilt_.Step(theme::kDragTilt, dt);
 
-  pull_.target = over_bin_ ? 1.0f : 0.0f;
-  pull_.Step(over_bin_ ? theme::kBinPullIn : theme::kBinPullOut, dt);
+  // The card stays on the pointer throughout, and only this one value draws it in and lets it out. Coming close, the
+  // pull is already felt. Crossing the edge starts it moving at once, faster the faster the pointer came.
+  if (bin_deck_ != nullptr) {
+    bin_deck_->AimBin(x_.value + (thumb_width_ * 0.5f - grab_x_) * scale_.value, y_.value + (thumb_height_ * 0.5f - grab_y_) * scale_.value);
+    const float felt = std::max(bin_deck_->BinCloseness() - theme::kBinMagnetFrom, 0.0f) / (1.0f - theme::kBinMagnetFrom);
+    pull_.target = over_bin_ ? 1.0f : theme::kBinMagnetPull * felt * std::sqrt(felt);
+  }
+  if (over_bin_ != was_over) {
+    const float speed = std::sqrt(pointer_vx_ * pointer_vx_ + pointer_vy_ * pointer_vy_) / dip_;
+    const float kick = std::min(theme::kBinPullKick + speed * theme::kBinPullKickPerSpeed, theme::kBinPullKickMax);
+    pull_.velocity += over_bin_ ? kick : -kick;
+  }
+  pull_.Step(theme::kBinPull, dt);
 
-  // Over the bin the card docks centered above it, so that it is drawn in the same way wherever it was grabbed.
-  dock_.target = over_bin_ ? 1.0f : 0.0f;
-  dock_.Step(theme::kBinDock, dt);
-  const float follow_x = static_cast<float>(cursor.x) + catch_x_.value;
-  const float follow_y = static_cast<float>(cursor.y) + catch_y_.value;
-  const float dock_x = pull_x_ + (grab_x_ - thumb_width_ * 0.5f) * scale_.value;
-  const float dock_y = pull_y_ - theme::kBinDockGap * dip_ - (thumb_height_ - grab_y_) * scale_.value;
-  x_.value = follow_x + (dock_x - follow_x) * dock_.value;
-  y_.value = follow_y + (dock_y - follow_y) * dock_.value;
-
-  // Fully inside it stays out of sight until drawn back out.
-  opacity_.value = std::clamp((1.0f - pull_.value) / 0.05f, 0.0f, 1.0f);
   const bool inside = pull_.value > theme::kBinInsideAt;
   if (inside != inside_) {
     inside_ = inside;
     if (bin_deck_ != nullptr) bin_deck_->NudgeBin(inside ? theme::kBinInsideImpulse : theme::kBinOutsideImpulse);
   }
 
-  badge_.target = accepts_ && !over_bin_ && pull_.value < 0.1f ? 1.0f : 0.0f;
+  badge_.target = accepts_ && !over_bin_ && pull_.value < theme::kBinMagnetPull * 1.5f ? 1.0f : 0.0f;
   badge_.Step(badge_.target > 0.0f ? theme::kDropBadgeIn : theme::kDropBadgeOut, dt);
 }
 
@@ -963,13 +987,16 @@ void DragSession::StepVanishing(float dt) {
 }
 
 void DragSession::StepSwallowed(float dt) {
+  if (bin_deck_ != nullptr) {
+    pull_x_ = bin_deck_->BinX();
+    pull_y_ = bin_deck_->BinY();
+  }
   pull_.Step(theme::kBinSwallow, dt);
   tilt_.Step(theme::kBinSwallow, dt);
   if (!gulped_ && pull_.value >= theme::kBinGulpAt) {
     gulped_ = true;
     if (bin_deck_ != nullptr) bin_deck_->GulpBin();
   }
-  opacity_.value = std::clamp((1.0f - pull_.value) / 0.05f, 0.0f, 1.0f);
   if (pull_.value > 0.99f) phase_ = Phase::kDone;
 }
 
@@ -990,7 +1017,7 @@ void DragSession::StepReturning(float dt) {
   tilt_.target = 0.0f;
   tilt_.Step(theme::kDragTilt, dt);
   pull_.target = 0.0f;
-  pull_.Step(theme::kBinPullOut, dt);
+  pull_.Step(theme::kBinPull, dt);
   badge_.target = 0.0f;
   badge_.Step(theme::kDropBadgeOut, dt);
 
@@ -1021,8 +1048,10 @@ void DragSession::Render() {
   pose.pull = std::max(pull_.value, 0.0f);
   pose.pull_x = pull_x_;
   pose.pull_y = pull_y_;
-  pose.opacity = std::clamp(opacity_.value, 0.0f, 1.0f);
-  pose.shadow = shadow_base * std::clamp(1.0f - pose.pull * 2.4f, 0.0f, 1.0f) * std::clamp(1.0f - vanish * 1.8f, 0.0f, 1.0f);
+  // Fully inside the bin it stays out of sight until drawn back out.
+  pose.opacity = std::clamp(opacity_.value, 0.0f, 1.0f) * std::clamp((1.0f - pull_.value) / 0.05f, 0.0f, 1.0f);
+  // The shadow keeps the card's flat shape, so it is gone before the bending shows against it.
+  pose.shadow = shadow_base * std::clamp(1.0f - (pose.pull - theme::kBinMagnetPull) * 7.0f, 0.0f, 1.0f) * std::clamp(1.0f - vanish * 1.8f, 0.0f, 1.0f);
   pose.shadow_free = lift_.value;
   pose.shadow_drop = std::clamp(lift_.value, 0.0f, 1.0f) * theme::kDragShadowDrop * dip_;
   pose.badge = badge_.value * (1.0f + 0.22f * vanish);
@@ -1164,7 +1193,33 @@ void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   if (Deck* deck = DeckFor(capture->screen.monitor); deck != nullptr) {
     deck->AddShot(std::move(capture));
     EnsureTicking();
+    SyncHookMode();
   }
+}
+
+void Overlay::SyncHookMode() {
+  HookMode mode = HookMode::kIdle;
+  if (session_) {
+    mode = HookMode::kDrag;
+  } else if (std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->HasOptions(); })) {
+    mode = HookMode::kSelector;
+  }
+  if (mode == hook_mode_) return;
+  hook_mode_ = mode;
+  SetHookMode(mode);
+}
+
+void Overlay::OnSelectorStep(int direction) {
+  Trace("selector: step %d", direction);
+  if (session_) return;
+  POINT cursor{};
+  GetCursorPos(&cursor);
+  const HMONITOR under = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+  Deck* chosen = nullptr;
+  for (auto& deck : decks_) {
+    if (deck->HasOptions() && (chosen == nullptr || deck->monitor() == under)) chosen = deck.get();
+  }
+  if (chosen != nullptr) chosen->StepRegion(direction);
 }
 
 void Overlay::BeginDrag(Deck& deck, std::unique_ptr<Card> card, size_t index, POINT press, const TimeBase& now) {
@@ -1178,6 +1233,7 @@ void Overlay::BeginDrag(Deck& deck, std::unique_ptr<Card> card, size_t index, PO
   session_->Frame(now);
   pacer_.Start(controller_, kMsgDragFrame);
   EnsureTicking();
+  SyncHookMode();
   Trace("drag: lifted in %.1f ms", (NowSeconds() - started) * 1000.0);
 }
 
@@ -1209,15 +1265,31 @@ void Overlay::OnDragFeedback(uint64_t id, bool accepts) {
 }
 
 void Overlay::OnDragFinished(std::unique_ptr<FileDragOutcome> outcome) {
-  if (!session_ || session_->id() != outcome->id) return;
+  // A drag called off from here has already ended, and the loop is only now reporting back.
+  if (session_ && session_->id() == outcome->id) EndDrag(*outcome);
+}
+
+void Overlay::OnDragCancel() {
+  if (!session_) return;
+  Trace("drag: called off");
+  file_drag_->Cancel();
+  FileDragOutcome outcome;
+  outcome.id = session_->id();
+  outcome.cancelled = true;
+  GetCursorPos(&outcome.release);
+  EndDrag(outcome);
+}
+
+void Overlay::EndDrag(const FileDragOutcome& outcome) {
   const TimeBase now = compositor_.Now();
   std::unique_ptr<DragSession> session = std::move(session_);
-  const bool removed = session->Finish(*outcome, now);
+  const bool removed = session->Finish(outcome, now);
   finishing_.push_back(std::move(session));
   for (auto& deck : decks_) {
     if (removed) deck->ExtendDwell(now.seconds);
     deck->SetDragActive(false, now);
   }
+  SyncHookMode();
   compositor_.Commit();
 }
 
@@ -1232,6 +1304,7 @@ void Overlay::OnTick() {
       deck->PollInsets(now);
     }
   }
+  SyncHookMode();
   if (any_active) return;
 
   for (auto& deck : decks_) deck->Rest();
@@ -1244,6 +1317,7 @@ void Overlay::OnDisplayChange() {
   CancelDrags();
   // Geometry is stale for every monitor, so everything on screen is dropped; files and clipboard are already safe.
   decks_.clear();
+  SyncHookMode();
   compositor_.Commit();
   if (ticking_) {
     KillTimer(controller_, kTickTimer);

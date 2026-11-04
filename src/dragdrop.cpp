@@ -11,7 +11,8 @@ namespace {
 
 class DropSource final : public IDropSource {
  public:
-  DropSource(HWND controller, uint64_t id, const std::atomic<bool>& cancel) : controller_(controller), id_(id), cancel_(cancel) {}
+  DropSource(HWND controller, uint64_t id, const std::atomic<uint64_t>& cancelled_through)
+      : controller_(controller), id_(id), cancelled_through_(cancelled_through) {}
 
   STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
     if (iid == IID_IUnknown || iid == IID_IDropSource) {
@@ -31,14 +32,16 @@ class DropSource final : public IDropSource {
 
   STDMETHODIMP QueryContinueDrag(BOOL escape_pressed, DWORD) override {
     // Read from the hardware: this thread never saw the press, and the keyboard belongs to the foreground app.
+    // The hooks normally catch these first, and only then does the press not show here.
+    const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
     const bool escape = escape_pressed || (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-    if (escape || cancel_.load(std::memory_order_relaxed)) {
+    const bool secondary = (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) != 0;
+    if (escape || secondary || id_ <= cancelled_through_.load(std::memory_order_relaxed)) {
       cancelled_ = true;
       GetCursorPos(&release_);
       return DRAGDROP_S_CANCEL;
     }
-    const int button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
-    if ((GetAsyncKeyState(button) & 0x8000) == 0) {
+    if ((GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) == 0) {
       GetCursorPos(&release_);
       return DRAGDROP_S_DROP;
     }
@@ -62,7 +65,7 @@ class DropSource final : public IDropSource {
   LONG references_ = 1;
   HWND controller_;
   uint64_t id_;
-  const std::atomic<bool>& cancel_;
+  const std::atomic<uint64_t>& cancelled_through_;
   bool accepts_ = false;
   bool cancelled_ = false;
   POINT release_{};
@@ -88,20 +91,25 @@ FileDragThread::~FileDragThread() {
     std::lock_guard lock(mutex_);
     stopping_ = true;
   }
-  cancel_.store(true, std::memory_order_relaxed);
+  cancelled_through_.store(UINT64_MAX, std::memory_order_relaxed);
   SetEvent(wake_);
   if (thread_.joinable()) thread_.join();
   CloseHandle(wake_);
 }
 
 void FileDragThread::Begin(std::shared_ptr<Shot> shot, uint64_t id) {
+  latest_id_ = id;
   {
     std::lock_guard lock(mutex_);
     pending_ = std::move(shot);
     pending_id_ = id;
   }
-  cancel_.store(false, std::memory_order_relaxed);
   SetEvent(wake_);
+}
+
+void FileDragThread::Cancel() {
+  cancelled_through_.store(latest_id_, std::memory_order_relaxed);
+  PostThreadMessageW(GetThreadId(thread_.native_handle()), WM_NULL, 0, 0);
 }
 
 void FileDragThread::Main() {
@@ -139,14 +147,14 @@ void FileDragThread::Run(const std::shared_ptr<Shot>& shot, uint64_t id) {
   const std::wstring path = store_.WaitUntilSaved(shot);
   ComPtr<IShellItem> item;
   ComPtr<IDataObject> data;
-  if (!path.empty() && !cancel_.load(std::memory_order_relaxed) &&
+  if (!path.empty() && id > cancelled_through_.load(std::memory_order_relaxed) &&
       SUCCEEDED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item))) &&
       SUCCEEDED(item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data)))) {
     // The press landed on the UI thread, and the loop expects the capture and button state it left.
     const DWORD self = GetCurrentThreadId();
     const BOOL attached = AttachThreadInput(self, ui_thread_, TRUE);
 
-    auto* source = new DropSource(controller_, id, cancel_);
+    auto* source = new DropSource(controller_, id, cancelled_through_);
     DWORD effect = DROPEFFECT_NONE;
     const HRESULT result = DoDragDrop(data.Get(), source, DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
     outcome->effect = result == DRAGDROP_S_DROP ? effect : DROPEFFECT_NONE;

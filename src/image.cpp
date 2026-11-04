@@ -469,31 +469,45 @@ Image RenderPlusBadge(int size, int pad, float scale, uint32_t color) {
 Image RenderBinCan(int size, float scale) {
   return RenderIcon(size, scale, [scale](float x, float y) {
     // A solid body narrowing toward its base, with two slots cut out.
-    const float taper = 1.0f + 0.17f * std::clamp((y - 9.5f) / 11.8f, 0.0f, 1.0f);
-    const float body = RoundedBoxDistance(12.0f + (x - 12.0f) * taper, y, 12.0f, 15.4f, 6.3f, 5.9f, 1.8f);
-    const float slots = std::min(SegmentDistance(x, y, 9.5f, 12.6f, 9.8f, 18.3f), SegmentDistance(x, y, 14.5f, 12.6f, 14.2f, 18.3f)) - 0.8f;
+    const float taper = 1.0f + 0.15f * std::clamp((y - 9.6f) / 11.8f, 0.0f, 1.0f);
+    const float body = RoundedBoxDistance(12.0f + (x - 12.0f) * taper, y, 12.0f, 15.5f, 6.7f, 5.9f, 2.0f);
+    const float slots = std::min(SegmentDistance(x, y, 9.6f, 12.9f, 9.9f, 18.2f), SegmentDistance(x, y, 14.4f, 12.9f, 14.1f, 18.2f)) - 0.72f;
     return Coverage(body * scale) * (1.0f - Coverage(slots * scale));
   });
 }
 
 Image RenderBinLid(int size, float scale) {
   return RenderIcon(size, scale, [scale](float x, float y) {
-    const float bar = RoundedBoxDistance(x, y, 12.0f, 7.2f, 8.1f, 1.3f, 1.3f);
-    const float grip = RoundedBoxDistance(x, y, 12.0f, 4.8f, 3.0f, 1.8f, 1.1f);
+    const float bar = RoundedBoxDistance(x, y, 12.0f, 7.3f, 7.9f, 1.25f, 1.25f);
+    const float grip = RoundedBoxDistance(x, y, 12.0f, 5.0f, 2.8f, 1.7f, 1.1f);
     return Coverage(std::min(bar, grip) * scale);
   });
 }
 
 Image RenderLabel(const wchar_t* text, int font_pixels) {
   // Drawn large and reduced, which gives even, unhinted edges at any display scale.
-  constexpr int kOversample = 4;
+  constexpr int kOversample = 6;
   Image label;
   HDC dc = CreateCompatibleDC(nullptr);
   if (dc == nullptr) return label;
-  HFONT font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                           L"Segoe UI Semibold");
-  HGDIOBJ previous_font = SelectObject(dc, font);
+  // Windows 11's display cut is tighter and cleaner, and older systems have only the static face.
+  HFONT font = nullptr;
+  HGDIOBJ previous_font = nullptr;
+  for (const wchar_t* face : {L"Segoe UI Variable Display Semib", L"Segoe UI Semibold"}) {
+    font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                       CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
+    previous_font = SelectObject(dc, font);
+    wchar_t chosen[LF_FACESIZE];
+    GetTextFaceW(dc, LF_FACESIZE, chosen);
+    if (lstrcmpiW(chosen, face) == 0) break;
+    SelectObject(dc, previous_font);
+    DeleteObject(font);
+    font = nullptr;
+  }
+  if (font == nullptr) {
+    DeleteDC(dc);
+    return label;
+  }
   const int length = lstrlenW(text);
   SIZE extent{};
   GetTextExtentPoint32W(dc, text, length, &extent);
@@ -529,7 +543,7 @@ Image RenderLabel(const wchar_t* text, int font_pixels) {
             for (int sx = 0; sx < kOversample; ++sx) sum += row[sx * 4];
           }
           // Light text on a saturated body reads thin without a touch of weight.
-          const float coverage = std::pow(sum / (255.0f * kOversample * kOversample), 0.86f);
+          const float coverage = std::pow(sum / (255.0f * kOversample * kOversample), 0.92f);
           out[0] = out[1] = out[2] = out[3] = ToByte(coverage * 255.0f);
         }
       }
@@ -541,6 +555,21 @@ Image RenderLabel(const wchar_t* text, int font_pixels) {
   DeleteObject(font);
   DeleteDC(dc);
   return label;
+}
+
+RECT InkBounds(const Image& image) {
+  RECT ink{image.width(), image.height(), 0, 0};
+  const uint8_t* alpha = image.data() + 3;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x, alpha += 4) {
+      if (*alpha < 128) continue;
+      ink.left = std::min<LONG>(ink.left, x);
+      ink.top = std::min<LONG>(ink.top, y);
+      ink.right = std::max<LONG>(ink.right, x + 1);
+      ink.bottom = std::max<LONG>(ink.bottom, y + 1);
+    }
+  }
+  return ink;
 }
 
 }  // namespace sstk

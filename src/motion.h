@@ -50,6 +50,9 @@ class AnimFloat {
   void To(IDCompositionDevice* device, const TimeBase& now, float target, const SpringSpec& spec, double delay,
           float initial_velocity);
 
+  // Eases from where it is up to a peak, then falls back to zero on a spring, with no corner at either end.
+  void Pulse(IDCompositionDevice* device, const TimeBase& now, float peak, double rise, const SpringSpec& fall);
+
   float ValueAt(double time) const;
   float target() const { return target_; }
   double end_time() const { return end_time_; }
@@ -62,7 +65,8 @@ class AnimFloat {
   };
 
   void Sample(double time, float* value, float* velocity) const;
-  void Start(IDCompositionDevice* device, const TimeBase& now, float start, float velocity, float target,
+  // The delay is spent easing from `lead` to `start`, and the spring takes over from there.
+  void Start(IDCompositionDevice* device, const TimeBase& now, float lead, float start, float velocity, float target,
              const SpringSpec& spec, double delay);
 
   std::array<Sink, 8> sinks_{};

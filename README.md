@@ -8,9 +8,11 @@ There is no window, tray icon, editor, or settings page, by design.
 
 - **Capture:** press PrintScreen or Win+Shift+S. Press as fast as you like: each shot stacks into a deck and leaves on its own 3-second timer.
 - **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
+- **Switch regions without the mouse:** while a thumbnail with options is on screen, Win+Shift+Left and Win+Shift+Right step through them, as do Win+Shift with side buttons 4 and 5. The steps wrap around. With nothing to switch, those keys keep their Windows meaning.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
-- **Drag** it into another app to drop the file there. A blue plus shows when the drop will land. Anywhere else, or on Escape, it flies back. Timers stand still during a drag.
+- **Drag** it into another app to drop the file there. A blue plus shows when the drop will land. Anywhere else it flies back. Timers stand still during a drag.
+- **Cancel a drag** with the right mouse button or Escape. The thumbnail flies back, and neither press reaches the app under the pointer.
 - **Drag it onto the rubbish bin** at the bottom center of the screen and release to delete it from the clipboard and send the file to the Recycle Bin. Drag it back out to change your mind.
 - **Swipe left** to dismiss it early. The file stays in the Gallery.
 
@@ -66,6 +68,8 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Dragging.** The system drag loop calls into whichever application is under the pointer and can block there, so it runs on its own thread. The UI thread wakes once per composed frame only while a thumbnail is in the air, reads the pointer, and moves a finished bitmap. Nothing is drawn or uploaded after the lift.
 
+**Mouse hook.** The side buttons and the right-click cancel need a low-level mouse hook, which wakes the process on every pointer move. It therefore exists only while a thumbnail with options or a drag is on screen, and an idle program has only the keyboard hook.
+
 **Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config.h` and rebuild.
 
 **Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
@@ -87,7 +91,7 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | File | Responsibility |
 |---|---|
 | `src/main.cpp` | Modes, message loop, clipboard installation, memory trimming |
-| `src/hook.cpp` | Low-level keyboard hook, Start menu suppression |
+| `src/hook.cpp` | Low-level keyboard and mouse hooks, Start menu suppression |
 | `src/capture.cpp` | Capture thread |
 | `src/screen.cpp` | Z-order walk, taskbar state, Snap layout detection, region list |
 | `src/image.cpp` | Resampling, frosted glass, shadow and glyph rasterization |
@@ -97,7 +101,7 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
 | `src/capsule.cpp` | The region selector and its sliding pill |
 | `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
-| `src/sprite.cpp` | The thumbnail in the air, and its funnel into the bin |
+| `src/sprite.cpp` | The thumbnail in the air, and the mesh that draws it into the bin |
 | `src/bin.cpp` | The rubbish bin capsule |
 | `src/dragdrop.cpp` | The system drag loop, on its own thread |
 | `src/install.cpp` | Logon task registration and starting in the user's session |

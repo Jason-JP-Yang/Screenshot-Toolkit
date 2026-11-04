@@ -1,5 +1,6 @@
 // The rubbish bin at the bottom center of the screen while a thumbnail is held: a disc when the pointer
-// is far, a labeled capsule when near, open-lidded when over it. Stepped per frame, as it follows the pointer.
+// is far, a labeled capsule when near. The capsule itself stays put. Its icon does the reacting: the lid
+// opens toward the thumbnail, and the can takes each thing that goes in. Stepped per frame, as it follows the pointer.
 #pragma once
 
 #include "compositor.h"
@@ -21,7 +22,10 @@ class RubbishBin {
   bool Track(POINT point);
   bool Contains(POINT point) const;
 
-  // Gives the capsule a small elastic jolt. Positive squats, negative stretches.
+  // Where the thumbnail is, which is the way the lid opens.
+  void Aim(float x, float y);
+
+  // Gives the can a small elastic jolt. Positive squats, negative stretches.
   void Nudge(float impulse);
 
   // The thumbnail is gone for good: the lid drops.
@@ -32,8 +36,13 @@ class RubbishBin {
   void Reset();
 
   RECT HotZone() const;
-  float x() const { return center_x_.value + lean_x_.value; }
-  float y() const { return center_y_.value + lean_y_.value; }
+
+  // 0 at the distance where the bin starts to notice the pointer, 1 touching it.
+  float closeness() const { return closeness_; }
+
+  // The point in the icon that thumbnails are drawn into.
+  float mouth_x() const { return center_x_.value + left_.value + height_ * 0.5f; }
+  float mouth_y() const { return center_y_.value; }
 
  private:
   void Apply();
@@ -42,7 +51,7 @@ class RubbishBin {
   Compositor& compositor_;
   float scale_;
   float height_;
-  float full_width_;
+  float full_width_ = 0.0f;
   float icon_size_;
 
   ComPtr<IDCompositionVisual> root_;
@@ -57,8 +66,8 @@ class RubbishBin {
   ComPtr<IDCompositionVisual> inner_;
   ComPtr<IDCompositionRectangleClip> inner_clip_;
   ComPtr<IDCompositionVisual> fill_;
-  ComPtr<IDCompositionVisual> veil_;
-  ComPtr<IDCompositionEffectGroup> veil_effect_;
+  ComPtr<IDCompositionVisual> fill_over_;
+  ComPtr<IDCompositionEffectGroup> fill_over_effect_;
   ComPtr<IDCompositionVisual> icon_;
   ComPtr<IDCompositionVisual> can_;
   ComPtr<IDCompositionVisual> lid_;
@@ -68,28 +77,26 @@ class RubbishBin {
   float shadow_pad_ = 0.0f;
   float shadow_left_width_ = 0.0f;
   float shadow_right_width_ = 0.0f;
-  float label_height_ = 0.0f;
-  float label_start_ = 0.0f;
+  float icon_x_ = 0.0f;
+  float label_x_ = 0.0f;
+  float closeness_ = 0.0f;
 
   SpringValue presence_;
   SpringValue left_;
   SpringValue right_;
-  SpringValue grow_;
-  SpringValue squash_;
-  SpringValue lid_angle_;
   SpringValue label_alpha_;
-  SpringValue engaged_light_;
+  SpringValue over_light_;
   SpringValue center_x_;
   SpringValue center_y_;
-  SpringValue lean_x_;
-  SpringValue lean_y_;
+  SpringValue lid_open_;
+  SpringValue lid_aim_;
+  SpringValue can_squash_;
 
   bool showing_ = false;
   bool placed_ = false;
   bool near_ = false;
   bool engaged_ = false;
   bool slamming_ = false;
-  bool right_leads_ = true;
   double hide_in_ = 0.0;
 };
 

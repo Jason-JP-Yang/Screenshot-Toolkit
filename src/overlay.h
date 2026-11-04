@@ -3,6 +3,7 @@
 
 #include "capture.h"
 #include "compositor.h"
+#include "hook.h"
 #include "store.h"
 
 #include <memory>
@@ -32,6 +33,8 @@ class Overlay {
   void OnDragFrame();
   void OnDragFeedback(uint64_t id, bool accepts);
   void OnDragFinished(std::unique_ptr<FileDragOutcome> outcome);
+  void OnDragCancel();
+  void OnSelectorStep(int direction);
 
   // True when nothing is on screen, so memory can be returned.
   bool IsIdle() const;
@@ -46,6 +49,8 @@ class Overlay {
   void EnsureTicking();
   void BeginDrag(Deck& deck, std::unique_ptr<Card> card, size_t index, POINT press, const TimeBase& now);
   void CancelDrags();
+  void EndDrag(const FileDragOutcome& outcome);
+  void SyncHookMode();
   bool drag_held() const { return session_ != nullptr; }
 
   HWND controller_;
@@ -61,6 +66,7 @@ class Overlay {
   std::vector<std::unique_ptr<DragSession>> finishing_;  // Released, and still playing out what came of it.
   uint64_t next_drag_id_ = 1;
   double last_frame_ = 0.0;
+  HookMode hook_mode_ = HookMode::kIdle;
 };
 
 }  // namespace sstk

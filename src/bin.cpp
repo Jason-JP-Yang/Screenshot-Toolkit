@@ -10,17 +10,36 @@ namespace sstk {
 namespace {
 
 constexpr float kDegrees = 3.14159265f / 180.0f;
-constexpr float kLidHingeX = 19.9f;
-constexpr float kLidHingeY = 7.2f;
-constexpr float kFlow = 0.006f;
-constexpr float kFlowMax = 0.07f;
-constexpr float kGulpImpulse = 1.6f;
+
+// In the icon's 24-unit grid. See RenderBinCan and RenderBinLid.
+constexpr float kIconGrid = 24.0f;
+constexpr float kLidCenterX = 12.0f;
+constexpr float kLidY = 7.3f;
+constexpr float kLidHalf = 7.9f;
+constexpr float kCanTop = 9.6f;
+constexpr float kCanBottom = 21.4f;
+constexpr float kLidRiseAbove = 3.2f;
+constexpr float kLidRiseAside = 0.6f;
+constexpr float kLidSlide = 0.9f;
+
+constexpr float kCanWidening = 0.55f;
+constexpr float kCanSquashMax = 0.16f;
+constexpr float kLidClosedPastMin = -0.12f;
+constexpr float kRestDistance = 0.02f;
+
+float EvenPixels(float value) { return static_cast<float>(static_cast<int>(std::round(value)) & ~1); }
+
+// Ends a spring exactly on its target, so that text comes to rest on whole pixels instead of nearly on them.
+void StepToRest(SpringValue& value, const SpringSpec& spec, float dt) {
+  value.Step(spec, dt);
+  if (value.Settled(kRestDistance)) value.Snap(value.target);
+}
 
 }  // namespace
 
 RubbishBin::RubbishBin(Compositor& compositor, IDCompositionVisual* parent, float scale)
-    : compositor_(compositor), scale_(scale), height_(std::round(theme::kBinHeight * scale)),
-      icon_size_(std::round(theme::kBinIconSize * scale)) {
+    : compositor_(compositor), scale_(scale), height_(EvenPixels(theme::kBinHeight * scale)),
+      icon_size_(EvenPixels(theme::kBinIconSize * scale)) {
   root_ = compositor_.CreateVisual();
   root_effect_ = compositor_.CreateEffectGroup();
   root_->SetEffect(root_effect_.Get());
@@ -51,10 +70,22 @@ RubbishBin::RubbishBin(Compositor& compositor, IDCompositionVisual* parent, floa
   shadow_holder_->AddVisual(shadow_right_.Get(), FALSE, nullptr);
   root_->AddVisual(shadow_holder_.Get(), FALSE, nullptr);
 
+  const int icon_pixels = static_cast<int>(icon_size_);
+  const float icon_scale = icon_size_ / kIconGrid;
+  const Image can = RenderBinCan(icon_pixels, icon_scale);
+  const Image lid = RenderBinLid(icon_pixels, icon_scale);
   const Image label = RenderLabel(L"Rubbish Bin", static_cast<int>(std::round(theme::kBinFontSize * scale)));
-  label_height_ = static_cast<float>(label.height());
-  label_start_ = std::round(theme::kBinLabelStart * scale);
-  full_width_ = std::round(label_start_ + label.width() + theme::kBinLabelEnd * scale);
+  const RECT can_ink = InkBounds(can);
+  const RECT lid_ink = InkBounds(lid);
+  RECT icon_ink;
+  UnionRect(&icon_ink, &can_ink, &lid_ink);
+  const RECT label_ink = InkBounds(label);
+
+  // Laid out by what is visibly drawn. The icon is concentric with the left cap, which also centers it in the disc,
+  // and the text ends as far from the right edge as the icon's body starts from the left.
+  icon_x_ = std::round((height_ - static_cast<float>(icon_ink.right - icon_ink.left)) * 0.5f) - static_cast<float>(icon_ink.left);
+  label_x_ = icon_x_ + static_cast<float>(icon_ink.right) + std::round(theme::kBinTextGap * scale) - static_cast<float>(label_ink.left);
+  full_width_ = EvenPixels(label_x_ + static_cast<float>(label_ink.right) + std::round(theme::kBinTextInset * scale));
 
   auto shape_clip = [&](IDCompositionRectangleClip* clip, float inset) {
     const float radius = height_ * 0.5f - inset;
@@ -98,26 +129,24 @@ RubbishBin::RubbishBin(Compositor& compositor, IDCompositionVisual* parent, floa
   fill_ = solid(0xFF000000u | theme::kBinRed, span);
   inner_->AddVisual(fill_.Get(), FALSE, nullptr);
 
-  veil_ = solid(0xFFFFFFFF, span);
-  veil_effect_ = compositor_.CreateEffectGroup();
-  veil_->SetEffect(veil_effect_.Get());
-  inner_->AddVisual(veil_.Get(), FALSE, nullptr);
+  fill_over_ = solid(0xFF000000u | theme::kBinRedOver, span);
+  fill_over_effect_ = compositor_.CreateEffectGroup();
+  fill_over_->SetEffect(fill_over_effect_.Get());
+  inner_->AddVisual(fill_over_.Get(), FALSE, nullptr);
 
-  const int icon_pixels = static_cast<int>(icon_size_);
-  const float icon_scale = icon_size_ / theme::kBinIconSize;
   icon_ = compositor_.CreateVisual();
   can_ = compositor_.CreateVisual();
-  can_->SetContent(compositor_.CreateSurface(RenderBinCan(icon_pixels, icon_scale), false).Get());
+  can_->SetContent(compositor_.CreateSurface(can, false).Get());
   lid_ = compositor_.CreateVisual();
-  lid_->SetContent(compositor_.CreateSurface(RenderBinLid(icon_pixels, icon_scale), false).Get());
+  lid_->SetContent(compositor_.CreateSurface(lid, false).Get());
   icon_->AddVisual(can_.Get(), FALSE, nullptr);
   icon_->AddVisual(lid_.Get(), FALSE, nullptr);
-  icon_->SetOffsetY(-icon_size_ * 0.5f);
+  icon_->SetOffsetY(std::round(-static_cast<float>(icon_ink.top + icon_ink.bottom) * 0.5f));
   inner_->AddVisual(icon_.Get(), FALSE, nullptr);
 
   label_ = compositor_.CreateVisual();
   label_->SetContent(compositor_.CreateSurface(label, false).Get());
-  label_->SetOffsetY(std::round(-label_height_ * 0.5f));
+  label_->SetOffsetY(std::round(-static_cast<float>(label_ink.top + label_ink.bottom) * 0.5f));
   label_effect_ = compositor_.CreateEffectGroup();
   label_->SetEffect(label_effect_.Get());
   inner_->AddVisual(label_.Get(), FALSE, nullptr);
@@ -130,13 +159,12 @@ void RubbishBin::SnapToDisc() {
   presence_.Snap(0.0f);
   left_.Snap(-height_ * 0.5f);
   right_.Snap(height_ * 0.5f);
-  grow_.Snap(1.0f);
-  squash_.Snap(0.0f);
-  lid_angle_.Snap(0.0f);
   label_alpha_.Snap(0.0f);
-  engaged_light_.Snap(0.0f);
-  lean_x_.Snap(0.0f);
-  lean_y_.Snap(0.0f);
+  over_light_.Snap(0.0f);
+  lid_open_.Snap(0.0f);
+  lid_aim_.Snap(0.0f);
+  can_squash_.Snap(0.0f);
+  closeness_ = 0.0f;
   slamming_ = false;
 }
 
@@ -160,6 +188,7 @@ void RubbishBin::Show() {
   presence_.target = 1.0f;
   near_ = false;
   engaged_ = false;
+  closeness_ = 0.0f;
 }
 
 void RubbishBin::Hide() {
@@ -168,8 +197,7 @@ void RubbishBin::Hide() {
   presence_.target = 0.0f;
   near_ = false;
   engaged_ = false;
-  lean_x_.target = 0.0f;
-  lean_y_.target = 0.0f;
+  closeness_ = 0.0f;
 }
 
 RECT RubbishBin::HotZone() const {
@@ -191,23 +219,24 @@ bool RubbishBin::Track(POINT point) {
   const float dx = std::max(std::fabs(point.x - center_x_.target) - half_w, 0.0f);
   const float dy = std::max(std::fabs(point.y - center_y_.target) - half_h, 0.0f);
   const float distance = std::sqrt(dx * dx + dy * dy);
-  const float near_limit = (theme::kBinNearDistance + (near_ ? theme::kBinNearHysteresis : 0.0f)) * scale_;
-  near_ = distance < near_limit;
+  const float noticed = theme::kBinNearDistance * scale_;
+  near_ = distance < noticed + (near_ ? theme::kBinNearHysteresis * scale_ : 0.0f);
+  closeness_ = std::clamp(1.0f - distance / noticed, 0.0f, 1.0f);
   engaged_ = Contains(point);
-  right_leads_ = point.x >= center_x_.target;
-
-  const float reach = theme::kBinMagnetMax * scale_;
-  lean_x_.target = near_ ? std::clamp((point.x - center_x_.target) * theme::kBinMagnet, -reach, reach) : 0.0f;
-  lean_y_.target = near_ ? std::clamp((point.y - center_y_.target) * theme::kBinMagnet, -reach, reach) : 0.0f;
   return engaged_;
 }
 
-void RubbishBin::Nudge(float impulse) { squash_.velocity += impulse; }
+void RubbishBin::Aim(float x, float y) {
+  const float angle = std::atan2(x - mouth_x(), std::max(mouth_y() - y, 1.0f));
+  lid_aim_.target = std::clamp(angle / (theme::kBinLidFullAimDegrees * kDegrees), -1.0f, 1.0f);
+}
+
+void RubbishBin::Nudge(float impulse) { can_squash_.velocity += impulse; }
 
 void RubbishBin::Gulp(bool then_hide) {
   slamming_ = true;
   engaged_ = false;
-  Nudge(kGulpImpulse);
+  Nudge(theme::kBinGulpImpulse);
   hide_in_ = then_hide ? theme::kBinGulpHold : 0.0;
 }
 
@@ -221,24 +250,21 @@ bool RubbishBin::Frame(float dt) {
   const float half = (expanded ? full_width_ : height_) * 0.5f;
   left_.target = -half;
   right_.target = half;
-  grow_.target = engaged_ ? theme::kBinGrowEngaged : (expanded ? theme::kBinGrowNear : 1.0f);
   label_alpha_.target = expanded ? 1.0f : 0.0f;
-  engaged_light_.target = engaged_ ? 1.0f : 0.0f;
-  lid_angle_.target = slamming_ ? 0.0f : (engaged_ ? theme::kBinLidOpenDegrees : (near_ ? theme::kBinLidNearDegrees : 0.0f));
+  over_light_.target = engaged_ ? 1.0f : 0.0f;
+  lid_open_.target = slamming_ ? 0.0f : (engaged_ ? 1.0f : (near_ ? closeness_ * theme::kBinLidNearOpen : 0.0f));
 
   presence_.Step(showing_ ? theme::kCapsuleEnter : theme::kCapsuleLeave, dt);
-  // The edge nearer the pointer leads, the same liquid stretch as the selector's sliding pill.
-  left_.Step(right_leads_ ? theme::kPillTrailing : theme::kPillLeading, dt);
-  right_.Step(right_leads_ ? theme::kPillLeading : theme::kPillTrailing, dt);
-  grow_.Step(theme::kBinGrow, dt);
-  squash_.Step(theme::kBinSquash, dt);
-  lid_angle_.Step(slamming_ ? theme::kBinLidSlam : theme::kBinLid, dt);
+  // One spring for both edges keeps its center where it is.
+  StepToRest(left_, theme::kBinMorph, dt);
+  StepToRest(right_, theme::kBinMorph, dt);
   label_alpha_.Step(theme::kFade, dt);
-  engaged_light_.Step(theme::kFade, dt);
-  center_x_.Step(theme::kReflow, dt);
-  center_y_.Step(theme::kReflow, dt);
-  lean_x_.Step(theme::kPillTrailing, dt);
-  lean_y_.Step(theme::kPillTrailing, dt);
+  over_light_.Step(theme::kFade, dt);
+  StepToRest(center_x_, theme::kReflow, dt);
+  StepToRest(center_y_, theme::kReflow, dt);
+  lid_open_.Step(slamming_ ? theme::kBinLidSlam : theme::kBinLid, dt);
+  lid_aim_.Step(theme::kBinLidAim, dt);
+  can_squash_.Step(theme::kBinCan, dt);
   Apply();
 
   const bool hidden = !showing_ && hide_in_ <= 0.0 && presence_.Settled(0.004f);
@@ -259,16 +285,8 @@ void RubbishBin::Reset() {
 
 void RubbishBin::Apply() {
   const float presence = presence_.value;
-  const float fall = (1.0f - presence) * theme::kCapsuleRise * scale_;
-  const float size = (0.90f + 0.10f * presence) * grow_.value;
-  const float stretch = std::clamp(squash_.value, -0.3f, 0.3f);
-  // Volume is kept: while it widens quickly, it thins a little.
-  const float flow = std::clamp((right_.velocity - left_.velocity) / full_width_ * kFlow, -kFlowMax, kFlowMax);
-  const float sx = size * (1.0f + stretch);
-  const float sy = size * (1.0f - stretch - flow);
-  root_->SetOffsetX(x());
-  root_->SetOffsetY(y() + fall);
-  root_->SetTransform(D2D_MATRIX_3X2_F{sx, 0.0f, 0.0f, sy, 0.0f, 0.0f});
+  root_->SetOffsetX(center_x_.value);
+  root_->SetOffsetY(center_y_.value + (1.0f - presence) * theme::kCapsuleRise * scale_);
   root_effect_->SetOpacity(std::clamp(presence * 1.5f, 0.0f, 1.0f));
 
   const float left = left_.value;
@@ -288,23 +306,33 @@ void RubbishBin::Apply() {
   shadow_right_->SetOffsetX(middle_right);
   shadow_right_->SetOffsetY(top);
   shadow_middle_->SetTransform(D2D_MATRIX_3X2_F{std::max(middle_right - middle_left, 0.01f), 0.0f, 0.0f, 1.0f, middle_left, top});
-  veil_effect_->SetOpacity(theme::kBinEngagedVeil * std::clamp(engaged_light_.value, 0.0f, 1.0f));
+  fill_over_effect_->SetOpacity(std::clamp(over_light_.value, 0.0f, 1.0f));
 
-  icon_->SetOffsetX(left + (height_ - icon_size_) * 0.5f);
+  icon_->SetOffsetX(left + icon_x_);
+  label_->SetOffsetX(left + label_x_);
+  label_effect_->SetOpacity(std::clamp(label_alpha_.value, 0.0f, 1.0f));
 
-  const float unit = icon_size_ / theme::kBinIconSize;
-  const float hinge_x = kLidHingeX * unit;
-  const float hinge_y = kLidHingeY * unit;
-  const float radians = lid_angle_.value * kDegrees;
+  const float unit = icon_size_ / kIconGrid;
+
+  // The can squats from its base, and what rests on it goes down with it.
+  const float squash = std::clamp(can_squash_.value, -kCanSquashMax, kCanSquashMax);
+  const float can_x = 1.0f + squash * kCanWidening;
+  const float can_y = 1.0f - squash;
+  can_->SetTransform(D2D_MATRIX_3X2_F{can_x, 0.0f, 0.0f, can_y, kLidCenterX * unit * (1.0f - can_x), kCanBottom * unit * (1.0f - can_y)});
+  const float can_drop = (kCanBottom - kCanTop) * unit * squash;
+
+  // Opening toward the thumbnail, the lid pivots on its far end. Directly below it, it lifts off level instead.
+  const float open = std::max(lid_open_.value, kLidClosedPastMin);
+  const float aim = std::clamp(lid_aim_.value, -1.0f, 1.0f);
+  const float radians = -aim * theme::kBinLidTiltDegrees * kDegrees * std::max(open, 0.0f);
   const float cosine = std::cos(radians);
   const float sine = std::sin(radians);
-  const float lift = std::clamp(lid_angle_.value / theme::kBinLidOpenDegrees, -0.2f, 1.2f) * theme::kBinLidLift * unit;
-  lid_->SetTransform(D2D_MATRIX_3X2_F{cosine, sine, -sine, cosine, hinge_x - (hinge_x * cosine - hinge_y * sine),
-                                      hinge_y - (hinge_x * sine + hinge_y * cosine) - lift});
-
-  const float label_alpha = std::clamp(label_alpha_.value, 0.0f, 1.0f);
-  label_->SetOffsetX(left + label_start_ + (1.0f - label_alpha) * 8.0f * scale_);
-  label_effect_->SetOpacity(label_alpha);
+  const float hinge_x = (kLidCenterX + (aim < 0.0f ? kLidHalf : -kLidHalf)) * unit;
+  const float hinge_y = kLidY * unit;
+  const float rise = open * (kLidRiseAbove * (1.0f - std::fabs(aim)) + kLidRiseAside) * unit;
+  const float slide = -aim * open * kLidSlide * unit;
+  lid_->SetTransform(D2D_MATRIX_3X2_F{cosine, sine, -sine, cosine, hinge_x - (hinge_x * cosine - hinge_y * sine) + slide,
+                                      hinge_y - (hinge_x * sine + hinge_y * cosine) - rise + can_drop});
 }
 
 }  // namespace sstk
