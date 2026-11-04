@@ -6,8 +6,11 @@
 #include <uiautomation.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cwchar>
+#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -40,6 +43,16 @@ void Collect(Search& search, RECT rect) {
   search.areas.push_back(rect);
 }
 
+bool IsWebDocument(IUIAutomationElement* element) {
+  CONTROLTYPEID type = 0;
+  if (FAILED(element->get_CachedControlType(&type)) || type != UIA_DocumentControlTypeId) return false;
+  BSTR framework = nullptr;
+  if (FAILED(element->get_CachedFrameworkId(&framework))) return false;
+  const bool web = framework != nullptr && wcscmp(framework, L"Chrome") == 0;
+  SysFreeString(framework);
+  return web;
+}
+
 void FindWithAutomation(HWND window, Search& search) {
   ComPtr<IUIAutomation> automation;
   if (FAILED(CoCreateInstance(__uuidof(CUIAutomation8), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))) &&
@@ -60,26 +73,31 @@ void FindWithAutomation(HWND window, Search& search) {
   yes.vt = VT_BOOL;
   yes.boolVal = VARIANT_TRUE;
   ComPtr<IUIAutomationCondition> has_pattern;
-  ComPtr<IUIAutomationCondition> vertical;
-  ComPtr<IUIAutomationCondition> both;
-  if (FAILED(automation->CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, yes, &has_pattern)) ||
-      FAILED(automation->CreatePropertyCondition(UIA_ScrollVerticallyScrollablePropertyId, yes, &vertical)) ||
-      FAILED(automation->CreateAndCondition(has_pattern.Get(), vertical.Get(), &both))) {
-    return;
-  }
+  if (FAILED(automation->CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, yes, &has_pattern))) return;
   ComPtr<IUIAutomationCacheRequest> cache;
-  if (FAILED(automation->CreateCacheRequest(&cache)) || FAILED(cache->AddProperty(UIA_BoundingRectanglePropertyId))) return;
+  if (FAILED(automation->CreateCacheRequest(&cache))) return;
+  for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_ScrollVerticallyScrollablePropertyId, UIA_ControlTypePropertyId,
+                                    UIA_FrameworkIdPropertyId, UIA_IsOffscreenPropertyId}) {
+    if (FAILED(cache->AddProperty(property))) return;
+  }
 
   ComPtr<IUIAutomationElementArray> found;
-  if (FAILED(root->FindAllBuildCache(TreeScope_Subtree, both.Get(), cache.Get(), &found)) || !found) return;
+  if (FAILED(root->FindAllBuildCache(TreeScope_Subtree, has_pattern.Get(), cache.Get(), &found)) || !found) return;
   int count = 0;
   found->get_Length(&count);
   for (int i = 0; i < count; ++i) {
     ComPtr<IUIAutomationElement> element;
     RECT rect{};
-    if (SUCCEEDED(found->GetElement(i, &element)) && element && SUCCEEDED(element->get_CachedBoundingRectangle(&rect))) {
-      Collect(search, rect);
-    }
+    if (FAILED(found->GetElement(i, &element)) || !element || FAILED(element->get_CachedBoundingRectangle(&rect))) continue;
+    BOOL offscreen = FALSE;
+    if (SUCCEEDED(element->get_CachedIsOffscreen(&offscreen)) && offscreen) continue;
+    VARIANT vertical{};
+    const bool scrolls = SUCCEEDED(element->GetCachedPropertyValue(UIA_ScrollVerticallyScrollablePropertyId, &vertical)) &&
+                         vertical.vt == VT_BOOL && vertical.boolVal != VARIANT_FALSE;
+    // A browser tells about its page as a whole, and leaves out most of what scrolls inside one: plain boxes, and lists
+    // and editors drawing only their visible part. So its documents count whatever they say, and the recorder finds
+    // what really moves.
+    if (scrolls || IsWebDocument(element.Get())) Collect(search, rect);
   }
 }
 
@@ -117,6 +135,10 @@ std::vector<RECT> FindScrollAreas(HWND window, const RECT& monitor, float scale)
   return std::move(search.areas);
 }
 
+bool SameAreas(const std::vector<RECT>& a, const std::vector<RECT>& b) {
+  return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const RECT& x, const RECT& y) { return EqualRect(&x, &y) != FALSE; });
+}
+
 }  // namespace
 
 ScrollDetector::ScrollDetector(HWND controller) : controller_(controller) {}
@@ -148,17 +170,27 @@ void ScrollDetector::Main() {
     if (stopping_) break;
     const Job job = pending_;
     has_pending_ = false;
-    lock.unlock();
 
-    const double started = NowSeconds();
-    auto result = std::make_unique<ScrollAreas>();
-    result->shot = job.shot;
-    result->areas = FindScrollAreas(job.window, job.monitor, job.scale);
-    Trace("scroll: %zu areas found in %.1f ms", result->areas.size(), (NowSeconds() - started) * 1000.0);
-    if (!result->areas.empty() && PostMessageW(controller_, kMsgScrollAreas, 0, reinterpret_cast<LPARAM>(result.get()))) {
-      result.release();
+    // Asked for the first time, a browser only starts to build what it can tell, so the first answer may be nothing.
+    // It is asked again until the answer settles, or until there is nothing to wait for.
+    std::vector<RECT> known;
+    for (size_t attempt = 0;; ++attempt) {
+      lock.unlock();
+      const double started = NowSeconds();
+      auto result = std::make_unique<ScrollAreas>();
+      result->shot = job.shot;
+      result->areas = FindScrollAreas(job.window, job.monitor, job.scale);
+      Trace("scroll: %zu areas found in %.1f ms", result->areas.size(), (NowSeconds() - started) * 1000.0);
+      const bool settled = !known.empty() && SameAreas(known, result->areas);
+      if (!result->areas.empty() && !settled) {
+        known = result->areas;
+        if (PostMessageW(controller_, kMsgScrollAreas, 0, reinterpret_cast<LPARAM>(result.get()))) result.release();
+      }
+      lock.lock();
+      if (settled || attempt == std::size(config::kScrollDetectRetryMs)) break;
+      const auto delay = std::chrono::milliseconds(config::kScrollDetectRetryMs[attempt]);
+      if (wake_.wait_for(lock, delay, [&] { return stopping_ || has_pending_; })) break;
     }
-    lock.lock();
   }
   lock.unlock();
   CoUninitialize();

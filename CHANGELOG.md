@@ -6,11 +6,12 @@ Built programs are kept per version in the local `release/` folder, created by `
 
 ### Added
 
-- Scrolling screenshots. When the top app has anything that scrolls vertically, nested areas included, the selector offers a page icon. UI Automation finds these areas in the background without touching any window, and classic scroll bars fill in where it sees nothing.
+- Scrolling screenshots. When the top app has anything that scrolls vertically, nested areas included, the selector offers a page icon. UI Automation finds these areas in the background without touching any window, classic scroll bars fill in where it sees nothing, and browsers and the apps built on them are asked again until their answer settles.
 - Selecting the icon shows "Press again / Win Enter to activate Scrolling Screenshot", with Win and Enter drawn as keycaps. Pressing it again or pressing Win+Enter starts recording.
-- While recording, the selector's pill gathers into a breathing dot beside "Scroll to capture", which turns into "Recording" once the first scroll picks the area. Fixed headers and footers appear once, a scroll bar at the right edge is left out, and scrolling above the start adds content there too.
+- While recording, the selector's pill gathers into a breathing dot beside "Scroll to capture", which turns into "Recording" once the first scroll picks the area. What moves decides the area, so panes an app says nothing about work too, and a sidebar that stays put is left out. Fixed headers and footers appear once, a scroll bar at the right edge is left out, a bar that sticks to the top is not stamped over the content, and scrolling above the start adds content there too.
+- Rows are matched by where their color steps, so windows with a see-through background, such as Settings, stitch as well as any other.
 - The thumbnail grows with the capture at an unchanged width and scale, up to about half the screen, and then follows the part on screen.
-- PrintScreen, Win+Shift+S, Win+Enter, a click on the selector, or 5 seconds without scrolling finish it. Moving or closing the window, turning the wheel outside the captured area, or content that stops matching ends it early.
+- PrintScreen, Win+Shift+S, Win+Enter, a click on the selector, or 5 seconds without scrolling finish it. Moving or closing the window, turning the wheel outside the captured area, or content that stops matching ends it early. A video playing in the page does not.
 - The outcome fills the selector for 1.5 seconds: green when saved, dark green when it ended early after growing by at least 10%, and red when nothing was kept. The selector then returns, with the scrolling screenshot as an option of its own. Each screenshot takes at most one.
 
 ### Changed

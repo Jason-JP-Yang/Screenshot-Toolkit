@@ -23,16 +23,16 @@ With several monitors, the one under the cursor is captured. Options covering an
 
 ## Scrolling screenshots
 
-Each screenshot asks UI Automation, in the background, which parts of the top app window scroll vertically, nested ones included, and also checks classic scroll bars. Nothing is scrolled or clicked to find out, so no window on screen reacts. If anything scrolls, the page icon appears at the end of the capsule.
+Each screenshot asks UI Automation, in the background, which parts of the top app window scroll vertically, nested ones included, and also checks classic scroll bars. Nothing is scrolled or clicked to find out, so no window on screen reacts. If anything scrolls, the page icon appears at the end of the capsule. It can take a moment in a browser, which only starts to build what it can tell once it is asked. Browsers and the apps built on them keep most of what scrolls to themselves, so any of their pages gets the icon, even one that turns out not to scroll.
 
 Selected, the icon shows how to start: press it again, or press Win+Enter. While recording:
 
-- Scroll with the wheel, the touchpad, or the scroll bar, with the pointer over the area. The first scroll decides which area is captured: the largest area under the pointer whose content moved as a whole. From then on the keyboard scrolls it too.
-- Fixed headers and footers inside the area appear once, and a scroll bar at its right edge is left out.
+- Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, so this works in panes the app says nothing about. Columns that stay put beside it, such as a sidebar, are left out.
+- Fixed headers and footers inside the area appear once, a scroll bar at its right edge is left out, and a bar that sticks to the top on the way down is not stamped over the content.
 - Scrolling up past the start adds content above it as well.
 - The thumbnail follows along, growing up to about half the screen and then showing the part you are on.
 
-It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the captured area, or when the content stops matching for a moment, for example after a click opens another page.
+It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the captured area, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it.
 
 The capsule then shows the outcome for 1.5 seconds before turning back into the selector:
 
@@ -106,7 +106,7 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Mouse hook.** The side buttons and the right-click cancel need a low-level mouse hook, which wakes the process on every pointer move. It therefore exists only while a thumbnail with options or a drag is on screen, and an idle program has only the keyboard hook.
 
-**Scrolling screenshots.** Finding scrollable areas runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads three columns four pixels wide from the area about every 90 ms, and every 40 ms while things move. Only when they change is the whole area read, its rows fingerprinted, and the scroll distance found by letting rows vote for the shift that lines them up. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
+**Scrolling screenshots.** Finding scrollable areas runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads three columns four pixels wide from the area about every 90 ms, and every 40 ms while things move. Only when they change is the whole area read, its rows fingerprinted, and the scroll distance found by letting rows vote for the shift that lines them up. A fingerprint records where a row's color steps and not the colors themselves, because a window's see-through material changes every pixel slightly as the content moves over it. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
 
 **Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config/core.h` and rebuild.
 

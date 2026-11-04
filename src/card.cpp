@@ -376,7 +376,7 @@ bool Card::ShowsLong(int index) const {
 }
 
 SIZE Card::DisplaySize() const {
-  if (ShowsLong(selected_)) return SIZE{long_.thumb_width, std::max(long_.view_bottom - long_.view_top, 1)};
+  if (ShowsLong(selected_)) return SIZE{long_.view_width, std::max(long_.view_bottom - long_.view_top, 1)};
   return ThumbnailSize(regions_[selected_].rect, scale_);
 }
 
@@ -394,7 +394,12 @@ RectF Card::SourceRect() const {
 }
 
 bool Card::OfferScroll(std::vector<RECT> areas) {
-  if (app_ == nullptr || scroll_source_ >= 0) return false;
+  if (app_ == nullptr) return false;
+  if (scroll_source_ >= 0) {
+    // A later look at the app saw more.
+    if (regions_.back().kind == RegionKind::kScroll) scroll_areas_ = std::move(areas);
+    return false;
+  }
   for (size_t i = 0; i < regions_.size(); ++i) {
     if (!NearlyEqual(regions_[i].rect, app_rect_)) continue;
     scroll_source_ = static_cast<int>(i);
@@ -420,7 +425,7 @@ bool Card::BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& n
   long_.surface = compositor_.CreateVirtualSurface(update.thumb_width, kLongRows, true);
   if (!long_.surface) return false;
   long_.area = update.area;
-  long_.thumb_width = update.thumb_width;
+  long_.view_width = update.thumb_width;
   long_.scale = static_cast<double>(update.thumb_width) / (update.area.right - update.area.left);
   long_.max_rows = max_rows;
   DrawLong(update);
@@ -438,13 +443,16 @@ void Card::KeepLong(const ScrollUpdate& update) {
   const int index = static_cast<int>(regions_.size()) - 1;
   regions_[index].kind = RegionKind::kLong;
   long_size_ = SIZE{update.image->width(), update.image->height()};
+  // The image may have lost a scroll bar that the rows drawn so far still show.
+  long_.area = update.area;
+  long_.view_width = std::max(static_cast<int>(std::lround((update.area.right - update.area.left) * long_.scale)), 1);
   // Finished, it shows from the top, as the image does when opened.
   SetLongView(update.content_top, update.content_bottom, update.content_top);
   const double stretch = 1.0 / long_.scale;
   const double skipped = update.image_rect.top - long_.area.top;
   const double top = (long_.view_top - kLongOrigin) * stretch - skipped;
   const double bottom = (long_.view_bottom - kLongOrigin) * stretch - skipped;
-  long_.pixels = ResampleArea(*update.image, 0.0, top, update.image->width(), bottom, long_.thumb_width, long_.view_bottom - long_.view_top);
+  long_.pixels = ResampleArea(*update.image, 0.0, top, update.image->width(), bottom, long_.view_width, long_.view_bottom - long_.view_top);
 }
 
 void Card::DropLong(const TimeBase& now) {

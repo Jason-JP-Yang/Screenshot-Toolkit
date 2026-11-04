@@ -1,4 +1,4 @@
-// Finds the parts of the top app window that scroll vertically, nested ones included. UI Automation sees into
+// Finds the parts of the top app window that may scroll vertically, nested ones included. UI Automation sees into
 // every kind of app, and classic scroll bars fill in where it sees nothing. It only reads, so nothing on screen reacts.
 #pragma once
 
@@ -23,8 +23,8 @@ class ScrollDetector {
   ScrollDetector(const ScrollDetector&) = delete;
   ScrollDetector& operator=(const ScrollDetector&) = delete;
 
-  // Looks into the window in the background, and posts kMsgScrollAreas if anything scrolls. A newer request
-  // replaces one still waiting.
+  // Looks into the window in the background, and posts kMsgScrollAreas whenever it finds anything new that scrolls.
+  // A newer request replaces this one.
   void Request(uint64_t shot, HWND window, const RECT& monitor, float scale);
 
  private:
