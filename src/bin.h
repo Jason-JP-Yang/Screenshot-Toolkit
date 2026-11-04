@@ -22,7 +22,7 @@ class RubbishBin {
   bool Track(POINT point);
   bool Contains(POINT point) const;
 
-  // Where the thumbnail is, which is the way the lid opens.
+  // Where the thumbnail is. The lid opens that way, as seen from the capsule's center.
   void Aim(float x, float y);
 
   // Gives the can a small elastic jolt. Positive squats, negative stretches.

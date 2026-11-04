@@ -225,7 +225,7 @@ bool RubbishBin::Track(POINT point) {
 }
 
 void RubbishBin::Aim(float x, float y) {
-  const float angle = std::atan2(x - mouth_x(), std::max(mouth_y() - y, 1.0f));
+  const float angle = std::atan2(x - center_x_.value, std::max(center_y_.value - y, 1.0f));
   lid_aim_.target = std::clamp(angle / (config::kBinLidFullAimDegrees * kDegrees), -1.0f, 1.0f);
 }
 
