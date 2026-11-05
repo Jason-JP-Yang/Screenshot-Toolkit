@@ -132,6 +132,7 @@ class Card {
   // A scrolling screenshot's thumbnail: rows on a tall sparse surface, numbered as in recorder.h, and the part on show.
   struct Long {
     RECT area{};  // Monitor pixels of the scrolled area.
+    int surface_left = 0;  // Monitor pixels of the surface's first column.
     int view_width = 0;
     double scale = 1.0;  // Thumbnail pixels per screen pixel.
     int content_top = 0;

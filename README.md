@@ -8,7 +8,7 @@ There is no window, tray icon, editor, or settings page, by design.
 
 - **Capture:** press PrintScreen or Win+Shift+S. Press as fast as you like: each shot stacks into a deck and leaves on its own 3-second timer.
 - **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. The selected option shows its name beside its icon, and the capsule springs to its new width as the selection moves. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
-- **Take a scrolling screenshot:** when the top app has anything that scrolls vertically, the capsule also offers a page icon. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
+- **Take a scrolling screenshot:** when the top app has content out of view, the capsule also offers a page icon. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
 - **Switch regions without the mouse:** while a thumbnail with options is on screen, Win+Shift+Left and Win+Shift+Right step through them, as do Win+Shift with side buttons 4 and 5. The steps wrap around. With nothing to switch, those keys keep their Windows meaning.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
@@ -23,16 +23,24 @@ With several monitors, the one under the cursor is captured. Options covering an
 
 ## Scrolling screenshots
 
-Each screenshot asks UI Automation, in the background, which parts of the top app window scroll vertically, nested ones included, and also checks classic scroll bars. Nothing is scrolled or clicked to find out, so no window on screen reacts. If anything scrolls, the page icon appears at the end of the capsule. It can take a moment in a browser, which only starts to build what it can tell once it is asked. Browsers and the apps built on them keep most of what scrolls to themselves, so any of their pages gets the icon, even one that turns out not to scroll.
+Each screenshot looks in the background for content in the top app window that really lies out of view. Nothing is scrolled or clicked to find out, so no window on screen reacts. The page icon appears at the end of the capsule only if one of these holds:
+
+- Something reports that it shows only part of its content. This covers native lists and documents, and in browsers and the apps built on them every plain box that scrolls, read from UI Automation's raw view.
+- Items stacked in a container run out of sight, or a list reports more items than it has rendered, as lists that draw only the visible part do.
+- The window draws a large patch of content that it describes to nobody, such as a canvas or an app with no accessibility at all. Such content cannot be judged, so it gets the benefit of the doubt, about a second after the shot, once the app has had time to answer.
+
+A short page, a dialog that fits, or text cut off by a box that does not scroll gets no icon. Scroll bars play no part in this.
 
 Selected, the icon shows how to start: press it again, or press Win+Enter. While recording:
 
-- Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, so this works in panes the app says nothing about. Columns that stay put beside it, such as a sidebar, are left out.
-- Fixed headers and footers inside the area appear once, a scroll bar at its right edge is left out, and a bar that sticks to the top on the way down is not stamped over the content.
-- Scrolling up past the start adds content above it as well.
+- Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, with the pointer settling it when several things could be. Columns that hold still beside it, such as a sidebar or a background that does not scroll, are left out.
+- Only what follows the scroll enters the image. Fixed headers, floating buttons, composers, and bars that only stick partway appear once at most, and what they hide is filled in from the moments it was in the clear. A scroll bar at the area's edge is left out, and one over the content does not leave a trail.
+- The effects of hovering stay out. Rows near the pointer are taken from before or after they pass it, and a highlight of any size around the pointer never replaces what was seen before it.
+- Fast scrolling, frames blurred in motion, and see-through windows are all followed. Rows first seen blurred are retaken when the content rests.
+- Scrolling up past the start adds content above it as well. Each end of the image shows just what the screen showed there.
 - The thumbnail follows along, growing up to about half the screen and then showing the part you are on.
 
-It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the captured area, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it.
+It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the window, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it.
 
 The capsule then shows the outcome for 1.5 seconds before turning back into the selector:
 
@@ -106,7 +114,7 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Mouse hook.** The side buttons and the right-click cancel need a low-level mouse hook, which wakes the process on every pointer move. It therefore exists only while a thumbnail with options or a drag is on screen, and an idle program has only the keyboard hook.
 
-**Scrolling screenshots.** Finding scrollable areas runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads three columns four pixels wide from the area about every 90 ms, and every 40 ms while things move. Only when they change is the whole area read, its rows fingerprinted, and the scroll distance found by letting rows vote for the shift that lines them up. A fingerprint records where a row's color steps and not the colors themselves, because a window's see-through material changes every pixel slightly as the content moves over it. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
+**Scrolling screenshots.** Looking for content out of view runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads the window about every 90 ms, and every 25 ms while things move, and reduces each reading to an edge map, which records where brightness steps and not the shades, because a window's see-through material changes every pixel slightly as the content moves over it. Strips of columns each propose the shifts that line their rows up, so that whatever is fixed in one strip costs only that strip, and the proposals are checked cell by cell in 16 by 16 pixel cells. A cell that matches at the shift and not in place moves with the scroll. That tells the moving area from what surrounds it, with no help from the app, though a rectangle it reports can settle the plain margins. Each reading is placed against the rows already held, so errors cannot add up. A row of 16 pixel slices then enters the image according to how far it can be believed: seen from under something fixed or near the pointer it only fills an empty place, seen once it stands for now, and seen moving it stays unless later readings keep disagreeing with it. Reduced to edges, one reading costs a few milliseconds on a full window. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
 
 **Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config/core.h` and rebuild.
 
@@ -138,8 +146,10 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/compositor.cpp` | WARP device and composition helpers |
 | `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
 | `src/capsule.cpp` | The region selector, its sliding pill and labels, and a scrolling screenshot's recording and outcome |
-| `src/scrollable.cpp` | Finding the areas of the top app that scroll vertically |
-| `src/recorder.cpp` | Recording a scrolling screenshot: sampling, matching, stitching, and its thumbnail |
+| `src/scrollable.cpp` | Finding whether the top app has content out of view |
+| `src/stitcher.cpp` | The pixel work of a scrolling screenshot: what moved, by how much, and building the long image |
+| `src/recorder.cpp` | Recording a scrolling screenshot: reading the screen, its timing, and its thumbnail |
+| `tests/scroll_sim.cpp` | Runs the stitcher against simulated apps. Build the `ScrollSim` target to use it |
 | `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
 | `src/sprite.cpp` | The thumbnail in the air, and the mesh that draws it into the bin |
 | `src/bin.cpp` | The rubbish bin capsule |

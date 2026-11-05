@@ -280,6 +280,19 @@ TaskbarInsets QueryTaskbarInsets(HMONITOR monitor) {
   return InsetsFrom(state.taskbar, monitor_info.rcMonitor);
 }
 
+bool VisibleFrame(HWND window, const RECT& monitor, RECT* visible) {
+  RECT frame;
+  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame)) return false;
+  if (!IntersectRect(visible, &frame, &monitor)) return false;
+  // The taskbar lies over any window but one filling the whole monitor.
+  MONITORINFO info{sizeof(info)};
+  if (!EqualRect(visible, &monitor) && GetMonitorInfoW(MonitorFromRect(&monitor, MONITOR_DEFAULTTONEAREST), &info)) {
+    RECT usable;
+    if (IntersectRect(&usable, visible, &info.rcWork)) *visible = usable;
+  }
+  return true;
+}
+
 SIZE ThumbnailSize(const RECT& region, float scale) {
   const float region_w = static_cast<float>(region.right - region.left);
   const float region_h = static_cast<float>(region.bottom - region.top);

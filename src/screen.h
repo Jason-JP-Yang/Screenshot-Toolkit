@@ -36,6 +36,9 @@ struct ScreenInfo {
 ScreenInfo AnalyzeScreen(HMONITOR monitor);
 TaskbarInsets QueryTaskbarInsets(HMONITOR monitor);
 
+// The part of a window's frame that can be seen on a monitor, both in virtual screen coordinates.
+bool VisibleFrame(HWND window, const RECT& monitor, RECT* visible);
+
 // Pixel size of the thumbnail showing a region.
 SIZE ThumbnailSize(const RECT& region, float scale);
 

@@ -1,5 +1,5 @@
-// A scrolling screenshot in progress. Its own thread watches the scrolled area, works out how far the content
-// moved, and stitches what came into view onto the screenshot it started from, sending the thumbnail as it grows.
+// A scrolling screenshot in progress. Its own thread reads the app's window, finds what really moves when it is scrolled,
+// and builds the long image from what it sees of that (see stitcher.h), sending the thumbnail as it grows.
 //
 // Places are in plane coordinates: monitor pixels, reaching above and below the monitor as the capture grows.
 // Thumbnail rows are numbered on a tall sparse surface, whose row kLongOrigin shows the area's first row.
@@ -24,7 +24,9 @@ struct ScrollUpdate {
   uint64_t session = 0;
   bool locked = false;  // The first update once the scrolled area is known.
   RECT area{};          // Monitor pixels: the scrolled area, less any scroll bar.
-  int thumb_width = 0;
+  int thumb_width = 0;  // Of that area.
+  int surface_left = 0;   // Monitor pixels: the first column drawn on the surface, which may reach beyond the area,
+  int surface_width = 0;  // and how wide it is, as what the area turns out to be can change.
   Image rows;           // Thumbnail rows to draw, the first of them at row `at`.
   int at = 0;
   int content_top = 0;  // Thumbnail rows holding the capture so far.
@@ -41,8 +43,7 @@ struct ScrollRequest {
   HWND controller = nullptr;
   HWND window = nullptr;     // The app being scrolled.
   RECT monitor{};            // Virtual screen coordinates.
-  std::vector<RECT> areas;   // Monitor pixels, largest first.
-  std::shared_ptr<const Image> frame;  // The screenshot it continues.
+  std::vector<RECT> areas;   // What the app reports as scrolling, in monitor pixels. Only a hint at the edges of what moves.
   float scale = 1.0f;
 };
 
@@ -54,7 +55,7 @@ class ScrollRecorder {
   ScrollRecorder(const ScrollRecorder&) = delete;
   ScrollRecorder& operator=(const ScrollRecorder&) = delete;
 
-  // A wheel turned, in virtual screen coordinates. Turning it outside the scrolled area ends the capture early.
+  // A wheel turned, in virtual screen coordinates. Turning it outside the app's window ends the capture early.
   void Wheel(POINT point);
 
   // Ends the capture the normal way.

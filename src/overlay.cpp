@@ -526,8 +526,6 @@ bool Deck::ScrollReady() const {
 bool Deck::BeginScroll(ScrollRequest& request) {
   if (!ScrollReady()) return false;
   Card* top = front();
-  request.frame = store_.AcquireFrame(top->shot());
-  if (!request.frame) return false;
   request.window = top->app();
   request.monitor = bounds_;
   request.areas = top->scroll_areas();
@@ -1377,11 +1375,12 @@ void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   if (Deck* deck = DeckFor(capture->screen.monitor); deck != nullptr) {
     const HWND app = capture->screen.app;
     const RECT bounds = capture->screen.bounds;
+    std::shared_ptr<const Image> frame = capture->frame;
     const uint64_t shot = deck->AddShot(std::move(capture));
     // Looked for after the shot is on screen, so that a slow app never delays it.
     if (app != nullptr) {
       if (!detector_) detector_ = std::make_unique<ScrollDetector>(controller_);
-      detector_->Request(shot, app, bounds, deck->scale());
+      detector_->Request(shot, app, bounds, deck->scale(), std::move(frame));
     }
     EnsureTicking();
     SyncHookMode();

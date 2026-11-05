@@ -28,9 +28,15 @@ add_executable(ScreenshotToolkit WIN32
   src/screen.cpp
   src/scrollable.cpp
   src/sprite.cpp
+  src/stitcher.cpp
   src/store.cpp
   res/app.rc
 )
+
+# Runs the scrolling screenshot core against simulated apps. Built only on request: cmake --build . --target ScrollSim
+add_executable(ScrollSim EXCLUDE_FROM_ALL tests/scroll_sim.cpp src/stitcher.cpp)
+target_compile_definitions(ScrollSim PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+target_compile_options(ScrollSim PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus $<$<CONFIG:Release>:/O2 /DNDEBUG>)
 
 target_compile_definitions(ScreenshotToolkit PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX

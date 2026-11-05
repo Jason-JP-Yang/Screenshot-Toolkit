@@ -322,7 +322,7 @@ void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringS
     // Thumbnail row kLongOrigin is the scrolled area's first row, and the rest follow below and above it.
     const float stretch = static_cast<float>(1.0 / long_.scale);
     surface = long_.surface.Get();
-    place = D2D_MATRIX_3X2_F{stretch, 0.0f, 0.0f, stretch, static_cast<float>(long_.area.left),
+    place = D2D_MATRIX_3X2_F{stretch, 0.0f, 0.0f, stretch, static_cast<float>(long_.surface_left),
                              static_cast<float>(long_.area.top - kLongOrigin / long_.scale)};
   } else {
     const int crisp = CrispIndex(index);
@@ -422,9 +422,10 @@ void Card::SetLongView(int content_top, int content_bottom, int view_bottom) {
 }
 
 bool Card::BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& now) {
-  long_.surface = compositor_.CreateVirtualSurface(update.thumb_width, kLongRows, true);
+  long_.surface = compositor_.CreateVirtualSurface(update.surface_width, kLongRows, true);
   if (!long_.surface) return false;
   long_.area = update.area;
+  long_.surface_left = update.surface_left;
   long_.view_width = update.thumb_width;
   long_.scale = static_cast<double>(update.thumb_width) / (update.area.right - update.area.left);
   long_.max_rows = max_rows;
@@ -443,7 +444,7 @@ void Card::KeepLong(const ScrollUpdate& update) {
   const int index = static_cast<int>(regions_.size()) - 1;
   regions_[index].kind = RegionKind::kLong;
   long_size_ = SIZE{update.image->width(), update.image->height()};
-  // The image may have lost a scroll bar that the rows drawn so far still show.
+  // What moved over the whole capture may say more than the first scroll did about which columns belong to it.
   long_.area = update.area;
   long_.view_width = std::max(static_cast<int>(std::lround((update.area.right - update.area.left) * long_.scale)), 1);
   // Finished, it shows from the top, as the image does when opened.
