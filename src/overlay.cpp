@@ -10,6 +10,7 @@
 #include "dragdrop.h"
 #include "sprite.h"
 
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <windowsx.h>
 
@@ -106,6 +107,7 @@ class Deck {
   void OnButtonDown(POINT point);
   void OnButtonUp(POINT point);
   void OnMouseLeave();
+  void PassOnWheel(UINT message, WPARAM wparam, LPARAM lparam);
   void LiftFront();
   void OpenFront();
   void PlaceBin();
@@ -153,6 +155,7 @@ class Deck {
 
   Card* scroll_card_ = nullptr;  // Recording or showing its outcome.
   double outcome_until_ = 0.0;
+  bool open_when_finished_ = false;  // A click on the thumbnail while the scrolling screenshot was still finishing.
 
   bool hovering_ = false;
   bool tracking_leave_ = false;
@@ -340,19 +343,18 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
 void Deck::UpdateSink() {
   if (dragging_) return;
   Card* top = front();
-  // While a scrolling screenshot runs, presses and wheel turns over the thumbnail go through to the app beneath it.
-  const bool card_input = top != nullptr && !top->busy;
-  if (top == nullptr || (!card_input && !capsule_->visible())) {
+  if (top == nullptr) {
     ShowWindow(sink_, SW_HIDE);
     return;
   }
 
+  // A scrolling screenshot's thumbnail takes presses as any other does, and passes the wheel on to the app beneath it.
   RECT card{static_cast<LONG>(front_rect_.left), static_cast<LONG>(front_rect_.top),
             static_cast<LONG>(front_rect_.right), static_cast<LONG>(front_rect_.bottom)};
-  RECT bounding = card_input ? card : capsule_->Bounds();
+  RECT bounding = card;
   HRGN shape = CreateRectRgnIndirect(&bounding);
 
-  if (card_input && capsule_->visible()) {
+  if (capsule_->visible()) {
     const RECT capsule = capsule_->Bounds();
     // The gap between the capsule and the card stays interactive, so crossing it keeps hover alive.
     RECT bridge{std::max(card.left, capsule.left), capsule.bottom, std::min(card.right, capsule.right), card.top};
@@ -570,18 +572,25 @@ void Deck::EndScroll(const ScrollUpdate& update) {
     card->DropLong(now);
   }
   SubmitSelection(*card);
-  if (card == front()) {
+  // A press on the thumbnail finished it, and the thumbnail is already wanted, so there is no moment for the outcome.
+  const bool wanted = press_ != Press::kNone || open_when_finished_;
+  if (card == front() && !wanted) {
     capsule_->ShowOutcome(update.outcome, now);
     outcome_until_ = now.seconds + config::kScrollResultSeconds;
     Layout(config::kMorph, now);
   } else {
-    // A newer shot came to the front while this one was still recording.
+    // Or a newer shot came to the front while this one was still recording.
     card->busy = false;
     card->expiry = now.seconds + config::kDwellSeconds;
     scroll_card_ = nullptr;
-    Layout(config::kReflow, now);
+    if (card == front()) BindCapsuleToFront(now);
+    Layout(card == front() ? config::kMorph : config::kReflow, now);
   }
   compositor_.Commit();
+  if (open_when_finished_) {
+    open_when_finished_ = false;
+    if (card == front()) OpenFront();
+  }
 }
 
 // The outcome has had its moment, and the card goes back to being an ordinary screenshot.
@@ -809,6 +818,27 @@ void Deck::Rest() {
   tracking_leave_ = false;
 }
 
+// The thumbnail lies over the app being scrolled, and a wheel turned over it is meant for the app.
+void Deck::PassOnWheel(UINT message, WPARAM wparam, LPARAM lparam) {
+  const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+  for (HWND under = GetWindow(sink_, GW_HWNDNEXT); under != nullptr; under = GetWindow(under, GW_HWNDNEXT)) {
+    RECT rect;
+    if (under == window_ || !IsWindowVisible(under) || (GetWindowLongPtrW(under, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0 || !GetWindowRect(under, &rect) || PtInRect(&rect, point) == FALSE) continue;
+    BOOL cloaked = FALSE;
+    if (SUCCEEDED(DwmGetWindowAttribute(under, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+    HWND target = under;
+    for (;;) {
+      POINT inside = point;
+      ScreenToClient(target, &inside);
+      HWND child = ChildWindowFromPointEx(target, inside, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+      if (child == nullptr || child == target) break;
+      target = child;
+    }
+    PostMessageW(target, message, wparam, lparam);
+    return;
+  }
+}
+
 POINT Deck::StagePoint(LPARAM lparam) const {
   return POINT{GET_X_LPARAM(lparam) + sink_origin_.x, GET_Y_LPARAM(lparam) + sink_origin_.y};
 }
@@ -821,6 +851,9 @@ void Deck::OnMouseMove(POINT point) {
   }
   hovering_ = true;
   const TimeBase now = compositor_.Now();
+
+  // The press that finished a scrolling screenshot goes on from where it is once there is a finished thumbnail to act on.
+  if (press_ != Press::kNone && front() != nullptr && front()->busy) return;
 
   if (press_ == Press::kCard) {
     const int dx = point.x - press_point_.x;
@@ -868,10 +901,29 @@ void Deck::OnMouseMove(POINT point) {
 void Deck::OnButtonDown(POINT point) {
   Card* top = front();
   if (top == nullptr || top->floating) return;
-  if (top->busy) {
-    // While recording, the capsule is one button that finishes. Nothing else takes a press.
-    if (capsule_->recording() && capsule_->Contains(point.x, point.y)) owner_.FinishScroll();
+  const bool on_card = point.x >= front_rect_.left && point.x < front_rect_.right && point.y >= front_rect_.top &&
+                       point.y < front_rect_.bottom;
+  if (top->busy && capsule_->recording()) {
+    // While recording, the capsule is one button that finishes. A press on the thumbnail finishes as well, and stays a
+    // press on the thumbnail, for whatever it turns out to be.
+    if (capsule_->Contains(point.x, point.y)) {
+      owner_.FinishScroll();
+    } else if (on_card) {
+      owner_.FinishScroll();
+      SetCapture(sink_);
+      press_point_ = point;
+      press_ = Press::kCard;
+    }
     return;
+  }
+  if (top->busy) {
+    // Showing the outcome is only showing it.
+    const TimeBase now = compositor_.Now();
+    EndOutcome(now);
+    BindCapsuleToFront(now);
+    UpdateSink();
+    owner_.SyncHookMode();
+    compositor_.Commit();
   }
   const int segment = capsule_->HitTest(point.x, point.y);
   Trace("sink: down at %ld,%ld segment %d", point.x, point.y, segment);
@@ -885,8 +937,6 @@ void Deck::OnButtonDown(POINT point) {
     SelectRegion(segment);
     return;
   }
-  const bool on_card = point.x >= front_rect_.left && point.x < front_rect_.right && point.y >= front_rect_.top &&
-                       point.y < front_rect_.bottom;
   if (!on_card) return;
   SetCapture(sink_);
   press_point_ = point;
@@ -901,7 +951,11 @@ void Deck::OnButtonUp(POINT point) {
 
   switch (press) {
     case Press::kCard:
-      OpenFront();
+      if (front() != nullptr && front()->busy) {
+        open_when_finished_ = true;
+      } else {
+        OpenFront();
+      }
       break;
     case Press::kSwipe: {
       Card* top = front();
@@ -1297,6 +1351,9 @@ LRESULT Deck::HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam) {
     case WM_LBUTTONUP:
       OnButtonUp(StagePoint(lparam));
       return 0;
+    case WM_MOUSEWHEEL:
+      if (capsule_->recording()) PassOnWheel(message, wparam, lparam);
+      return 0;
     case WM_CAPTURECHANGED:
       Trace("sink: capture changed, press %d", static_cast<int>(press_));
       if (press_ == Press::kSwipe) {
@@ -1375,12 +1432,11 @@ void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   if (Deck* deck = DeckFor(capture->screen.monitor); deck != nullptr) {
     const HWND app = capture->screen.app;
     const RECT bounds = capture->screen.bounds;
-    std::shared_ptr<const Image> frame = capture->frame;
     const uint64_t shot = deck->AddShot(std::move(capture));
     // Looked for after the shot is on screen, so that a slow app never delays it.
     if (app != nullptr) {
       if (!detector_) detector_ = std::make_unique<ScrollDetector>(controller_);
-      detector_->Request(shot, app, bounds, deck->scale(), std::move(frame));
+      detector_->Request(shot, app, bounds, deck->scale());
     }
     EnsureTicking();
     SyncHookMode();

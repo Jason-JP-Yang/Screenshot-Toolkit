@@ -198,16 +198,17 @@ void Session::Sample(double now) {
   }
 }
 
-// Over this program's own windows the wheel reached nothing. Elsewhere in the window it may scroll something else, which
-// is simply not followed.
+// Over this program's own windows the wheel goes on to whatever lies beneath, so outside the app it is no reason to stop.
+// Elsewhere in the app it may scroll something else, which is simply not followed.
 bool Session::WheelFits(POINT point, double now) {
   DWORD process = 0;
   if (HWND under = WindowFromPoint(point); under != nullptr) GetWindowThreadProcessId(under, &process);
-  if (process == own_process_) return true;
+  const POINT local{point.x - request_.monitor.left, point.y - request_.monitor.top};
+  const bool inside = PtInRect(&watch_, local) != FALSE;
+  if (process == own_process_ && !inside) return true;
   last_change_ = now;
   last_wheel_ = now;
-  const POINT local{point.x - request_.monitor.left, point.y - request_.monitor.top};
-  return PtInRect(&watch_, local) != FALSE;
+  return inside;
 }
 
 bool Session::WindowStays() const {
@@ -288,11 +289,12 @@ bool Session::Lock(const ScrollPlan& plan, const PixelView& before, const PixelV
   const int width = follow_.right - follow_.left;
   const int height = follow_.bottom - follow_.top;
   limit_rows_ = std::max(std::min(config::kScrollMaxHeight, config::kScrollMaxPixels / width), height);
-  if (!stitcher_.Start(Crop(before, plan.rect), request_.scale, limit_rows_, plan.hinted, plan.box)) return false;
-  stitcher_.Feed(Crop(after, plan.rect), POINT{local.x - plan.rect.left, local.y - plan.rect.top});
-  const Stitcher::Crop crop = stitcher_.FinalCrop();
-  view_top_ = crop.top - stitcher_.first_row();
-  view_bottom_ = crop.bottom - stitcher_.last_row() + height;
+  const POINT pointer{local.x - plan.rect.left, local.y - plan.rect.top};
+  if (!stitcher_.Start(Crop(before, plan.rect), request_.scale, limit_rows_, plan.hinted, plan.box, pointer)) return false;
+  stitcher_.Feed(Crop(after, plan.rect), pointer);
+  const Stitcher::Crop crop = stitcher_.ViewCrop();
+  view_top_ = crop.top;
+  view_bottom_ = crop.bottom;
   anchor_ = view_top_;
   area_ = RECT{follow_.left + crop.left, follow_.top + view_top_, follow_.left + crop.right, follow_.top + view_bottom_};
   const int area_width = area_.right - area_.left;
@@ -393,11 +395,12 @@ void Session::End(bool early) {
   if (locked_) {
     stitcher_.Finish();
     Send(false);
+    Trace("scroll: rows %d to %d of the view follow the scroll, fixed background %d", stitcher_.follow_first(), stitcher_.follow_last(), stitcher_.fixed_background());
   }
   auto update = std::make_unique<ScrollUpdate>();
   update->session = request_.session;
   update->finished = true;
-  const int grown = locked_ ? stitcher_.grown() : 0;
+  const int grown = locked_ ? stitcher_.span() : 0;
   // An early end still keeps a capture that has grown far enough to be worth having.
   if (grown > 0 && (!early || grown >= stitcher_.height() * config::kScrollPartialShare)) {
     const Stitcher::Crop crop = stitcher_.FinalCrop();

@@ -23,21 +23,23 @@ With several monitors, the one under the cursor is captured. Options covering an
 
 ## Scrolling screenshots
 
-Each screenshot looks in the background for content in the top app window that really lies out of view. Nothing is scrolled or clicked to find out, so no window on screen reacts. The page icon appears at the end of the capsule only if one of these holds:
+Each screenshot looks in the background for content in the top app window that really lies out of view. Nothing is scrolled or clicked to find out, so no window on screen reacts. Only what the app itself reports counts, read from UI Automation's raw view, and the page icon appears at the end of the capsule only if one of these holds:
 
-- Something reports that it shows only part of its content. This covers native lists and documents, and in browsers and the apps built on them every plain box that scrolls, read from UI Automation's raw view.
-- Items stacked in a container run out of sight, or a list reports more items than it has rendered, as lists that draw only the visible part do.
-- The window draws a large patch of content that it describes to nobody, such as a canvas or an app with no accessibility at all. Such content cannot be judged, so it gets the benefit of the doubt, about a second after the shot, once the app has had time to answer.
+- Something reports that it shows only part of its content. This covers native lists and documents, and in browsers and the apps built on them every plain box that scrolls.
+- Items stacked in a container run on past the edge it clips them at, or a list reports more items than it has rendered, as lists that draw only the visible part do.
+- A text document that says which part of it shows, as terminals and editors do, has text out of view.
 
-A short page, a dialog that fits, or text cut off by a box that does not scroll gets no icon. Scroll bars play no part in this.
+Each of these must also be what the screen really shows at its place: a page under a dialog or an overlay, behind a fullscreen video, or covered by another window does not count. A window that reports none of this, such as a game or a video, gets no icon, and neither does a short page, a dialog that fits, or text cut off by a box that does not scroll. Scroll bars play no part in this.
 
 Selected, the icon shows how to start: press it again, or press Win+Enter. While recording:
 
-- Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, with the pointer settling it when several things could be. Columns that hold still beside it, such as a sidebar or a background that does not scroll, are left out.
-- Only what follows the scroll enters the image. Fixed headers, floating buttons, composers, and bars that only stick partway appear once at most, and what they hide is filled in from the moments it was in the clear. A scroll bar at the area's edge is left out, and one over the content does not leave a trail.
-- The effects of hovering stay out. Rows near the pointer are taken from before or after they pass it, and a highlight of any size around the pointer never replaces what was seen before it.
-- Fast scrolling, frames blurred in motion, and see-through windows are all followed. Rows first seen blurred are retaken when the content rests.
-- Scrolling up past the start adds content above it as well. Each end of the image shows just what the screen showed there.
+- Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, with the pointer settling it when several things could be. An area the app reports is kept whole, as wide as the app lays it out however its content is arranged, less a scroll bar at its edge. Otherwise the display's own divisions bound it, such as a sidebar beside it.
+- The image is built pixel by pixel. Content enters it where readings agree it followed the scroll. What was only seen under something, such as a see-through bar, is taken from wherever it was seen clear of it.
+- Fixed headers, floating buttons of any shape, composers, and bars that only stick partway appear once, at the end of the image nearer to where they sit, just as the screen showed them. Something reaching down the whole view is split between the two ends.
+- A background that scrolls with the content is part of it, and a plain one keeps its color. A fixed one is rebuilt from wherever it showed between and beside the content, and repeats down the image a view at a time, without a seam where it is a pattern. When it changes as a whole, the repeats from the next one on show it as it then was.
+- The effects of hovering stay out: content near the pointer is taken from where it was seen clear of it.
+- Fast scrolling, frames blurred in motion, and see-through windows are all followed. What was first seen blurred is retaken when the content rests.
+- Scrolling up past the start adds content above it as well. Each end of the image shows what the screen showed there.
 - The thumbnail follows along, growing up to about half the screen and then showing the part you are on.
 
 It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the window, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it.
@@ -148,9 +150,7 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 | `src/capsule.cpp` | The region selector, its sliding pill and labels, and a scrolling screenshot's recording and outcome |
 | `src/scrollable.cpp` | Finding whether the top app has content out of view |
 | `src/stitcher.cpp` | The pixel work of a scrolling screenshot: what moved, by how much, and building the long image |
-| `src/recorder.cpp` | Recording a scrolling screenshot: reading the screen, its timing, and its thumbnail |
-| `tests/scroll_sim.cpp` | Runs the stitcher against simulated apps. Build the `ScrollSim` target to use it |
-| `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
+| `src/recorder.cpp` | Recording a scrolling screenshot: reading the screen, its timing, and its thumbnail || `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
 | `src/sprite.cpp` | The thumbnail in the air, and the mesh that draws it into the bin |
 | `src/bin.cpp` | The rubbish bin capsule |
 | `src/dragdrop.cpp` | The system drag loop, on its own thread |

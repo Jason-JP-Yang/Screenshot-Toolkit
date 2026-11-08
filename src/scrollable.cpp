@@ -10,7 +10,10 @@
 #include <climits>
 #include <cmath>
 #include <cstdlib>
+#include <cwchar>
+#include <cwctype>
 #include <iterator>
+#include <memory>
 #include <utility>
 
 namespace sstk {
@@ -19,6 +22,13 @@ namespace {
 
 constexpr int kMaxTreeDepth = 256;
 constexpr size_t kMaxSiblingsCompared = 64;
+constexpr size_t kMaxVerified = 12;
+constexpr int kMaxAncestorSteps = 160;
+constexpr int kTextProbe = 2048;
+// Where to look for an area on screen, as shares of its width and height, center first.
+constexpr double kProbes[][2] = {{0.5, 0.5}, {0.25, 0.3}, {0.75, 0.3}, {0.25, 0.7}, {0.75, 0.7}, {0.5, 0.12}, {0.5, 0.88}, {0.1, 0.5}, {0.9, 0.5}};
+
+using RuntimeId = std::vector<int>;
 
 long Area(const RECT& rect) { return (rect.right - rect.left) * (rect.bottom - rect.top); }
 
@@ -32,150 +42,150 @@ bool SameAreas(const std::vector<RECT>& a, const std::vector<RECT>& b) {
   return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const RECT& x, const RECT& y) { return EqualRect(&x, &y) != FALSE; });
 }
 
-// Which tiles of the window hold drawn content, reduced from the screenshot once so that it need not be kept.
-struct ContentMap {
-  RECT rect{};  // Virtual screen coordinates.
-  int tile = 0;
-  int columns = 0;
-  int rows = 0;
-  std::vector<uint8_t> drawn;
-};
+bool HasSize(const RECT& rect, int width, int height) { return rect.right - rect.left >= width && rect.bottom - rect.top >= height; }
 
-ContentMap MapContent(const Image& frame, const RECT& window, const RECT& monitor, float scale) {
-  ContentMap map;
-  map.rect = window;
-  map.tile = std::max(static_cast<int>(std::lround(config::kScrollContentTile * scale)), 8);
-  const int width = window.right - window.left;
-  const int height = window.bottom - window.top;
-  map.columns = width / map.tile;
-  map.rows = height / map.tile;
-  if (map.columns <= 0 || map.rows <= 0) return map;
-  map.drawn.assign(static_cast<size_t>(map.columns) * map.rows, 0);
-  const int left = window.left - monitor.left;
-  const int top = window.top - monitor.top;
-  for (int row = 0; row < map.rows; ++row) {
-    for (int column = 0; column < map.columns; ++column) {
-      int edges = 0;
-      int samples = 0;
-      for (int y = 0; y < map.tile; y += 2) {
-        const uint8_t* pixels = frame.data() + static_cast<ptrdiff_t>(top + row * map.tile + y) * frame.stride() + static_cast<ptrdiff_t>(left + column * map.tile) * 4;
-        for (int x = 0; x + 1 < map.tile; ++x, pixels += 4) {
-          const int here = pixels[0] + 2 * pixels[1] + pixels[2];
-          const int right = pixels[4] + 2 * pixels[5] + pixels[6];
-          if (std::abs(here - right) > 96) ++edges;
-          ++samples;
-        }
-      }
-      map.drawn[static_cast<size_t>(row) * map.columns + column] = edges * 32 >= samples ? 1 : 0;
+RuntimeId ReadRuntimeId(IUIAutomationElement* element) {
+  RuntimeId id;
+  VARIANT value{};
+  if (FAILED(element->GetCachedPropertyValue(UIA_RuntimeIdPropertyId, &value)) || value.vt != (VT_I4 | VT_ARRAY)) {
+    VariantClear(&value);
+    if (FAILED(element->GetCurrentPropertyValue(UIA_RuntimeIdPropertyId, &value))) return id;
+  }
+  if (value.vt == (VT_I4 | VT_ARRAY) && value.parray != nullptr) {
+    LONG lower = 0;
+    LONG upper = -1;
+    int* data = nullptr;
+    if (SUCCEEDED(SafeArrayGetLBound(value.parray, 1, &lower)) && SUCCEEDED(SafeArrayGetUBound(value.parray, 1, &upper)) && upper >= lower &&
+        SUCCEEDED(SafeArrayAccessData(value.parray, reinterpret_cast<void**>(&data)))) {
+      id.assign(data, data + (upper - lower + 1));
+      SafeArrayUnaccessData(value.parray);
     }
   }
-  return map;
+  VariantClear(&value);
+  return id;
+}
+
+bool CachedTrue(IUIAutomationElement* element, PROPERTYID property) {
+  VARIANT value{};
+  const bool yes = SUCCEEDED(element->GetCachedPropertyValue(property, &value)) && value.vt == VT_BOOL && value.boolVal != VARIANT_FALSE;
+  VariantClear(&value);
+  return yes;
+}
+
+bool CachedNumber(IUIAutomationElement* element, PROPERTYID property, double* number) {
+  VARIANT value{};
+  const bool known = SUCCEEDED(element->GetCachedPropertyValue(property, &value)) && value.vt == VT_R8;
+  if (known) *number = value.dblVal;
+  VariantClear(&value);
+  return known;
+}
+
+// Browsers report text everywhere, clipped or not, and say what scrolls in other ways.
+bool DescribesTextLikeABrowser(IUIAutomationElement* element) {
+  VARIANT value{};
+  bool browser = false;
+  if (SUCCEEDED(element->GetCachedPropertyValue(UIA_FrameworkIdPropertyId, &value)) && value.vt == VT_BSTR && value.bstrVal != nullptr) {
+    browser = _wcsicmp(value.bstrVal, L"Chrome") == 0 || _wcsicmp(value.bstrVal, L"Gecko") == 0;
+  }
+  VariantClear(&value);
+  return browser;
+}
+
+bool HasText(IUIAutomationTextRange* range) {
+  BSTR text = nullptr;
+  if (FAILED(range->GetText(kTextProbe, &text)) || text == nullptr) return false;
+  bool any = false;
+  for (const wchar_t* c = text; *c != L'\0' && !any; ++c) any = !std::iswspace(*c);
+  SysFreeString(text);
+  return any;
 }
 
 struct Node {
   RECT rect{};
   bool offscreen = false;
-  bool has_pattern = false;
-  CONTROLTYPEID type = 0;
   int set_size = 0;
+  ComPtr<IUIAutomationElement> element;
   std::vector<Node> children;
 };
 
-bool HasSize(const RECT& rect, int width, int height) { return rect.right - rect.left >= width && rect.bottom - rect.top >= height; }
-
 bool Shows(const Node& node) { return !node.offscreen && node.rect.right > node.rect.left && node.rect.bottom > node.rect.top; }
 
-// Control types that stand for what they draw. Panes and groups say nothing of it unless something inside them does.
-bool DescribesItself(CONTROLTYPEID type) {
-  switch (type) {
-    case UIA_ButtonControlTypeId:
-    case UIA_CalendarControlTypeId:
-    case UIA_CheckBoxControlTypeId:
-    case UIA_ComboBoxControlTypeId:
-    case UIA_DataItemControlTypeId:
-    case UIA_EditControlTypeId:
-    case UIA_HeaderControlTypeId:
-    case UIA_HeaderItemControlTypeId:
-    case UIA_HyperlinkControlTypeId:
-    case UIA_ImageControlTypeId:
-    case UIA_ListItemControlTypeId:
-    case UIA_MenuBarControlTypeId:
-    case UIA_MenuItemControlTypeId:
-    case UIA_ProgressBarControlTypeId:
-    case UIA_RadioButtonControlTypeId:
-    case UIA_ScrollBarControlTypeId:
-    case UIA_SeparatorControlTypeId:
-    case UIA_SliderControlTypeId:
-    case UIA_SpinnerControlTypeId:
-    case UIA_SplitButtonControlTypeId:
-    case UIA_StatusBarControlTypeId:
-    case UIA_TabItemControlTypeId:
-    case UIA_TextControlTypeId:
-    case UIA_ThumbControlTypeId:
-    case UIA_TitleBarControlTypeId:
-    case UIA_ToolBarControlTypeId:
-    case UIA_ToolTipControlTypeId:
-    case UIA_TreeItemControlTypeId:
-    case UIA_AppBarControlTypeId:
-      return true;
-    default:
-      return false;
-  }
-}
+struct Candidate {
+  RECT area{};  // What shows of it, in virtual screen coordinates.
+  ComPtr<IUIAutomationElement> element;
+};
 
 class Look {
  public:
-  Look(HWND window, const RECT& limit, float scale, const ContentMap& content)
-      : window_(window), limit_(limit), content_(content),
+  Look(IUIAutomation* automation, HWND window, const RECT& limit, float scale, std::vector<RECT>& shown)
+      : automation_(automation), window_(window), limit_(limit), shown_(shown),
         min_width_(static_cast<int>(std::lround(config::kScrollAreaMinWidth * scale))),
         min_height_(static_cast<int>(std::lround(config::kScrollAreaMinHeight * scale))),
-        hidden_min_(static_cast<int>(std::lround(config::kScrollHiddenMinHeight * scale))) {}
+        hidden_min_(static_cast<int>(std::lround(config::kScrollHiddenMinHeight * scale))),
+        reach_(static_cast<int>(std::lround(config::kScrollEdgeReach * scale))) {}
 
-  void Run(IUIAutomation* automation) {
-    ComPtr<IUIAutomationElement> root;
-    if (FAILED(automation->ElementFromHandle(window_, &root)) || !root) return;
-    ComPtr<IUIAutomationCondition> raw;
-    if (FAILED(automation->get_RawViewCondition(&raw)) || !raw) return;
-    FindScrollers(automation, root.Get(), raw.Get());
+  void Run() {
+    if (!Prepare()) return;
+    FindScrollers();
+    Settle();
     // What a scroller says settles it. Anything else takes reading the whole tree.
-    if (!overflows_) ReadTree(automation, root.Get(), raw.Get());
+    if (!overflows_) {
+      ReadTree();
+      Settle();
+    }
+    if (!overflows_) {
+      FindText();
+      Settle();
+    }
   }
 
   bool overflows() const { return overflows_; }
-  bool undescribed() const { return undescribed_; }
-  std::vector<RECT> TakeAreas() {
+
+  std::vector<RECT> TakeAreas(const RECT& monitor) {
     std::sort(areas_.begin(), areas_.end(), [](const RECT& a, const RECT& b) { return Area(a) > Area(b); });
-    for (RECT& area : areas_) OffsetRect(&area, -monitor_left_, -monitor_top_);
+    for (RECT& area : areas_) OffsetRect(&area, -monitor.left, -monitor.top);
     return std::move(areas_);
-  }
-  void SetMonitor(const RECT& monitor) {
-    monitor_left_ = monitor.left;
-    monitor_top_ = monitor.top;
   }
 
  private:
-  void Collect(RECT rect) {
-    if (!IntersectRect(&rect, &rect, &limit_) || !HasSize(rect, min_width_, min_height_)) return;
-    for (const RECT& existing : areas_) {
-      if (SameArea(existing, rect)) return;
+  bool Prepare() {
+    if (FAILED(automation_->ElementFromHandle(window_, &root_)) || !root_) return false;
+    if (FAILED(automation_->get_RawViewCondition(&raw_)) || !raw_) return false;
+    if (FAILED(automation_->get_RawViewWalker(&walker_)) || !walker_) return false;
+    if (FAILED(automation_->CreateCacheRequest(&identity_)) || FAILED(identity_->put_TreeFilter(raw_.Get())) ||
+        FAILED(identity_->AddProperty(UIA_RuntimeIdPropertyId))) {
+      return false;
     }
-    areas_.push_back(rect);
+    root_id_ = ReadRuntimeId(root_.Get());
+    return !root_id_.empty();
   }
 
-  // Every scroller in the raw view, plain boxes included, and how much of its content it shows.
-  void FindScrollers(IUIAutomation* automation, IUIAutomationElement* root, IUIAutomationCondition* raw) {
+  RECT Clip(const RECT& rect) const {
+    RECT shown{};
+    return IntersectRect(&shown, &rect, &limit_) ? shown : RECT{};
+  }
+
+  void Consider(const RECT& rect, IUIAutomationElement* element) {
+    const RECT area = Clip(rect);
+    if (!HasSize(area, min_width_, min_height_) || element == nullptr) return;
+    candidates_.push_back(Candidate{area, element});
+  }
+
+  // Every scroller in the raw view, plain boxes included, that shows only part of what it holds.
+  void FindScrollers() {
     VARIANT yes{};
     yes.vt = VT_BOOL;
     yes.boolVal = VARIANT_TRUE;
     ComPtr<IUIAutomationCondition> has_pattern;
     ComPtr<IUIAutomationCacheRequest> cache;
-    if (FAILED(automation->CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, yes, &has_pattern)) || FAILED(automation->CreateCacheRequest(&cache))) return;
-    cache->put_TreeFilter(raw);
-    for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_ScrollVerticallyScrollablePropertyId, UIA_ScrollVerticalViewSizePropertyId, UIA_IsOffscreenPropertyId}) {
+    if (FAILED(automation_->CreatePropertyCondition(UIA_IsScrollPatternAvailablePropertyId, yes, &has_pattern)) || FAILED(automation_->CreateCacheRequest(&cache))) return;
+    cache->put_TreeFilter(raw_.Get());
+    for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_ScrollVerticallyScrollablePropertyId, UIA_ScrollVerticalViewSizePropertyId,
+                                      UIA_ScrollVerticalScrollPercentPropertyId, UIA_IsOffscreenPropertyId, UIA_RuntimeIdPropertyId}) {
       if (FAILED(cache->AddProperty(property))) return;
     }
     ComPtr<IUIAutomationElementArray> found;
-    if (FAILED(root->FindAllBuildCache(TreeScope_Subtree, has_pattern.Get(), cache.Get(), &found)) || !found) return;
+    if (FAILED(root_->FindAllBuildCache(TreeScope_Subtree, has_pattern.Get(), cache.Get(), &found)) || !found) return;
     int count = 0;
     found->get_Length(&count);
     for (int i = 0; i < count; ++i) {
@@ -184,14 +194,13 @@ class Look {
       if (FAILED(found->GetElement(i, &element)) || !element || FAILED(element->get_CachedBoundingRectangle(&rect))) continue;
       BOOL offscreen = FALSE;
       if (SUCCEEDED(element->get_CachedIsOffscreen(&offscreen)) && offscreen) continue;
-      Collect(rect);
-      RECT shown{};
-      if (!IntersectRect(&shown, &rect, &limit_) || !HasSize(shown, min_width_, min_height_)) continue;
-      VARIANT vertical{};
-      VARIANT size{};
-      const bool scrolls = SUCCEEDED(element->GetCachedPropertyValue(UIA_ScrollVerticallyScrollablePropertyId, &vertical)) && vertical.vt == VT_BOOL && vertical.boolVal != VARIANT_FALSE;
-      const bool sized = SUCCEEDED(element->GetCachedPropertyValue(UIA_ScrollVerticalViewSizePropertyId, &size)) && size.vt == VT_R8;
-      if (scrolls && (!sized || size.dblVal <= config::kScrollMaxViewPercent)) overflows_ = true;
+      // Scrolling sideways only, or not at all, it is no part of what scrolls up and down.
+      if (!CachedTrue(element.Get(), UIA_ScrollVerticallyScrollablePropertyId)) continue;
+      double view = 100.0;
+      double percent = 0.0;
+      if (CachedNumber(element.Get(), UIA_ScrollVerticalViewSizePropertyId, &view) && view > config::kScrollMaxViewPercent) continue;
+      if (CachedNumber(element.Get(), UIA_ScrollVerticalScrollPercentPropertyId, &percent) && percent < 0.0) continue;
+      Consider(rect, element.Get());
     }
   }
 
@@ -200,10 +209,8 @@ class Look {
     BOOL offscreen = FALSE;
     element->get_CachedIsOffscreen(&offscreen);
     node.offscreen = offscreen != FALSE;
-    element->get_CachedControlType(&node.type);
+    node.element = element;
     VARIANT value{};
-    if (SUCCEEDED(element->GetCachedPropertyValue(UIA_IsScrollPatternAvailablePropertyId, &value))) node.has_pattern = value.vt == VT_BOOL && value.boolVal != VARIANT_FALSE;
-    VariantClear(&value);
     if (SUCCEEDED(element->GetCachedPropertyValue(UIA_SizeOfSetPropertyId, &value)) && value.vt == VT_I4) node.set_size = value.lVal;
     VariantClear(&value);
     ComPtr<IUIAutomationElementArray> children;
@@ -217,56 +224,71 @@ class Look {
     }
   }
 
-  void ReadTree(IUIAutomation* automation, IUIAutomationElement* root, IUIAutomationCondition* raw) {
+  void ReadTree() {
     ComPtr<IUIAutomationCacheRequest> cache;
-    if (FAILED(automation->CreateCacheRequest(&cache))) return;
-    cache->put_TreeFilter(raw);
+    if (FAILED(automation_->CreateCacheRequest(&cache))) return;
+    cache->put_TreeFilter(raw_.Get());
     cache->put_TreeScope(TreeScope_Subtree);
-    for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId, UIA_ControlTypePropertyId, UIA_IsScrollPatternAvailablePropertyId, UIA_SizeOfSetPropertyId}) {
+    for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId, UIA_SizeOfSetPropertyId, UIA_RuntimeIdPropertyId}) {
       if (FAILED(cache->AddProperty(property))) return;
     }
     ComPtr<IUIAutomationElement> snapshot;
-    // A tree too large to read in time means a great deal of content, which is what this was to find out.
-    if (FAILED(root->BuildUpdatedCache(cache.Get(), &snapshot)) || !snapshot) {
-      undescribed_ = true;
-      return;
-    }
+    if (FAILED(root_->BuildUpdatedCache(cache.Get(), &snapshot)) || !snapshot) return;
     Node tree;
     ReadNode(snapshot.Get(), tree, 0);
-    covered_.assign(content_.drawn.size(), 0);
     Walk(tree, limit_);
-    if (!overflows_) undescribed_ = CheckUndescribed();
   }
 
-  // Children stacked one above the other, some of them out of sight, are content that overflows its container, and a
-  // list claiming more items than it renders is drawing only the part in view.
+  void Walk(const Node& node, const RECT& clip) {
+    if (!node.children.empty()) CheckOverflow(node, clip);
+    RECT inner{};
+    const RECT& next = IntersectRect(&inner, &clip, &node.rect) ? inner : clip;
+    for (const Node& child : node.children) Walk(child, next);
+  }
+
+  // What shows of a box reaching its clipped edge, with more of it lined up past that edge out of sight, is content that
+  // runs on beyond the box. So is a list claiming more items than it renders, rendered up to an edge. Content hidden
+  // anywhere else, as in a collapsed panel, a closed menu, or the other pages of a carousel, is not.
   void CheckOverflow(const Node& node, const RECT& clip) {
+    RECT view{};
+    if (!IntersectRect(&view, &node.rect, &clip)) return;
+    view = Clip(view);
+    if (!HasSize(view, min_width_, min_height_)) return;
     std::vector<const Node*> shown;
     std::vector<const Node*> hidden;
     for (const Node& child : node.children) {
       if (child.rect.right - child.rect.left < 8 || child.rect.bottom - child.rect.top < 4) continue;
       if (child.offscreen) {
         if (hidden.size() < kMaxSiblingsCompared) hidden.push_back(&child);
-      } else if (shown.size() < kMaxSiblingsCompared) {
+      } else if (Shows(child) && shown.size() < kMaxSiblingsCompared) {
         shown.push_back(&child);
       }
     }
     if (shown.empty()) return;
-    bool stacked = false;
+    LONG shown_top = LONG_MAX;
+    LONG shown_bottom = LONG_MIN;
+    for (const Node* in : shown) {
+      shown_top = std::min(shown_top, in->rect.top);
+      shown_bottom = std::max(shown_bottom, in->rect.bottom);
+    }
+    const bool reaches_bottom = shown_bottom >= view.bottom - reach_;
+    const bool reaches_top = shown_top <= view.top + reach_;
+    if (!reaches_bottom && !reaches_top) return;
+
     int hidden_height = 0;
     for (const Node* out : hidden) {
+      const bool past = (reaches_bottom && out->rect.top >= view.bottom - reach_) || (reaches_top && out->rect.bottom <= view.top + reach_);
+      if (!past) continue;
       for (const Node* in : shown) {
         const LONG overlap = std::min(out->rect.right, in->rect.right) - std::max(out->rect.left, in->rect.left);
         const LONG narrower = std::min(out->rect.right - out->rect.left, in->rect.right - in->rect.left);
-        const bool apart = out->rect.top >= in->rect.bottom - 2 || out->rect.bottom <= in->rect.top + 2;
-        if (apart && overlap * 2 >= narrower) {
+        if (overlap * 2 >= narrower) {
           hidden_height += out->rect.bottom - out->rect.top;
           break;
         }
       }
     }
-    if (hidden_height >= hidden_min_) stacked = true;
-
+    bool stacked = hidden_height >= hidden_min_;
     if (!stacked) {
       int largest = 0;
       for (const Node& child : node.children) largest = std::max(largest, child.set_size);
@@ -281,95 +303,118 @@ class Look {
           ++rising;
         }
       }
-      if (largest - rendered >= config::kScrollHiddenSetItems && rising >= 3) stacked = true;
+      stacked = largest - rendered >= config::kScrollHiddenSetItems && rising >= 3;
     }
-    if (!stacked) return;
-    RECT area = node.rect;
-    if (!IntersectRect(&area, &area, &clip)) area = node.rect;
-    RECT inside{};
-    if (!IntersectRect(&inside, &area, &limit_) || !HasSize(inside, min_width_, min_height_)) return;
-    overflows_ = true;
-    Collect(area);
+    if (stacked) Consider(view, node.element.Get());
   }
 
-  void Cover(const RECT& rect) {
-    if (content_.drawn.empty()) return;
-    RECT part{};
-    if (!IntersectRect(&part, &rect, &content_.rect)) return;
-    const int first_column = static_cast<int>(part.left - content_.rect.left) / content_.tile;
-    const int last_column = std::min(static_cast<int>(part.right - 1 - content_.rect.left) / content_.tile, content_.columns - 1);
-    const int first_row = static_cast<int>(part.top - content_.rect.top) / content_.tile;
-    const int last_row = std::min(static_cast<int>(part.bottom - 1 - content_.rect.top) / content_.tile, content_.rows - 1);
-    for (int row = first_row; row <= last_row; ++row) {
-      for (int column = first_column; column <= last_column; ++column) covered_[static_cast<size_t>(row) * content_.columns + column] = 1;
+  // Text documents that say what part of their text shows, as terminals and editors do, with text beyond it.
+  void FindText() {
+    VARIANT yes{};
+    yes.vt = VT_BOOL;
+    yes.boolVal = VARIANT_TRUE;
+    ComPtr<IUIAutomationCondition> has_pattern;
+    ComPtr<IUIAutomationCacheRequest> cache;
+    if (FAILED(automation_->CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, yes, &has_pattern)) || FAILED(automation_->CreateCacheRequest(&cache))) return;
+    cache->put_TreeFilter(raw_.Get());
+    for (const PROPERTYID property : {UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId, UIA_FrameworkIdPropertyId, UIA_RuntimeIdPropertyId}) {
+      if (FAILED(cache->AddProperty(property))) return;
     }
-  }
-
-  void Walk(const Node& node, const RECT& clip) {
-    // A picture filling most of the window may as well be a canvas that an app draws everything on.
-    const bool canvas = node.type == UIA_ImageControlTypeId && Area(node.rect) * 100 >= Area(limit_) * config::kScrollCanvasPercent;
-    if (Shows(node) && !canvas && (DescribesItself(node.type) || (node.children.empty() && node.has_pattern))) Cover(node.rect);
-    if (!node.children.empty()) CheckOverflow(node, clip);
-    RECT inner{};
-    const RECT& next = IntersectRect(&inner, &clip, &node.rect) ? inner : clip;
-    for (const Node& child : node.children) Walk(child, next);
-  }
-
-  // A patch of the window with content nobody describes, big enough to be something that could scroll.
-  bool CheckUndescribed() {
-    if (content_.drawn.empty()) return false;
-    const int columns = content_.columns;
-    const int rows = content_.rows;
-    std::vector<uint8_t> left(content_.drawn.size(), 0);
-    for (size_t i = 0; i < left.size(); ++i) left[i] = content_.drawn[i] != 0 && covered_[i] == 0 ? 1 : 0;
-    std::vector<int> stack;
-    for (size_t start = 0; start < left.size(); ++start) {
-      if (left[start] == 0) continue;
-      int count = 0;
-      int min_column = columns;
-      int max_column = 0;
-      int min_row = rows;
-      int max_row = 0;
-      stack.push_back(static_cast<int>(start));
-      left[start] = 0;
-      while (!stack.empty()) {
-        const int at = stack.back();
-        stack.pop_back();
-        const int row = at / columns;
-        const int column = at % columns;
-        ++count;
-        min_column = std::min(min_column, column);
-        max_column = std::max(max_column, column);
-        min_row = std::min(min_row, row);
-        max_row = std::max(max_row, row);
-        for (int y = std::max(row - 2, 0); y <= std::min(row + 2, rows - 1); ++y) {
-          for (int x = std::max(column - 2, 0); x <= std::min(column + 2, columns - 1); ++x) {
-            const size_t next = static_cast<size_t>(y) * columns + x;
-            if (left[next] == 0) continue;
-            left[next] = 0;
-            stack.push_back(static_cast<int>(next));
-          }
-        }
+    ComPtr<IUIAutomationElementArray> found;
+    if (FAILED(root_->FindAllBuildCache(TreeScope_Subtree, has_pattern.Get(), cache.Get(), &found)) || !found) return;
+    const double least = static_cast<double>(Area(limit_)) * config::kScrollTextMinShare;
+    int count = 0;
+    found->get_Length(&count);
+    for (int i = 0; i < count; ++i) {
+      ComPtr<IUIAutomationElement> element;
+      RECT rect{};
+      if (FAILED(found->GetElement(i, &element)) || !element || FAILED(element->get_CachedBoundingRectangle(&rect))) continue;
+      BOOL offscreen = FALSE;
+      if ((SUCCEEDED(element->get_CachedIsOffscreen(&offscreen)) && offscreen) || DescribesTextLikeABrowser(element.Get())) continue;
+      if (static_cast<double>(Area(Clip(rect))) < least) continue;
+      ComPtr<IUIAutomationTextPattern> text;
+      ComPtr<IUIAutomationTextRange> document;
+      ComPtr<IUIAutomationTextRangeArray> visible;
+      if (FAILED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&text))) || !text || FAILED(text->get_DocumentRange(&document)) || !document ||
+          FAILED(text->GetVisibleRanges(&visible)) || !visible) {
+        continue;
       }
-      const int width = (max_column - min_column + 1) * content_.tile;
-      const int height = (max_row - min_row + 1) * content_.tile;
-      if (count >= config::kScrollContentMinTiles && width >= min_width_ && height >= min_height_) return true;
+      int ranges = 0;
+      visible->get_Length(&ranges);
+      ComPtr<IUIAutomationTextRange> first;
+      ComPtr<IUIAutomationTextRange> last;
+      if (ranges <= 0 || FAILED(visible->GetElement(0, &first)) || FAILED(visible->GetElement(ranges - 1, &last)) || !first || !last) continue;
+      ComPtr<IUIAutomationTextRange> before;
+      ComPtr<IUIAutomationTextRange> after;
+      if (FAILED(document->Clone(&before)) || FAILED(document->Clone(&after)) || !before || !after) continue;
+      const bool above = SUCCEEDED(before->MoveEndpointByRange(TextPatternRangeEndpoint_End, first.Get(), TextPatternRangeEndpoint_Start)) && HasText(before.Get());
+      const bool below = !above && SUCCEEDED(after->MoveEndpointByRange(TextPatternRangeEndpoint_Start, last.Get(), TextPatternRangeEndpoint_End)) && HasText(after.Get());
+      if (above || below) Consider(rect, element.Get());
+    }
+  }
+
+  // An area counts only where the screen really shows it: at some place inside it, the window there is this one, and
+  // what the app says is at that place lies within the area.
+  bool Visible(const Candidate& candidate) {
+    const RuntimeId id = ReadRuntimeId(candidate.element.Get());
+    if (id.empty()) return false;
+    const RECT& area = candidate.area;
+    for (const auto& probe : kProbes) {
+      const POINT point{area.left + static_cast<LONG>((area.right - area.left) * probe[0]), area.top + static_cast<LONG>((area.bottom - area.top) * probe[1])};
+      const HWND hit = WindowFromPoint(point);
+      if (hit == nullptr || GetAncestor(hit, GA_ROOT) != window_) continue;
+      ComPtr<IUIAutomationElement> at;
+      if (FAILED(automation_->ElementFromPointBuildCache(point, identity_.Get(), &at)) || !at) continue;
+      if (Within(at.Get(), id)) return true;
     }
     return false;
   }
 
+  bool Within(IUIAutomationElement* element, const RuntimeId& id) {
+    ComPtr<IUIAutomationElement> current = element;
+    for (int step = 0; current && step < kMaxAncestorSteps; ++step) {
+      const RuntimeId here = ReadRuntimeId(current.Get());
+      if (here.empty() || here == root_id_) return here == id;
+      if (here == id) return true;
+      ComPtr<IUIAutomationElement> parent;
+      if (FAILED(walker_->GetParentElementBuildCache(current.Get(), identity_.Get(), &parent))) return false;
+      current = parent;
+    }
+    return false;
+  }
+
+  void Settle() {
+    std::sort(candidates_.begin(), candidates_.end(), [](const Candidate& a, const Candidate& b) { return Area(a.area) > Area(b.area); });
+    for (size_t i = 0; i < candidates_.size() && i < kMaxVerified; ++i) {
+      const RECT& area = candidates_[i].area;
+      if (std::any_of(areas_.begin(), areas_.end(), [&](const RECT& kept) { return SameArea(kept, area); })) continue;
+      const bool known = std::any_of(shown_.begin(), shown_.end(), [&](const RECT& seen) { return SameArea(seen, area); });
+      const bool visible = known || Visible(candidates_[i]);
+      Trace("scroll: candidate %ld,%ld-%ld,%ld %s", area.left, area.top, area.right, area.bottom, visible ? "on screen" : "hidden");
+      if (!visible) continue;
+      if (!known) shown_.push_back(area);
+      areas_.push_back(area);
+      overflows_ = true;
+    }
+    candidates_.clear();
+  }
+
+  IUIAutomation* automation_;
   HWND window_;
   RECT limit_;
-  const ContentMap& content_;
+  std::vector<RECT>& shown_;  // Areas earlier looks at the same window found on screen.
   int min_width_;
   int min_height_;
   int hidden_min_;
-  int monitor_left_ = 0;
-  int monitor_top_ = 0;
-  bool overflows_ = false;
-  bool undescribed_ = false;
+  int reach_;
+  ComPtr<IUIAutomationElement> root_;
+  ComPtr<IUIAutomationCondition> raw_;
+  ComPtr<IUIAutomationTreeWalker> walker_;
+  ComPtr<IUIAutomationCacheRequest> identity_;
+  RuntimeId root_id_;
+  std::vector<Candidate> candidates_;
   std::vector<RECT> areas_;
-  std::vector<uint8_t> covered_;
+  bool overflows_ = false;
 };
 
 }  // namespace
@@ -385,10 +430,10 @@ ScrollDetector::~ScrollDetector() {
   if (thread_.joinable()) thread_.join();
 }
 
-void ScrollDetector::Request(uint64_t shot, HWND window, const RECT& monitor, float scale, std::shared_ptr<const Image> frame) {
+void ScrollDetector::Request(uint64_t shot, HWND window, const RECT& monitor, float scale) {
   {
     std::lock_guard lock(mutex_);
-    pending_ = Job{shot, window, monitor, scale, std::move(frame)};
+    pending_ = Job{shot, window, monitor, scale};
     has_pending_ = true;
   }
   if (!thread_.joinable()) thread_ = std::thread([this] { Main(); });
@@ -412,40 +457,31 @@ void ScrollDetector::Main() {
   for (;;) {
     wake_.wait(lock, [&] { return stopping_ || has_pending_; });
     if (stopping_) break;
-    Job job = std::move(pending_);
+    const Job job = pending_;
     pending_ = Job{};
     has_pending_ = false;
     lock.unlock();
-
     RECT limit{};
-    ContentMap content;
     const bool visible = IsWindow(job.window) && !IsIconic(job.window) && VisibleFrame(job.window, job.monitor, &limit);
-    if (visible && job.frame) content = MapContent(*job.frame, limit, job.monitor, job.scale);
-    job.frame.reset();
     lock.lock();
     if (!visible || !automation) continue;
 
     // Asked for the first time, a browser only starts to build what it can tell, so the first answer may be nothing.
     // It is asked again until the answer settles, or until there is nothing to wait for.
     std::vector<RECT> known;
+    std::vector<RECT> shown;
     bool offered = false;
-    bool described = false;
     for (size_t attempt = 0;; ++attempt) {
       lock.unlock();
       const double started = NowSeconds();
-      Look look(job.window, limit, job.scale, content);
-      look.SetMonitor(job.monitor);
-      look.Run(automation.Get());
-      // Content nobody describes may only be what the app has not got around to describing yet, and an app that has
-      // described it once may let its tree lapse again.
-      described = described || !look.undescribed();
-      const bool scrollable = look.overflows() || (!described && static_cast<int>(attempt) >= config::kScrollDetectContentAttempt);
+      Look look(automation.Get(), job.window, limit, job.scale, shown);
+      look.Run();
       auto result = std::make_unique<ScrollAreas>();
       result->shot = job.shot;
-      result->areas = look.TakeAreas();
-      Trace("scroll: look %zu: %zu areas, overflows %d, undescribed %d, in %.1f ms", attempt, result->areas.size(), look.overflows(), look.undescribed(), (NowSeconds() - started) * 1000.0);
+      result->areas = look.TakeAreas(job.monitor);
+      Trace("scroll: look %zu: %zu areas, overflows %d, in %.1f ms", attempt, result->areas.size(), look.overflows(), (NowSeconds() - started) * 1000.0);
       const bool settled = offered && SameAreas(known, result->areas);
-      if (scrollable && !settled) {
+      if (look.overflows() && !settled) {
         known = result->areas;
         offered = true;
         if (PostMessageW(controller_, kMsgScrollAreas, 0, reinterpret_cast<LPARAM>(result.get()))) result.release();
