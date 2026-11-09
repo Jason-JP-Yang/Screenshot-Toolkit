@@ -1,15 +1,14 @@
-// The pixel work of a scrolling screenshot, apart from the screen and the clock. Readings are lined up as edge maps,
-// cell by cell, so that what moves can be told from what stays no matter how the two share a row. The long image is
-// then built in layers, pixel by pixel:
-// - Content enters it from readings where it was seen following the scroll, away from the pointer and from anything
-//   over it. Until then it holds what was seen, and anything seen better replaces that.
-// - What stays where it is while content moves past is either a background behind the content or something fixed in
-//   front of it. Something in front hides content that is seen elsewhere, or tints it, or differs from a plain
-//   background. Each such thing belongs to the end of the capture nearer to it, and appears only there, just as the
-//   screen showed it.
-// - A background that scrolls is content. A plain one is its color. A fixed one is rebuilt from wherever it showed
-//   between and beside the content, and repeats down the image one view at a time, each view from the background as it
-//   was when that part was on screen.
+// The pixel work of a scrolling screenshot, apart from the screen and the clock.
+// - A reading is placed by what changed since the last placed one. Whatever is the same at the same place in both, as a
+//   background or a bar that holds still, is left out, and what moved decides the shift, whatever its shape. A shift
+//   counts only when it explains nearly everything that changed, clearly better than any other. A reading that cannot
+//   be placed that way writes nothing.
+// - The long image is made of whole rows, each a row of one reading, so nothing in a row is ever pieced together.
+//   Rows come from where a reading showed them best: away from the ends of where content moves and from the pointer.
+//   They go in as tall blocks, and a block meets the rows around it at a row the image already shows alike, so nothing
+//   drawn is cut between readings.
+// - Content seen changed in place since, as a picture that loaded, is taken again whole.
+// What shows while recording is the image as it will be kept.
 #pragma once
 
 #include "image.h"
@@ -176,12 +175,13 @@ class Stitcher {
   bool Start(const PixelView& first, float scale, int limit_rows, bool hinted, const RECT& box, POINT pointer);
   Step Feed(const PixelView& frame, POINT pointer);
 
-  // Puts the capture in its final form once the last reading is in: content, background, and its two ends.
+  // Puts in what the last reading placed shows better than the image, as nothing came after it.
   void Finish();
 
   Crop ViewCrop() const;   // The columns, and the rows of the view, that the image keeps.
   Crop FinalCrop() const;  // The same, from the reading at the top of the capture to the one at the bottom.
   void Copy(const Crop& crop, uint8_t* to, ptrdiff_t stride) const;
+  PixelView Composed(int first, int last) const;  // Whole rows of the image as it stands, good until the next call.
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -189,113 +189,123 @@ class Stitcher {
   int first_row() const { return min_position_; }
   int last_row() const { return max_position_ + height_; }
   int grown() const { return max_position_ - min_position_; }
-  int span() const { return bottom_position_ - top_position_; }  // How far the image reaches beyond one view.
-  bool replaced() const;  // Whether a lost reading changed nearly everywhere.
-  bool fixed_background() const { return fixed_background_; }
+  int span() const;  // How far the image reaches beyond one view.
+  bool replaced() const { return last_lost_replaced_; }  // Whether a lost reading changed nearly everywhere.
+  bool fixed_background() const { return BackgroundLikely(); }
   int follow_first() const { return follow_first_; }
   int follow_last() const { return follow_last_; }
-  PixelView Rows(int first, int last) const;
 
-  // The content rows changed since the last call.
+  // The content rows whose image changed since the last call.
   bool TakeChanges(int* first, int* last);
 
  private:
-  // What stays where it is in the view, as last seen holding still, and how many times in a row.
-  struct Plate {
-    std::vector<uint32_t> color;
-    std::vector<uint8_t> count;
+  // A shift, or a place in the image, tried for the reading being taken in: how many of the pixels that changed since
+  // the last placed reading it explains, of how many it could, and in how many rows.
+  struct Trial {
+    int shift = 0;
+    uint32_t explained = 0;
+    uint32_t compared = 0;
+    int rows = 0;
+    double Score() const { return compared == 0 ? 0.0 : static_cast<double>(explained) * explained / compared; }
   };
 
-  bool Commit(int position);
+  void Load(const PixelView& frame);
+  uint32_t Compare();
+  bool Register(int* shift);
+  int Vote();
+  void Sweep();
+  Trial Verify(int shift) const;
+  bool Realign(int* position);
+  Trial VerifyAt(int position) const;
+  bool Accept(int position, int shift);
+  void Place(int position, int shift, bool flush);
+  void Learn(int shift);
+  int Score(int y) const;
+  bool Held(int row) const;
+  uint8_t& RowScore(int row) { return row_score_[static_cast<size_t>(row + row_base_)]; }
+  bool Stale(int y, int row) const;
+  int Difference(int position, int y);
+  int SeamCost(int position, int boundary);
+  int SeamTop(int position, int first, int last, int must, int floor);
+  int SeamBottom(int position, int first, int last, int must);
+  void WriteRows(int position, int first, int last);
+  void Ends(const Crop& view, int* top, int* bottom) const;
+  bool RowsBlank(int first, int last, int left, int right) const;
   void SetBand(POINT pointer);
-  void KeepEnds(const PixelView& frame, int position, bool at_rest);
-  void Note(const PixelView& frame, int position, bool sharp);
   void SetFollow(int first, int last);
-  void UpdateSteps(const PixelView& frame);
+  void SetCrop();
+  void UpdateSteps();
   bool Separator(int x, int far_first, int far_last) const;
   void PaneColumns(bool panels, int* left, int* right) const;
   bool StaticFilled(int from, int to) const;
   bool BackgroundLikely() const;
-  bool Observe(const PixelView& frame, int position, bool at_rest);
-  bool Classify(const PixelView& frame, int position);
-  void RestUpdate(const PixelView& frame, int position);
-  void Fill(const PixelView& frame, int position);
-  void ObservePlate(int x, int y, uint32_t color, uint64_t* compared, uint64_t* differ);
-  bool Overlay(size_t index) const;
-  bool Suspect(size_t index, bool band) const;
-  void MarkChanged(int row);
-  int Settle(const EdgeFrame& edges, const Motion& motion, int position, bool* clean, bool at_rest) const;
-  bool RowsBlank(int first, int last, int left, int right) const;
-  int VersionAt(int first, int last) const;
+  void MarkChanged(int first, int last);
 
   int width_ = 0;
   int height_ = 0;
-  int slices_ = 0;
-  int cell_rows_ = 0;
   float scale_ = 1.0f;
   int limit_rows_ = 0;
   bool hinted_ = false;
   RECT box_{};
+  int segments_ = 0;  // Pieces each row is hashed in.
 
-  // The capture, per pixel: its color, its edge map for lining readings up, how far it can be believed, and how many
-  // more readings agreed with it than not. For each slice of a row, the row of the view it was last seen holding still at.
+  // The image, per row: its pixels, its pieces hashed, and how well placed in its reading it was, zero for not yet.
   RowPlane pixels_;
-  RowPlane edges_;
-  RowPlane states_;
-  RowPlane votes_;
-  RowPlane sources_;
-  bool committed_ = false;
-  int committed_first_ = 0;
-  int committed_last_ = 0;
+  RowPlane hashes_;
+  std::vector<uint8_t> row_score_;
+  int row_base_ = 0;
 
-  EdgeFrame before_;
-  EdgeFrame after_;
-  EdgeFrame anchor_;  // The last sharp reading, when the last reading was not.
-  bool anchor_is_before_ = true;
-  int anchor_position_ = 0;
-  EdgeFrame reference_;
-  MotionFinder finder_;
-  Motion motion_;
+  // The last reading placed, which the next is lined up with, and the reading being taken in.
+  std::vector<uint32_t> ref_;
+  std::vector<uint32_t> now_;
+  std::vector<uint32_t> ref_hash_;
+  std::vector<uint32_t> now_hash_;
+  EdgeFrame ref_edges_;
+  EdgeFrame now_edges_;
+  uint64_t frame_key_ = 0;  // The reading before this one, hashed, to tell when a change holds still.
+
+  // Pixel by pixel, whether the reading being taken in differs from the last placed at the same place, and in all.
+  std::vector<uint8_t> changed_;
+  std::vector<uint32_t> changed_in_row_;
+  uint32_t changed_count_ = 0;
+  int changed_rows_ = 0;
+  int changed_left_ = 0;
+  int changed_right_ = 0;
+
+  // Lining up: the last placed reading's pieces, sorted, and for which reading and columns; votes per shift; the shifts
+  // to try; changed pixels to try every shift on.
+  std::vector<uint64_t> ref_index_;
+  int ref_serial_ = 0;
+  int index_serial_ = -1;
+  int index_left_ = -1;
+  int index_right_ = -1;
+  std::vector<uint64_t> now_index_;
+  std::vector<int> votes_;
+  std::vector<int> candidates_;
+  std::vector<size_t> points_;
+
+  // Per row of the view while a reading is placed: how well placed it is, whether it goes in, and how unlike the image.
+  std::vector<int> score_;
+  std::vector<uint8_t> want_;
+  std::vector<int> difference_;
+
   Evidence evidence_;
-
   // The color steps along the rows, per column of the view, which show how the display is divided.
   std::vector<uint32_t> step_up_;
   std::vector<uint32_t> step_down_;
   uint32_t step_rows_ = 0;
   int step_tick_ = 0;
-
-  // Per pixel of the view, over the sharp readings compared so far: how often it showed content following the
-  // scroll, held still while content moved, changed in neither way, hid content known to be there, and showed content
-  // otherwise than most readings of it do.
-  std::vector<uint8_t> follow_n_;
+  // Per pixel of the view, how often it held still while content moved past, and how much of that there was inside
+  // where content moves.
   std::vector<uint8_t> stay_n_;
-  std::vector<uint8_t> neither_n_;
-  std::vector<uint8_t> occluded_n_;
-  std::vector<uint8_t> dissent_n_;
-  uint64_t behind_count_ = 0;  // Pixels where content moved and a still background showed as well.
-  std::vector<uint32_t> clean_;  // The last sharp reading,
-  int clean_position_ = 0;       // where it was,
-  int unsettled_ = 0;            // and how many readings since have changed too much to compare with it.
+  uint64_t behind_count_ = 0;
 
-  // What holds still, a new version each time a background changes as a whole, and which version each sharp reading
-  // saw, in order.
-  std::vector<Plate> plates_;
-  std::vector<std::pair<int, int>> history_;
-  int version_votes_ = 0;
-  int tile_columns_ = 0;
-  std::vector<uint32_t> tile_compared_;
-  std::vector<uint32_t> tile_differ_;
-
-  std::vector<uint32_t> top_frame_;  // The readings at the top and the bottom of the capture.
-  std::vector<uint32_t> bottom_frame_;
-  int top_position_ = 0;
-  int bottom_position_ = 0;
-  int band_first_ = INT_MAX;  // The rows around the pointer in the last reading,
+  int crop_left_ = 0;  // The columns compared.
+  int crop_right_ = 0;
+  int band_first_ = INT_MAX;  // The rows around the pointer in the last reading.
   int band_last_ = -1;
-  int top_band_first_ = INT_MAX;  // and in the readings at either end.
-  int top_band_last_ = -1;
-  int bottom_band_first_ = INT_MAX;
-  int bottom_band_last_ = -1;
+  int follow_first_ = INT_MAX;  // The rows of the view where content has been seen to follow the scroll.
+  int follow_last_ = -1;
 
   int position_ = 0;
   int min_position_ = 0;
@@ -303,13 +313,9 @@ class Stitcher {
   int rest_min_ = 0;
   int rest_max_ = 0;
   int last_shift_ = 0;
-  bool settled_ = true;  // The last reading was sharp, so its place is exact.
-  int follow_first_ = INT_MAX;  // The rows of the view where anything has been seen to follow the scroll.
-  int follow_last_ = -1;
-  bool fixed_background_ = false;
   bool last_lost_replaced_ = false;
-  int changed_first_ = 0;
-  int changed_last_ = 0;
+  int dirty_first_ = 0;
+  int dirty_last_ = 0;
 };
 
 }  // namespace sstk

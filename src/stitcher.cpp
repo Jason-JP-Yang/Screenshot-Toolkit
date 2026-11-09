@@ -33,30 +33,31 @@ constexpr uint64_t kSeparatorPercent = 92;
 constexpr int kMarginFilledPercent = 85;
 constexpr uint32_t kFollowEveryPixels = 800;  // In a row, per reading, for it to count as following the scroll.
 constexpr int kMinOverlap = 48;
+constexpr int kPlateKnown = 2;  // Times a pixel must hold still while content moves past for it to count as still.
 
-// How far a pixel of the capture can be believed, in its low bits, and what else was seen of it.
-constexpr uint8_t kEmpty = 0;
-constexpr uint8_t kSuspect = 1;         // Seen blurred, by the pointer, or where something may lie over it.
-constexpr uint8_t kSeen = 2;            // Seen clearly, but not yet following the scroll.
-constexpr uint8_t kConfirmed = 3;       // Seen following the scroll, away from the pointer.
-constexpr uint8_t kRankMask = 0x07;
-constexpr uint8_t kChanging = 0x40;     // Seen changing as the content moved, so it was content.
-constexpr uint8_t kBehind = 0x80;       // Seen holding still while content moved, so it was not.
+// Lining a reading up with the last placed one.
+constexpr int kSegment = 32;              // Pixels of a row hashed as one piece, to find where rows went.
+constexpr size_t kMaxSameRows = 6;        // A piece found in more rows than this says nothing of where it went.
+constexpr int kMinVotes = 6;              // With fewer pieces agreeing on a shift, every shift is tried as well.
+constexpr size_t kMaxTrials = 6;
+constexpr size_t kSweepPoints = 4096;
+constexpr uint32_t kMinExplained = 48;    // Changed pixels a shift must explain to be believed,
+constexpr double kExplainedShare = 0.7;   // and the share of them, against the last placed reading,
+constexpr double kRealignShare = 0.8;     // or against the image.
+constexpr double kClearMargin = 1.25;     // How much better than any shift more than a row away.
+constexpr uint32_t kQuietPixels = 24;     // So few pixels changing is nothing changing.
 
-constexpr int kPlateKnown = 2;          // Times in a row a still pixel must look the same to be known.
-constexpr int kSettledVotes = 4;        // More readings agreeing than not, for a look of content to be settled.
-constexpr int kOverlayMin = 3;          // Readings in which a pixel must tint what moves under it.
-constexpr int kSeedMin = 2;             // Readings in which a pixel must hide content seen elsewhere.
-constexpr int kGrowStep = 24;           // Over the color channels, between neighbors of one surface.
-constexpr int kBackgroundSlack = 30;    // Over the color channels, from a plain background's color.
-constexpr int kBridge = 3;              // How close two marks are to be one thing.
-constexpr size_t kFrontMinPixels = 6;
-constexpr double kPlainShare = 0.6;     // Of a column, for its most common color to be a plain background.
-constexpr int kVersionTile = 64;
-constexpr size_t kMaxPlates = 4;
-constexpr uint64_t kUnsettledPercent = 50;  // Of what changed on its edges in a sharp reading, in neither way, for it to say nothing.
-constexpr int kSharpEdge = 24;              // On the edge map, a step this large is something drawn sharply.
-constexpr int kUnsettledReadings = 3;       // Such readings in a row before the view counts as changed for good.
+// Writing the image.
+constexpr int kTopScore = 250;              // Rows this well placed in their reading are where the image comes from.
+constexpr int kStaleScore = kTopScore / 2;  // The least placing for rows to be taken again, or for a seam to move through.
+constexpr int kMovingWeight = 4;            // How much more a seam minds cutting what moved than what held still.
+constexpr int kSeamSkip = 16;               // Rows a seam may leave out of a run, which the image then keeps as it was.
+
+// What a row of a reading is to the image.
+constexpr uint8_t kKeep = 0;     // The image keeps what it has.
+constexpr uint8_t kTake = 1;     // The reading's row goes in.
+constexpr uint8_t kMust = 2;     // The image has nothing there yet.
+constexpr uint8_t kPending = 3;  // Better placed than the image's, and waits to go in with the rows around it.
 
 alignas(16) constexpr uint8_t kNoEdgeBytes[16] = {kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge,
                                                   kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge, kNoEdge};
@@ -130,8 +131,8 @@ bool WithinShare(uint64_t part, uint64_t whole, float share) { return static_cas
 
 inline const uint32_t* PixelRow(const PixelView& view, int y) { return reinterpret_cast<const uint32_t*>(view.data + static_cast<ptrdiff_t>(y) * view.stride); }
 
-void CopyFrame(const PixelView& frame, std::vector<uint32_t>& to) {
-  for (int y = 0; y < frame.height; ++y) std::memcpy(to.data() + static_cast<size_t>(y) * frame.width, PixelRow(frame, y), static_cast<size_t>(frame.width) * 4);
+inline PixelView ViewOf(const std::vector<uint32_t>& pixels, int width, int height) {
+  return PixelView{reinterpret_cast<const uint8_t*>(pixels.data()), width, height, width * 4};
 }
 
 // The same color to within a few levels in every channel. Alpha says nothing on screen.
@@ -140,6 +141,7 @@ inline __m128i PixelSlack() {
   return _mm_set1_epi32(static_cast<int>(0xFF000000u | slack << 16 | slack << 8 | slack));
 }
 
+// One bit per pixel of the four, set where they are the same.
 inline int Near4(const uint32_t* a, const uint32_t* b, __m128i slack) {
   const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(a));
   const __m128i y = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b));
@@ -154,240 +156,34 @@ inline bool Near(uint32_t a, uint32_t b) {
          std::abs(static_cast<int>((a >> 16) & 0xFF) - static_cast<int>((b >> 16) & 0xFF)) <= slack;
 }
 
-inline int Distance(uint32_t a, uint32_t b) {
-  return std::abs(static_cast<int>(a & 0xFF) - static_cast<int>(b & 0xFF)) + std::abs(static_cast<int>((a >> 8) & 0xFF) - static_cast<int>((b >> 8) & 0xFF)) +
-         std::abs(static_cast<int>((a >> 16) & 0xFF) - static_cast<int>((b >> 16) & 0xFF));
-}
-
 inline void Bump(uint8_t& count) {
   if (count < 255) ++count;
 }
 
-// One pixel of the capture, as the readings so far have it.
-struct Held {
-  uint32_t& color;
-  uint8_t& edge;
-  uint8_t& state;
-  uint8_t& votes;
-
-  void Take(uint32_t now, uint8_t now_edge, uint8_t now_state) {
-    color = now;
-    edge = now_edge;
-    state = now_state;
-    votes = 1;
-  }
-
-  // A clear sight of what is there, not yet seen following the scroll. What most such sights agree on stands, so a
-  // first sight under something that went away gives way to what is seen later.
-  void VoteColor(uint32_t now, uint8_t now_edge, bool changing) {
-    const uint8_t flags = changing ? kChanging : 0;
-    if ((state & kRankMask) < kSeen) {
-      Take(now, now_edge, kSeen | flags);
-    } else if ((state & kBehind) == 0 && Near(color, now)) {
-      Bump(votes);
-      state |= flags;
-    } else if (--votes == 0) {
-      Take(now, now_edge, kSeen | flags);
+// Each piece of a row as a number only the same pixels share, or zero for a piece all of one color, which could be
+// anywhere.
+void HashRow(const uint32_t* row, int width, uint32_t* out) {
+  for (int from = 0, piece = 0; from < width; from += kSegment, ++piece) {
+    const int to = std::min(from + kSegment, width);
+    const uint32_t first = row[from] & 0xFFFFFFu;
+    uint32_t hash = 2166136261u;
+    bool flat = true;
+    for (int x = from; x < to; ++x) {
+      const uint32_t pixel = row[x] & 0xFFFFFFu;
+      flat = flat && pixel == first;
+      hash = (hash ^ pixel) * 16777619u;
     }
+    out[piece] = flat ? 0u : (hash | 1u);
   }
-
-  // A sight of content already seen following the scroll. Whether it agrees decides between two ways it has looked,
-  // and disagreeing time after time at one place in the view gives away something tinting it there.
-  bool VoteConfirmed(uint32_t now, uint8_t now_edge, bool counts, uint8_t& dissent) {
-    if (Near(color, now)) {
-      if (counts) Bump(votes);
-      return false;
-    }
-    // Only a settled look says the other is the odd one out, whichever was seen first.
-    if (votes >= kSettledVotes) Bump(dissent);
-    if (!counts || --votes != 0) return false;
-    Take(now, now_edge, kConfirmed);
-    return true;
-  }
-
-  // A sight of something holding still where it is, which is not what scrolls there.
-  void VoteBehind(uint32_t now, uint8_t now_edge) {
-    if ((state & kRankMask) < kSeen) {
-      Take(now, now_edge, kSeen | kBehind);
-    } else if ((state & kBehind) != 0) {
-      Bump(votes);
-    } else if (--votes == 0) {
-      Take(now, now_edge, kSeen | kBehind);
-    }
-  }
-};
-
-inline uint32_t Bin(uint32_t color) { return ((color >> 3) & 0x1F) | (((color >> 11) & 0x1F) << 5) | (((color >> 19) & 0x1F) << 10); }
-
-uint32_t Mix(uint32_t a, uint32_t b, int t, int total) {
-  const auto channel = [&](int shift) {
-    return static_cast<uint32_t>((static_cast<int>((a >> shift) & 0xFF) * (total - t) + static_cast<int>((b >> shift) & 0xFF) * t) / total);
-  };
-  return 0xFF000000u | channel(16) << 16 | channel(8) << 8 | channel(0);
 }
 
-// The most common color among some, to within a few levels, and how much of them it is.
-uint32_t MostCommon(const std::vector<uint32_t>& colors, std::vector<uint32_t>& bins, double* share) {
-  *share = 0.0;
-  if (colors.empty()) return 0xFF000000u;
-  bins.resize(colors.size());
-  for (size_t i = 0; i < colors.size(); ++i) bins[i] = Bin(colors[i]);
-  std::sort(bins.begin(), bins.end());
-  uint32_t best = bins[0];
-  size_t best_run = 0;
-  for (size_t i = 0; i < bins.size();) {
-    size_t j = i;
-    while (j < bins.size() && bins[j] == bins[i]) ++j;
-    if (j - i > best_run) {
-      best_run = j - i;
-      best = bins[i];
-    }
-    i = j;
-  }
-  uint64_t sums[3] = {0, 0, 0};
-  uint64_t count = 0;
-  for (const uint32_t color : colors) {
-    if (Bin(color) != best) continue;
-    sums[0] += color & 0xFF;
-    sums[1] += (color >> 8) & 0xFF;
-    sums[2] += (color >> 16) & 0xFF;
-    ++count;
-  }
-  *share = static_cast<double>(best_run) / static_cast<double>(colors.size());
-  return 0xFF000000u | static_cast<uint32_t>(sums[2] / count) << 16 | static_cast<uint32_t>(sums[1] / count) << 8 | static_cast<uint32_t>(sums[0] / count);
+void HashRows(const std::vector<uint32_t>& pixels, int width, int height, int segments, std::vector<uint32_t>& hashes) {
+  hashes.resize(static_cast<size_t>(segments) * height);
+  for (int y = 0; y < height; ++y) HashRow(pixels.data() + static_cast<size_t>(y) * width, width, hashes.data() + static_cast<size_t>(y) * segments);
 }
 
-std::vector<uint8_t> Dilate(const std::vector<uint8_t>& mask, int width, int height, int radius) {
-  std::vector<uint8_t> across(mask.size(), 0);
-  for (int y = 0; y < height; ++y) {
-    const uint8_t* in = mask.data() + static_cast<size_t>(y) * width;
-    uint8_t* out = across.data() + static_cast<size_t>(y) * width;
-    int last = INT_MIN / 2;
-    for (int x = 0; x < width; ++x) {
-      if (in[x] != 0) last = x;
-      if (x - last <= radius) out[x] = 1;
-    }
-    last = INT_MAX / 2;
-    for (int x = width - 1; x >= 0; --x) {
-      if (in[x] != 0) last = x;
-      if (last - x <= radius) out[x] = 1;
-    }
-  }
-  std::vector<uint8_t> result(mask.size(), 0);
-  std::vector<int> last(static_cast<size_t>(width), INT_MIN / 2);
-  for (int y = 0; y < height; ++y) {
-    const uint8_t* in = across.data() + static_cast<size_t>(y) * width;
-    uint8_t* out = result.data() + static_cast<size_t>(y) * width;
-    for (int x = 0; x < width; ++x) {
-      if (in[x] != 0) last[x] = y;
-      if (y - last[x] <= radius) out[x] = 1;
-    }
-  }
-  std::fill(last.begin(), last.end(), INT_MAX / 2);
-  for (int y = height - 1; y >= 0; --y) {
-    const uint8_t* in = across.data() + static_cast<size_t>(y) * width;
-    uint8_t* out = result.data() + static_cast<size_t>(y) * width;
-    for (int x = 0; x < width; ++x) {
-      if (in[x] != 0) last[x] = y;
-      if (last[x] - y <= radius) out[x] = 1;
-    }
-  }
-  return result;
-}
-
-// The fewest rows after which a background repeats itself, if it does so throughout.
-int FindPeriod(const std::vector<uint32_t>& color, const std::vector<uint8_t>& known, int width, int left, int right, int top, int bottom) {
-  std::vector<size_t> marks;
-  for (int y = top; y + 1 < bottom; ++y) {
-    for (int x = left; x + 1 < right; ++x) {
-      const size_t i = static_cast<size_t>(y) * width + x;
-      if (known[i] == 0) continue;
-      if ((known[i + 1] != 0 && Distance(color[i], color[i + 1]) > kGrowStep) ||
-          (known[i + width] != 0 && Distance(color[i], color[i + width]) > kGrowStep)) {
-        marks.push_back(i);
-      }
-    }
-  }
-  if (marks.size() < 200) return 0;
-  if (marks.size() > 6000) {
-    const size_t step = marks.size() / 6000 + 1;
-    size_t kept = 0;
-    for (size_t i = 0; i < marks.size(); i += step) marks[kept++] = marks[i];
-    marks.resize(kept);
-  }
-  for (int period = 8; period * 2 <= bottom - top; ++period) {
-    size_t compared = 0;
-    size_t matched = 0;
-    for (const size_t i : marks) {
-      if (static_cast<int>(i / width) + period >= bottom) continue;
-      const size_t j = i + static_cast<size_t>(period) * width;
-      if (known[j] == 0) continue;
-      ++compared;
-      if (Distance(color[i], color[j]) <= kBackgroundSlack / 2) ++matched;
-    }
-    if (compared * 3 >= marks.size() && matched * 100 >= compared * 97) return period;
-  }
-  return 0;
-}
-
-// Fills what was never seen of a background: from where a repeating one brings it round, or else blended from what was
-// seen nearest along its row, or else from the nearest row with anything seen.
-void Inpaint(std::vector<uint32_t>& color, std::vector<uint8_t>& known, int width, int height, int left, int right, int period, const std::vector<uint32_t>& plain) {
-  if (period > 0) {
-    for (int y = 0; y < height; ++y) {
-      for (int x = left; x < right; ++x) {
-        const size_t i = static_cast<size_t>(y) * width + x;
-        if (known[i] != 0) continue;
-        for (int other = y % period; other < height; other += period) {
-          const size_t j = static_cast<size_t>(other) * width + x;
-          if (other == y || known[j] != 1) continue;
-          color[i] = color[j];
-          known[i] = 2;
-          break;
-        }
-      }
-    }
-  }
-  std::vector<uint8_t> has(static_cast<size_t>(height), 0);
-  for (int y = 0; y < height; ++y) {
-    uint32_t* line = color.data() + static_cast<size_t>(y) * width;
-    const uint8_t* seen = known.data() + static_cast<size_t>(y) * width;
-    int last = -1;
-    for (int x = left; x < right; ++x) {
-      if (seen[x] == 0) continue;
-      if (last < 0) {
-        std::fill(line + left, line + x, line[x]);
-      } else {
-        for (int k = last + 1; k < x; ++k) line[k] = Mix(line[last], line[x], k - last, x - last);
-      }
-      last = x;
-    }
-    if (last < 0) continue;
-    std::fill(line + last + 1, line + right, line[last]);
-    has[y] = 1;
-  }
-  std::vector<int> above(static_cast<size_t>(height), -1);
-  std::vector<int> below(static_cast<size_t>(height), -1);
-  for (int y = 0, seen = -1; y < height; ++y) {
-    if (has[y] != 0) seen = y;
-    above[y] = seen;
-  }
-  for (int y = height - 1, seen = -1; y >= 0; --y) {
-    if (has[y] != 0) seen = y;
-    below[y] = seen;
-  }
-  for (int y = 0; y < height; ++y) {
-    if (has[y] != 0) continue;
-    int from = above[y];
-    if (from < 0 || (below[y] >= 0 && below[y] - y < y - from)) from = below[y];
-    uint32_t* line = color.data() + static_cast<size_t>(y) * width;
-    if (from < 0) {
-      std::copy(plain.begin() + left, plain.begin() + right, line + left);
-    } else {
-      std::copy_n(color.data() + static_cast<size_t>(from) * width + left, right - left, line + left);
-    }
-  }
-}
+// A piece's hash and place along the row, with room below for the row it is in.
+inline uint64_t Key(uint32_t hash, int segment) { return static_cast<uint64_t>(hash) << 32 | static_cast<uint64_t>(segment) << 16; }
 
 }  // namespace
 
@@ -568,7 +364,11 @@ int MotionFinder::CountLoose(const EdgeFrame& before, const EdgeFrame& after, in
     const int other = y0 + at;
     if (other < 0 || other + kCell > before.height()) continue;
     for (int cx = cells_.left; cx < cells_.right; ++cx) {
-      const uint32_t total = energy_[static_cast<size_t>(cy) * columns + cx] + before.SliceEnergy(cx, other, other + kCell);
+      const size_t i = static_cast<size_t>(cy) * columns + cx;
+      // What stayed where it was, as a background that holds still, says nothing of where the rest went, and would
+      // make anything that moved look as if it had not.
+      if (stays_[i] != 0) continue;
+      const uint32_t total = energy_[i] + before.SliceEnergy(cx, other, other + kCell);
       if (total < 2 * config::kScrollBlankCell) continue;
       ++*comparable;
       if (WithinShare(CellSad(after, cx * kCell, y0, before, other), total, config::kScrollLooseShare)) ++count;
@@ -902,76 +702,50 @@ bool Stitcher::Start(const PixelView& first, float scale, int limit_rows, bool h
   width_ = first.width;
   height_ = first.height;
   scale_ = scale;
-  SetBand(pointer);
   limit_rows_ = limit_rows;
   hinted_ = hinted;
   box_ = box;
-  before_.Build(first);
-  slices_ = before_.slices();
-  cell_rows_ = before_.cell_rows();
-  if (slices_ == 0 || cell_rows_ == 0) return false;
+  // Rows and pieces are numbered in sixteen bits where shifts are looked up.
+  if (width_ < kSegment || height_ <= kMinOverlap * 2 || height_ > 0xFFFF) return false;
+  segments_ = (width_ + kSegment - 1) / kSegment;
+  SetBand(pointer);
   const int origin = limit_rows + height_;
   const int capacity = origin * 2 + height_;
-  if (!pixels_.Reserve(static_cast<size_t>(width_) * 4, capacity, origin) || !edges_.Reserve(static_cast<size_t>(width_), capacity, origin) ||
-      !states_.Reserve(static_cast<size_t>(width_), capacity, origin) || !votes_.Reserve(static_cast<size_t>(width_), capacity, origin) ||
-      !sources_.Reserve(static_cast<size_t>(slices_) * sizeof(uint16_t), capacity, origin)) {
-    return false;
-  }
+  if (!pixels_.Reserve(static_cast<size_t>(width_) * 4, capacity, origin) || !hashes_.Reserve(static_cast<size_t>(segments_) * 4, capacity, origin)) return false;
+  row_score_.assign(static_cast<size_t>(capacity), 0);
+  row_base_ = origin;
   evidence_.Reset(width_, height_);
   step_up_.assign(static_cast<size_t>(width_), 0);
   step_down_.assign(static_cast<size_t>(width_), 0);
   const size_t view = static_cast<size_t>(width_) * height_;
-  for (auto* counts : {&follow_n_, &stay_n_, &neither_n_, &occluded_n_, &dissent_n_}) counts->assign(view, 0);
-  plates_.assign(1, Plate{std::vector<uint32_t>(view, 0), std::vector<uint8_t>(view, 0)});
-  tile_columns_ = (width_ + kVersionTile - 1) / kVersionTile;
-  const size_t tiles = static_cast<size_t>(tile_columns_) * ((height_ + kVersionTile - 1) / kVersionTile);
-  tile_compared_.assign(tiles, 0);
-  tile_differ_.assign(tiles, 0);
-  clean_.resize(view);
-  top_frame_.resize(view);
-  bottom_frame_.resize(view);
+  ref_.resize(view);
+  now_.resize(view);
+  changed_.assign(view, 0);
+  stay_n_.assign(view, 0);
+  changed_in_row_.assign(static_cast<size_t>(height_), 0);
+  score_.assign(static_cast<size_t>(height_), 0);
+  want_.assign(static_cast<size_t>(height_), kKeep);
+  difference_.assign(static_cast<size_t>(height_), -1);
   SetFollow(box.top + kCell, box.bottom - kCell - 1);
-  if (!Commit(0)) return false;
-  for (int y = 0; y < height_; ++y) {
-    std::memcpy(pixels_.Row(y), PixelRow(first, y), static_cast<size_t>(width_) * 4);
-    std::memcpy(edges_.Row(y), before_.Row(y), static_cast<size_t>(width_));
-    std::memset(states_.Row(y), y >= band_first_ && y <= band_last_ ? kSuspect : kSeen, static_cast<size_t>(width_));
-    std::memset(votes_.Row(y), 1, static_cast<size_t>(width_));
-  }
-  CopyFrame(first, clean_);
-  clean_position_ = 0;
-  history_.assign(1, {0, 0});
-  KeepEnds(first, 0, true);
-  changed_first_ = 0;
-  changed_last_ = height_;
-  return true;
-}
-
-bool Stitcher::Commit(int position) {
-  const int first = position;
-  const int last = position + height_;
-  if (!pixels_.Commit(first, last) || !edges_.Commit(first, last) || !states_.Commit(first, last) || !votes_.Commit(first, last) || !sources_.Commit(first, last)) {
-    return false;
-  }
-  // Rows never seen say nothing about where edges are.
-  const auto clear = [&](int from, int to) {
-    for (int row = from; row < to; ++row) std::memset(edges_.Row(row), kNoEdge, static_cast<size_t>(width_));
-  };
-  if (!committed_) {
-    clear(first, last);
-    committed_ = true;
-    committed_first_ = first;
-    committed_last_ = last;
-    return true;
-  }
-  if (first < committed_first_) {
-    clear(first, committed_first_);
-    committed_first_ = first;
-  }
-  if (last > committed_last_) {
-    clear(committed_last_, last);
-    committed_last_ = last;
-  }
+  crop_left_ = 0;
+  crop_right_ = width_;
+  SetCrop();
+  Load(first);
+  HashRows(now_, width_, height_, segments_, now_hash_);
+  if (!pixels_.Commit(0, height_) || !hashes_.Commit(0, height_)) return false;
+  dirty_first_ = INT_MAX;
+  dirty_last_ = INT_MIN;
+  Place(0, 0, true);
+  now_edges_.Build(ViewOf(now_, width_, height_));
+  std::swap(ref_, now_);
+  std::swap(ref_hash_, now_hash_);
+  std::swap(ref_edges_, now_edges_);
+  ++ref_serial_;
+  position_ = 0;
+  min_position_ = 0;
+  max_position_ = 0;
+  rest_min_ = 0;
+  rest_max_ = 0;
   return true;
 }
 
@@ -985,26 +759,600 @@ void Stitcher::SetBand(POINT pointer) {
   }
 }
 
-// The readings at either end of the capture, kept until the end. Coming to rest short of where it passed through
-// outranks that only where what it passed was the empty space an elastic end shows.
-void Stitcher::KeepEnds(const PixelView& frame, int position, bool at_rest) {
-  const int first = std::clamp(follow_first_, 0, height_ - 1);
-  const int last = std::clamp(follow_last_ + 1, first + 1, height_);
-  bool top = position <= top_position_;
-  if (!top && at_rest && position <= rest_min_) top = RowsBlank(top_position_ + first, position + first, 0, width_);
-  if (top) {
-    CopyFrame(frame, top_frame_);
-    top_position_ = position;
-    top_band_first_ = band_first_;
-    top_band_last_ = band_last_;
+void Stitcher::SetFollow(int first, int last) {
+  follow_first_ = first;
+  follow_last_ = last;
+}
+
+// The columns compared are those the image keeps, so that what goes on beside them has no say.
+void Stitcher::SetCrop() {
+  const Crop crop = ViewCrop();
+  if (crop.right - crop.left < kSegment) return;
+  crop_left_ = crop.left;
+  crop_right_ = crop.right;
+}
+
+void Stitcher::Load(const PixelView& frame) {
+  for (int y = 0; y < height_; ++y) std::memcpy(now_.data() + static_cast<size_t>(y) * width_, PixelRow(frame, y), static_cast<size_t>(width_) * 4);
+}
+
+Stitcher::Step Stitcher::Feed(const PixelView& frame, POINT pointer) {
+  if (frame.width != width_ || frame.height != height_) return Step::kLost;
+  SetBand(pointer);
+  Load(frame);
+  if (Compare() <= kQuietPixels) {
+    frame_key_ = 0;
+    rest_min_ = std::min(rest_min_, position_);
+    rest_max_ = std::max(rest_max_, position_);
+    return Step::kSame;
   }
-  bool bottom = position >= bottom_position_;
-  if (!bottom && at_rest && position >= rest_max_) bottom = RowsBlank(position + last, bottom_position_ + last, 0, width_);
-  if (bottom) {
-    CopyFrame(frame, bottom_frame_);
-    bottom_position_ = position;
-    bottom_band_first_ = band_first_;
-    bottom_band_last_ = band_last_;
+  HashRows(now_, width_, height_, segments_, now_hash_);
+  uint64_t key = 14695981039346656037ull;
+  for (const uint32_t hash : now_hash_) key = (key ^ hash) * 1099511628211ull;
+  const bool settled = key == frame_key_;
+  frame_key_ = key;
+
+  int shift = 0;
+  if (Register(&shift)) {
+    last_lost_replaced_ = false;
+    return Accept(position_ + shift, shift) ? Step::kMoved : Step::kLost;
+  }
+  // Change in a few rows only is something changing in place, as a hover, a picture loading, or an animation. Once it
+  // holds still, the view as it now is takes the place of the last placed reading, where that one was.
+  const int band = std::max(std::min(follow_last_ + 1, height_) - std::max(follow_first_, 0), 1);
+  const uint64_t area = static_cast<uint64_t>(crop_right_ - crop_left_) * height_;
+  if (changed_rows_ * 3 <= band && static_cast<uint64_t>(changed_count_) * 10 <= area) {
+    if (settled) Accept(position_, 0);
+    rest_min_ = std::min(rest_min_, position_);
+    rest_max_ = std::max(rest_max_, position_);
+    return Step::kRest;
+  }
+  // Too far from the last placed reading, or caught between two. The image reaches further.
+  int place = 0;
+  if (Realign(&place)) {
+    last_lost_replaced_ = false;
+    return Accept(place, place - position_) ? Step::kMoved : Step::kLost;
+  }
+  last_lost_replaced_ = changed_rows_ >= height_ * config::kScrollReplacedShare &&
+                        changed_right_ - changed_left_ >= (crop_right_ - crop_left_) * config::kScrollReplacedShare;
+  return Step::kLost;
+}
+
+// Marks what differs from the last placed reading at the same place, in the columns compared.
+uint32_t Stitcher::Compare() {
+  const __m128i slack = PixelSlack();
+  changed_count_ = 0;
+  changed_rows_ = 0;
+  changed_left_ = width_;
+  changed_right_ = 0;
+  for (int y = 0; y < height_; ++y) {
+    const size_t base = static_cast<size_t>(y) * width_;
+    const uint32_t* now = now_.data() + base;
+    const uint32_t* was = ref_.data() + base;
+    uint8_t* out = changed_.data() + base;
+    std::memset(out, 0, static_cast<size_t>(width_));
+    uint32_t count = 0;
+    int x = crop_left_;
+    for (; x + 4 <= crop_right_; x += 4) {
+      const int same = Near4(now + x, was + x, slack);
+      if (same == 0xF) continue;
+      for (int k = 0; k < 4; ++k) {
+        if (((same >> k) & 1) != 0) continue;
+        out[x + k] = 1;
+        ++count;
+      }
+    }
+    for (; x < crop_right_; ++x) {
+      if (Near(now[x], was[x])) continue;
+      out[x] = 1;
+      ++count;
+    }
+    changed_in_row_[static_cast<size_t>(y)] = count;
+    if (count == 0) continue;
+    ++changed_rows_;
+    changed_count_ += count;
+    for (int k = crop_left_; k < crop_right_; ++k) {
+      if (out[k] == 0) continue;
+      changed_left_ = std::min(changed_left_, k);
+      break;
+    }
+    for (int k = crop_right_ - 1; k >= crop_left_; --k) {
+      if (out[k] == 0) continue;
+      changed_right_ = std::max(changed_right_, k + 1);
+      break;
+    }
+  }
+  return changed_count_;
+}
+
+// The shift from the last placed reading, if one clearly explains what changed. Pieces of rows that changed are looked
+// for among the last placed reading's rows, and each one found proposes a shift. Only what changed takes part, so a
+// background or a bar that holds still cannot pull the shift toward none, and whatever moved counts, whatever its shape.
+bool Stitcher::Register(int* shift) {
+  candidates_.clear();
+  if (Vote() < kMinVotes) Sweep();
+  const int limit = height_ - kMinOverlap;
+  if (last_shift_ != 0 && std::abs(last_shift_) <= limit && std::find(candidates_.begin(), candidates_.end(), last_shift_) == candidates_.end()) {
+    candidates_.push_back(last_shift_);
+  }
+  std::vector<Trial> trials;
+  trials.reserve(candidates_.size());
+  Trial best;
+  for (const int candidate : candidates_) {
+    trials.push_back(Verify(candidate));
+    if (trials.back().Score() > best.Score()) best = trials.back();
+  }
+  double rival = 0.0;
+  for (const Trial& trial : trials) {
+    if (std::abs(trial.shift - best.shift) >= 2) rival = std::max(rival, trial.Score());
+  }
+  if (best.explained < kMinExplained || best.rows < 3 || static_cast<double>(best.explained) < best.compared * kExplainedShare || best.Score() < rival * kClearMargin) {
+    return false;
+  }
+  *shift = best.shift;
+  return true;
+}
+
+// Proposes the shifts most pieces of changed rows agree on, and says how many agree on the best.
+int Stitcher::Vote() {
+  const int first_segment = crop_left_ / kSegment;
+  const int last_segment = (crop_right_ - 1) / kSegment;
+  if (index_serial_ != ref_serial_ || index_left_ != crop_left_ || index_right_ != crop_right_) {
+    ref_index_.clear();
+    for (int y = 0; y < height_; ++y) {
+      const uint32_t* hashes = ref_hash_.data() + static_cast<size_t>(y) * segments_;
+      for (int s = first_segment; s <= last_segment; ++s) {
+        if (hashes[s] != 0) ref_index_.push_back(Key(hashes[s], s) | static_cast<uint64_t>(y));
+      }
+    }
+    std::sort(ref_index_.begin(), ref_index_.end());
+    index_serial_ = ref_serial_;
+    index_left_ = crop_left_;
+    index_right_ = crop_right_;
+  }
+  votes_.assign(static_cast<size_t>(height_) * 2 + 1, 0);
+  for (int y = 0; y < height_; ++y) {
+    if (changed_in_row_[static_cast<size_t>(y)] == 0) continue;
+    const uint32_t* now = now_hash_.data() + static_cast<size_t>(y) * segments_;
+    const uint32_t* was = ref_hash_.data() + static_cast<size_t>(y) * segments_;
+    for (int s = first_segment; s <= last_segment; ++s) {
+      const uint32_t hash = now[s];
+      if (hash == 0 || hash == was[s]) continue;
+      const uint64_t key = Key(hash, s);
+      const auto from = std::lower_bound(ref_index_.begin(), ref_index_.end(), key);
+      const auto to = std::lower_bound(from, ref_index_.end(), key + 0x10000);
+      if (from == to || to - from > static_cast<ptrdiff_t>(kMaxSameRows)) continue;
+      for (auto it = from; it != to; ++it) {
+        const int moved = static_cast<int>(*it & 0xFFFF) - y;
+        if (moved != 0) ++votes_[static_cast<size_t>(moved + height_)];
+      }
+    }
+  }
+  const int limit = height_ - kMinOverlap;
+  int most = 0;
+  for (size_t n = 0; n < kMaxTrials; ++n) {
+    int pick = 0;
+    int pick_votes = 1;
+    for (int moved = -limit; moved <= limit; ++moved) {
+      const int count = votes_[static_cast<size_t>(moved + height_)];
+      if (count > pick_votes) {
+        pick = moved;
+        pick_votes = count;
+      }
+    }
+    if (pick == 0) break;
+    candidates_.push_back(pick);
+    votes_[static_cast<size_t>(pick + height_)] = 0;
+    most = std::max(most, pick_votes);
+  }
+  return most;
+}
+
+// When pieces of rows found nowhere else, as when nothing drawn matches exactly, every shift is tried on a sample of what
+// changed, and the few that explain most of it are proposed.
+void Stitcher::Sweep() {
+  points_.clear();
+  for (int y = 0; y < height_; y += 2) {
+    if (changed_in_row_[static_cast<size_t>(y)] == 0) continue;
+    const size_t base = static_cast<size_t>(y) * width_;
+    for (int x = crop_left_; x < crop_right_; x += 3) {
+      if (changed_[base + x] != 0) points_.push_back(base + x);
+    }
+  }
+  if (points_.size() > kSweepPoints) {
+    const size_t step = points_.size() / kSweepPoints + 1;
+    size_t kept = 0;
+    for (size_t i = 0; i < points_.size(); i += step) points_[kept++] = points_[i];
+    points_.resize(kept);
+  }
+  if (points_.size() < kMinExplained) return;
+  const int limit = height_ - kMinOverlap;
+  const size_t enough = std::max<size_t>(32, points_.size() / 4);
+  int picks[3] = {0, 0, 0};
+  double shares[3] = {0.0, 0.0, 0.0};
+  for (int moved = -limit; moved <= limit; ++moved) {
+    if (moved == 0) continue;
+    // The points are in reading order, so those the shift keeps in view are one run of them.
+    const auto first = std::lower_bound(points_.begin(), points_.end(), static_cast<size_t>(std::max(0, -moved)) * width_);
+    const auto last = std::lower_bound(first, points_.end(), static_cast<size_t>(std::min(height_, height_ - moved)) * width_);
+    const size_t inside = static_cast<size_t>(last - first);
+    if (inside < enough) continue;
+    const ptrdiff_t offset = static_cast<ptrdiff_t>(moved) * width_;
+    size_t matched = 0;
+    for (auto it = first; it != last; ++it) {
+      if (Near(now_[*it], ref_[static_cast<size_t>(static_cast<ptrdiff_t>(*it) + offset)])) ++matched;
+    }
+    const double share = static_cast<double>(matched) / static_cast<double>(inside);
+    if (share < 0.5) continue;
+    int place = 3;
+    while (place > 0 && shares[place - 1] < share) --place;
+    if (place >= 3) continue;
+    for (int move = 2; move > place; --move) {
+      picks[move] = picks[move - 1];
+      shares[move] = shares[move - 1];
+    }
+    picks[place] = moved;
+    shares[place] = share;
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (shares[i] > 0.0 && std::find(candidates_.begin(), candidates_.end(), picks[i]) == candidates_.end()) candidates_.push_back(picks[i]);
+  }
+}
+
+// How much of what changed a shift explains: every changed pixel whose row stays in view, against the last placed
+// reading's pixel the shift says it came from.
+Stitcher::Trial Stitcher::Verify(int shift) const {
+  Trial trial;
+  trial.shift = shift;
+  const int from = std::max(0, -shift);
+  const int to = std::min(height_, height_ - shift);
+  for (int y = from; y < to; ++y) {
+    if (changed_in_row_[static_cast<size_t>(y)] == 0) continue;
+    const size_t base = static_cast<size_t>(y) * width_;
+    const uint8_t* changed = changed_.data() + base;
+    const uint32_t* now = now_.data() + base;
+    const uint32_t* was = ref_.data() + static_cast<size_t>(y + shift) * width_;
+    uint32_t explained = 0;
+    for (int x = crop_left_; x < crop_right_; ++x) {
+      if (changed[x] == 0) continue;
+      ++trial.compared;
+      if (Near(now[x], was[x])) ++explained;
+    }
+    trial.explained += explained;
+    if (explained >= 2) ++trial.rows;
+  }
+  return trial;
+}
+
+// Where in the image the reading is, if it can be found there: pieces of the reading that differ from the last placed
+// one are looked for among the image's rows, and the place most agree on must explain nearly all of what changed.
+bool Stitcher::Realign(int* position) {
+  const int first_segment = crop_left_ / kSegment;
+  const int last_segment = (crop_right_ - 1) / kSegment;
+  now_index_.clear();
+  for (int y = 0; y < height_; ++y) {
+    const uint32_t* now = now_hash_.data() + static_cast<size_t>(y) * segments_;
+    const uint32_t* was = ref_hash_.data() + static_cast<size_t>(y) * segments_;
+    for (int s = first_segment; s <= last_segment; ++s) {
+      if (now[s] != 0 && now[s] != was[s]) now_index_.push_back(Key(now[s], s) | static_cast<uint64_t>(y));
+    }
+  }
+  if (now_index_.empty()) return false;
+  std::sort(now_index_.begin(), now_index_.end());
+  const int reach = height_ - kMinOverlap;
+  const int low = min_position_ - reach;
+  const int high = max_position_ + reach;
+  votes_.assign(static_cast<size_t>(high - low + 1), 0);
+  for (int row = min_position_; row < max_position_ + height_; ++row) {
+    if (!Held(row)) continue;
+    const uint32_t* hashes = reinterpret_cast<const uint32_t*>(hashes_.Row(row));
+    for (int s = first_segment; s <= last_segment; ++s) {
+      if (hashes[s] == 0) continue;
+      const uint64_t key = Key(hashes[s], s);
+      const auto from = std::lower_bound(now_index_.begin(), now_index_.end(), key);
+      const auto to = std::lower_bound(from, now_index_.end(), key + 0x10000);
+      if (from == to || to - from > static_cast<ptrdiff_t>(kMaxSameRows)) continue;
+      for (auto it = from; it != to; ++it) {
+        const int place = row - static_cast<int>(*it & 0xFFFF);
+        if (place >= low && place <= high) ++votes_[static_cast<size_t>(place - low)];
+      }
+    }
+  }
+  std::vector<Trial> trials;
+  Trial best;
+  for (int n = 0; n < 4; ++n) {
+    const auto most = std::max_element(votes_.begin(), votes_.end());
+    if (*most < kMinVotes) break;
+    const int place = low + static_cast<int>(most - votes_.begin());
+    *most = 0;
+    trials.push_back(VerifyAt(place));
+    if (trials.back().Score() > best.Score()) best = trials.back();
+  }
+  double rival = 0.0;
+  for (const Trial& trial : trials) {
+    if (std::abs(trial.shift - best.shift) >= 2) rival = std::max(rival, trial.Score());
+  }
+  if (best.explained < kMinExplained * 4 || best.rows < height_ / 8 || static_cast<double>(best.explained) < best.compared * kRealignShare ||
+      best.Score() < rival * kClearMargin) {
+    return false;
+  }
+  *position = best.shift;
+  return true;
+}
+
+// How much of what changed since the last placed reading the image shows alike, were the reading placed at `place`.
+Stitcher::Trial Stitcher::VerifyAt(int place) const {
+  Trial trial;
+  trial.shift = place;
+  for (int y = 0; y < height_; ++y) {
+    if (changed_in_row_[static_cast<size_t>(y)] == 0 || !Held(place + y)) continue;
+    const size_t base = static_cast<size_t>(y) * width_;
+    const uint8_t* changed = changed_.data() + base;
+    const uint32_t* now = now_.data() + base;
+    const uint32_t* held = reinterpret_cast<const uint32_t*>(pixels_.Row(place + y));
+    uint32_t explained = 0;
+    for (int x = crop_left_; x < crop_right_; ++x) {
+      if (changed[x] == 0) continue;
+      ++trial.compared;
+      if (Near(now[x], held[x])) ++explained;
+    }
+    trial.explained += explained;
+    if (explained >= 2) ++trial.rows;
+  }
+  return trial;
+}
+
+// Puts the reading at `position`, `shift` rows on from the last placed one, and makes it the one the next is lined up
+// with.
+bool Stitcher::Accept(int position, int shift) {
+  if (std::abs(position) > limit_rows_ || !pixels_.Commit(position, position + height_) || !hashes_.Commit(position, position + height_)) return false;
+  Place(position, shift, false);
+  now_edges_.Build(ViewOf(now_, width_, height_));
+  const bool overlaps = shift != 0 && std::abs(shift) <= height_ - kMinOverlap;
+  if (overlaps) Learn(shift);
+  std::swap(ref_, now_);
+  std::swap(ref_hash_, now_hash_);
+  std::swap(ref_edges_, now_edges_);
+  ++ref_serial_;
+  if (shift != 0) last_shift_ = overlaps ? shift : 0;
+  position_ = position;
+  min_position_ = std::min(min_position_, position);
+  max_position_ = std::max(max_position_, position);
+  if (overlaps) SetCrop();
+  return true;
+}
+
+// Writes the rows of the reading being taken in that the image needs: rows it has nothing for, rows the reading shows
+// better placed, and rows whose content changed in place. Each run of them goes in whole, between seams at rows the
+// image already shows alike.
+void Stitcher::Place(int position, int shift, bool flush) {
+  for (int y = 0; y < height_; ++y) {
+    score_[static_cast<size_t>(y)] = Score(y);
+    difference_[static_cast<size_t>(y)] = -1;
+    const int row = position + y;
+    uint8_t want = kKeep;
+    if (!Held(row)) {
+      want = kMust;
+    } else if (score_[static_cast<size_t>(y)] >= kStaleScore && Stale(y, row)) {
+      want = kTake;
+    } else if (score_[static_cast<size_t>(y)] > RowScore(row)) {
+      want = score_[static_cast<size_t>(y)] == kTopScore ? kPending : kTake;
+    }
+    want_[static_cast<size_t>(y)] = want;
+  }
+  // Rows waiting in the best placed part of the view go in together once the scroll is about to carry them out of it,
+  // so that the image is made of few tall blocks rather than many thin ones, and a background that holds still behind
+  // the content breaks only where they meet.
+  const int ahead = 2 * std::abs(shift) + 8;
+  for (int first = 0; first < height_;) {
+    if (score_[static_cast<size_t>(first)] != kTopScore) {
+      ++first;
+      continue;
+    }
+    int last = first;
+    while (last < height_ && score_[static_cast<size_t>(last)] == kTopScore) ++last;
+    int pending = 0;
+    bool due = flush || shift == 0;
+    for (int y = first; y < last; ++y) {
+      if (want_[static_cast<size_t>(y)] != kPending) continue;
+      ++pending;
+      if ((shift > 0 && y < first + ahead) || (shift < 0 && y >= last - ahead)) due = true;
+    }
+    if (pending * 4 >= (last - first) * 3) due = true;
+    for (int y = first; y < last; ++y) {
+      uint8_t& want = want_[static_cast<size_t>(y)];
+      if (want == kPending) want = due ? kTake : kKeep;
+    }
+    first = last;
+  }
+  int floor = 0;
+  for (int first = 0; first < height_;) {
+    if (want_[static_cast<size_t>(first)] == kKeep) {
+      ++first;
+      continue;
+    }
+    int last = first;
+    int must_first = height_;
+    int must_last = -1;
+    while (last < height_ && want_[static_cast<size_t>(last)] != kKeep) {
+      if (want_[static_cast<size_t>(last)] == kMust) {
+        must_first = std::min(must_first, last);
+        must_last = last;
+      }
+      ++last;
+    }
+    const int top = SeamTop(position, first, last, must_first, floor);
+    const int bottom = SeamBottom(position, top, last, must_last);
+    if (bottom > top) WriteRows(position, top, bottom);
+    floor = std::max(bottom, last);
+    first = floor;
+  }
+}
+
+// How well placed a row of the view is to go into the image: nothing outside where content moves, rising to the best a
+// sixth of the way in from its ends, and low under the pointer, where a hover may change how things look.
+int Stitcher::Score(int y) const {
+  const int lo = std::clamp(follow_first_, 0, height_ - 1);
+  const int hi = std::clamp(follow_last_ + 1, lo + 1, height_);
+  if (y < lo || y >= hi) return 1;
+  const int plateau = std::max((hi - lo) / 6, 1);
+  const int reach = std::min({y - lo, hi - 1 - y, plateau});
+  const int score = 2 + reach * (kTopScore - 2) / plateau;
+  if (y >= band_first_ && y <= band_last_) return std::max(2, score / 3);
+  return score;
+}
+
+bool Stitcher::Held(int row) const {
+  const int index = row + row_base_;
+  return index >= 0 && index < static_cast<int>(row_score_.size()) && row_score_[static_cast<size_t>(index)] != 0;
+}
+
+// Whether much of a row is shown otherwise than the image holds it, by pixels that did not hold still: a picture that
+// loaded, or a change too wide to be a background showing between things that moved.
+bool Stitcher::Stale(int y, int row) const {
+  const uint32_t enough = static_cast<uint32_t>(std::max(16, (crop_right_ - crop_left_) / 6));
+  if (changed_in_row_[static_cast<size_t>(y)] < enough) return false;
+  const size_t base = static_cast<size_t>(y) * width_;
+  const uint8_t* changed = changed_.data() + base;
+  const uint32_t* now = now_.data() + base;
+  const uint32_t* held = reinterpret_cast<const uint32_t*>(pixels_.Row(row));
+  uint32_t count = 0;
+  for (int x = crop_left_; x < crop_right_; ++x) {
+    if (changed[x] != 0 && !Near(now[x], held[x]) && ++count >= enough) return true;
+  }
+  return false;
+}
+
+// How unlike the image's row a row of the reading is, minding most what moved.
+int Stitcher::Difference(int position, int y) {
+  if (y < 0 || y >= height_ || !Held(position + y)) return INT_MAX;
+  int& known = difference_[static_cast<size_t>(y)];
+  if (known >= 0) return known;
+  const size_t base = static_cast<size_t>(y) * width_;
+  const uint8_t* changed = changed_.data() + base;
+  const uint32_t* now = now_.data() + base;
+  const uint32_t* held = reinterpret_cast<const uint32_t*>(pixels_.Row(position + y));
+  int sum = 0;
+  for (int x = crop_left_; x < crop_right_; ++x) {
+    if (!Near(now[x], held[x])) sum += changed[x] != 0 ? kMovingWeight : 1;
+  }
+  known = sum;
+  return sum;
+}
+
+// A seam between rows `boundary` - 1 and `boundary` cannot be seen where either row is alike in both: the rows on
+// either side then meet as they do in one of them.
+int Stitcher::SeamCost(int position, int boundary) { return std::min(Difference(position, boundary - 1), Difference(position, boundary)); }
+
+// Where a run of rows [first, last) starts going in. It may start higher, through rows the reading also shows well
+// placed, or lower, through rows the image need not take, but never below `must`, the first it has nothing for.
+int Stitcher::SeamTop(int position, int first, int last, int must, int floor) {
+  if (!Held(position + first - 1)) return first;
+  const int reach = std::max(32, height_ / 4);
+  int high = first;
+  while (high > floor && first - high < reach && score_[static_cast<size_t>(high - 1)] >= kStaleScore && Held(position + high - 1)) --high;
+  const int low = std::min({must, last, first + kSeamSkip});
+  int best = first;
+  int best_cost = SeamCost(position, first);
+  for (int step = 1; best_cost > 0 && (first - step >= high || first + step <= low); ++step) {
+    for (const int y : {first - step, first + step}) {
+      if (y < high || y > low) continue;
+      const int cost = SeamCost(position, y);
+      if (cost < best_cost) {
+        best = y;
+        best_cost = cost;
+      }
+    }
+  }
+  return best;
+}
+
+// Where a run of rows from `first` to `last` stops going in: never above `must` + 1, past the last it has nothing for.
+int Stitcher::SeamBottom(int position, int first, int last, int must) {
+  if (first >= last) return first;
+  if (!Held(position + last)) return last;
+  const int reach = std::max(32, height_ / 4);
+  const int low = std::max({first, must + 1, last - kSeamSkip});
+  int high = last;
+  while (high < height_ && high - last < reach && score_[static_cast<size_t>(high)] >= kStaleScore && Held(position + high)) ++high;
+  int best = last;
+  int best_cost = SeamCost(position, last);
+  for (int step = 1; best_cost > 0 && (last - step >= low || last + step <= high); ++step) {
+    for (const int y : {last - step, last + step}) {
+      if (y < low || y > high) continue;
+      const int cost = SeamCost(position, y);
+      if (cost < best_cost) {
+        best = y;
+        best_cost = cost;
+      }
+    }
+  }
+  return best;
+}
+
+void Stitcher::WriteRows(int position, int first, int last) {
+  for (int y = first; y < last; ++y) {
+    const int row = position + y;
+    std::memcpy(pixels_.Row(row), now_.data() + static_cast<size_t>(y) * width_, static_cast<size_t>(width_) * 4);
+    std::memcpy(hashes_.Row(row), now_hash_.data() + static_cast<size_t>(y) * segments_, static_cast<size_t>(segments_) * 4);
+    RowScore(row) = static_cast<uint8_t>(std::max(score_[static_cast<size_t>(y)], 1));
+    difference_[static_cast<size_t>(y)] = 0;
+  }
+  MarkChanged(position + first, position + last);
+}
+
+// What a reading `shift` rows on from the last placed one says about the view: which rows and columns follow the scroll,
+// how the display is divided, and what holds still while content moves past.
+void Stitcher::Learn(int shift) {
+  evidence_.Add(ref_edges_, now_edges_, shift, std::min(follow_first_, static_cast<int>(box_.top)), std::max(follow_last_ + 1, static_cast<int>(box_.bottom)));
+  // Rows where something really follows the scroll, by a share of what could have, as a stray match says nothing and
+  // what shows through a frosted bar follows only a little. An edge reading looks one row down, so the row above the
+  // first that moves seems to follow it too.
+  const uint32_t enough = std::max<uint32_t>(kEvidenceMin, static_cast<uint32_t>(static_cast<uint64_t>(evidence_.frames) * width_ / kFollowEveryPixels));
+  int first = 0;
+  while (first < height_ && evidence_.row_follow[first] < enough) ++first;
+  int last = height_ - 1;
+  while (last > first && evidence_.row_follow[last] < enough) --last;
+  if (first < height_) SetFollow(first == 0 ? 0 : first + 1, last);
+  UpdateSteps();
+  const int from = std::max(0, -shift);
+  const int to = std::min(height_, height_ - shift);
+  const int inside_first = std::max(follow_first_, 0);
+  const int inside_last = std::min(follow_last_ + 1, height_);
+  for (int y = from; y < to; ++y) {
+    const uint32_t* now = now_.data() + static_cast<size_t>(y) * width_;
+    const uint32_t* same = ref_.data() + static_cast<size_t>(y) * width_;
+    const uint32_t* moved = ref_.data() + static_cast<size_t>(y + shift) * width_;
+    uint8_t* stays = stay_n_.data() + static_cast<size_t>(y) * width_;
+    const bool inside = y >= inside_first && y < inside_last;
+    for (int x = 0; x < width_; ++x) {
+      if (!Near(now[x], same[x]) || Near(now[x], moved[x])) continue;
+      Bump(stays[x]);
+      if (inside && x >= crop_left_ && x < crop_right_) ++behind_count_;
+    }
+  }
+}
+
+// Keeps track of the color steps along the rows, which is how the display's own divisions show. Static things do not
+// need every reading, and the content moving through tells them from what merely lines up for a while.
+void Stitcher::UpdateSteps() {
+  const int first = std::max(follow_first_, 0);
+  const int last = std::min(follow_last_ + 1, height_);
+  const int phase = step_tick_++ % kStepRowEvery;
+  for (int y = first + phase; y < last; y += kStepRowEvery) {
+    const uint8_t* pixels = reinterpret_cast<const uint8_t*>(now_.data() + static_cast<size_t>(y) * width_);
+    int here = pixels[0] + 2 * pixels[1] + pixels[2];
+    for (int x = 0; x + 1 < width_; ++x) {
+      pixels += 4;
+      const int next = pixels[0] + 2 * pixels[1] + pixels[2];
+      if (next - here >= kStepMin) {
+        ++step_up_[x];
+      } else if (here - next >= kStepMin) {
+        ++step_down_[x];
+      }
+      here = next;
+    }
+    ++step_rows_;
   }
 }
 
@@ -1073,792 +1421,47 @@ bool Stitcher::StaticFilled(int from, int to) const {
 // Something seems to lie behind the content that does not scroll, so columns holding still need not be panels.
 bool Stitcher::BackgroundLikely() const { return behind_count_ >= std::max<uint64_t>(500, static_cast<uint64_t>(width_) * height_ / 200); }
 
-// Keeps track of the color steps along the rows, which is how the display's own divisions show. Static things do not
-// need every reading, and the content moving through tells them from what merely lines up for a while.
-void Stitcher::UpdateSteps(const PixelView& frame) {
-  const int first = std::max(follow_first_, 0);
-  const int last = std::min(follow_last_ + 1, height_);
-  const int phase = step_tick_++ % kStepRowEvery;
-  for (int y = first + phase; y < last; y += kStepRowEvery) {
-    const uint8_t* pixels = frame.data + static_cast<ptrdiff_t>(y) * frame.stride;
-    int here = pixels[0] + 2 * pixels[1] + pixels[2];
-    for (int x = 0; x + 1 < width_; ++x) {
-      pixels += 4;
-      const int next = pixels[0] + 2 * pixels[1] + pixels[2];
-      if (next - here >= kStepMin) {
-        ++step_up_[x];
-      } else if (here - next >= kStepMin) {
-        ++step_down_[x];
-      }
-      here = next;
-    }
-    ++step_rows_;
-  }
-}
-
-// A sharp reading says what follows the scroll and what stays, measured from the last sharp one, however many blurred
-// ones came between.
-void Stitcher::Note(const PixelView& frame, int position, bool sharp) {
-  if (!sharp) {
-    if (anchor_is_before_) {
-      std::swap(anchor_, before_);
-      anchor_is_before_ = false;
-    }
-    return;
-  }
-  UpdateSteps(frame);
-  const EdgeFrame& earlier = anchor_is_before_ ? before_ : anchor_;
-  const int shift = position - anchor_position_;
-  if (shift != 0) {
-    evidence_.Add(earlier, after_, shift, std::min(follow_first_, static_cast<int>(box_.top)), std::max(follow_last_ + 1, static_cast<int>(box_.bottom)));
-    // Rows where something really follows the scroll, by a share of what could have, as a stray match says nothing and
-    // what shows through a frosted bar follows only a little. An edge reading looks one row down, so the row above the
-    // first that moves seems to follow it too.
-    const uint32_t enough = std::max<uint32_t>(kEvidenceMin, static_cast<uint32_t>(static_cast<uint64_t>(evidence_.frames) * width_ / kFollowEveryPixels));
-    int first = 0;
-    while (first < height_ && evidence_.row_follow[first] < enough) ++first;
-    int last = height_ - 1;
-    while (last > first && evidence_.row_follow[last] < enough) --last;
-    if (first < height_) SetFollow(first == 0 ? 0 : first + 1, last);
-  }
-  anchor_is_before_ = true;
-  anchor_position_ = position;
-}
-
-void Stitcher::SetFollow(int first, int last) {
-  follow_first_ = first;
-  follow_last_ = last;
-}
-
-Stitcher::Step Stitcher::Feed(const PixelView& frame, POINT pointer) {
-  after_.Build(frame);
-  SetBand(pointer);
-  if (after_.SameAs(before_)) {
-    rest_min_ = std::min(rest_min_, position_);
-    rest_max_ = std::max(rest_max_, position_);
-    // Held still, a reading that could not be compared shows how the view now is.
-    if (unsettled_ > 0 && Observe(frame, position_, true)) KeepEnds(frame, position_, true);
-    return Step::kSame;
-  }
-
-  // Only the part of the display that scrolls has a say. Static text around it would only propose shifts of its own.
-  int pane_left = 0;
-  int pane_right = width_;
-  PaneColumns(!BackgroundLikely(), &pane_left, &pane_right);
-  const int slack = height_ / 8;
-  const RECT focus{pane_left, std::clamp(std::min(follow_first_, static_cast<int>(box_.top)) - slack, 0, height_ - 1), pane_right,
-                   std::clamp(std::max(follow_last_ + 1, static_cast<int>(box_.bottom)) + slack, 1, height_)};
-  finder_.Analyze(before_, after_, 0, last_shift_, motion_, &focus);
-  if (!motion_.moved && !motion_.blurred && motion_.changed_energy > motion_.fixed_energy) {
-    // Too far from the last reading, or caught between two. The rows held reach further, and are sharper.
-    const RECT box = motion_.changed_box;
-    last_lost_replaced_ = (box.right - box.left) * kCell >= (focus.right - focus.left) * config::kScrollReplacedShare && (box.bottom - box.top) * kCell >= (focus.bottom - focus.top) * config::kScrollReplacedShare;
-    const int first = std::max(position_ - height_, min_position_);
-    const int last = std::min(position_ + height_ * 2, max_position_ + height_);
-    reference_.BuildFromEdges(edges_.Row(first), static_cast<ptrdiff_t>(edges_.stride()), width_, last - first);
-    finder_.Analyze(reference_, after_, position_ - first, last_shift_, motion_, &focus);
-    if (!motion_.moved && !motion_.blurred && motion_.changed_energy > motion_.fixed_energy) return Step::kLost;
-  }
-  if (!motion_.moved) {
-    // Coming to rest from a blurred reading is a sharper one, not a change. Going the other way adds nothing.
-    const bool sharp = !motion_.blurred || after_.TotalEnergy() >= before_.TotalEnergy();
-    // Placed by a blurred reading, it may sit a row off. A sharp one says where it really is.
-    if (sharp && !settled_) {
-      bool clean = false;
-      const int position = Settle(after_, motion_, position_, &clean, true);
-      if (Commit(position)) {
-        position_ = position;
-        min_position_ = std::min(min_position_, position);
-        max_position_ = std::max(max_position_, position);
-      }
-    }
-    settled_ = sharp;
-    rest_min_ = std::min(rest_min_, position_);
-    rest_max_ = std::max(rest_max_, position_);
-    Note(frame, position_, sharp);
-    if (!sharp) {
-      Fill(frame, position_);
-    } else if (Observe(frame, position_, true)) {
-      KeepEnds(frame, position_, true);
-    }
-    std::swap(before_, after_);
-    return Step::kRest;
-  }
-
-  bool clean = false;
-  const int position = Settle(after_, motion_, position_ + motion_.shift, &clean, false);
-  clean = clean && !motion_.blurred;
-  if (std::abs(position) > limit_rows_ || !Commit(position)) return Step::kLost;
-  settled_ = clean;
-  Note(frame, position, clean);
-  if (!clean) {
-    Fill(frame, position);
-  } else if (Observe(frame, position, false)) {
-    KeepEnds(frame, position, false);
-  }
-  position_ = position;
-  last_shift_ = motion_.shift;
-  min_position_ = std::min(min_position_, position);
-  max_position_ = std::max(max_position_, position);
-  std::swap(before_, after_);
-  return Step::kMoved;
-}
-
-bool Stitcher::Observe(const PixelView& frame, int position, bool at_rest) {
-  if (position == clean_position_) {
-    RestUpdate(frame, position);
-  } else if (!Classify(frame, position)) {
-    Fill(frame, position);
-    // The last sharp reading stays what others are compared with, unless the view has changed for good, as it has
-    // when it keeps looking so while nothing moves.
-    unsettled_ = at_rest ? unsettled_ + 1 : 1;
-    if (unsettled_ < kUnsettledReadings) return false;
-  } else {
-    history_.emplace_back(position, static_cast<int>(plates_.size()) - 1);
-  }
-  unsettled_ = 0;
-  CopyFrame(frame, clean_);
-  clean_position_ = position;
-  return true;
-}
-
-bool Stitcher::Overlay(size_t index) const {
-  return (neither_n_[index] >= kOverlayMin && neither_n_[index] >= 2 * (follow_n_[index] + stay_n_[index])) ||
-         (dissent_n_[index] >= kOverlayMin && dissent_n_[index] * 2 >= follow_n_[index]);
-}
-
-bool Stitcher::Suspect(size_t index, bool band) const { return band || occluded_n_[index] >= kSeedMin || Overlay(index); }
-
-void Stitcher::MarkChanged(int row) {
-  changed_first_ = std::min(changed_first_, row);
-  changed_last_ = std::max(changed_last_, row + 1);
-}
-
-// Compares a sharp reading with the last one, pixel by pixel. Where it shows what the scroll brought there and not what
-// was there before, content follows the scroll. Where it shows what was there before and not what the scroll brought,
-// something holds still: a background behind the content, or something fixed in front of it. What changed in neither
-// way changed by itself, or shows the content through something tinted.
-bool Stitcher::Classify(const PixelView& frame, int position) {
-  const int shift = position - clean_position_;
-  const __m128i slack = PixelSlack();
-  // Where something is drawn sharply, most of it changed in neither way: blurred after all, or shaded anew all over,
-  // it says nothing pixel by pixel. A tint coming and going over plain parts says nothing of that.
-  {
-    uint64_t telling = 0;
-    uint64_t unsettled = 0;
-    for (int y = 0; y < height_; y += 4) {
-      const int other = y + shift;
-      if (other < 0 || other >= height_ || (y >= band_first_ && y <= band_last_)) continue;
-      const uint32_t* now = PixelRow(frame, y);
-      const uint32_t* was = clean_.data() + static_cast<size_t>(y) * width_;
-      const uint32_t* moved = clean_.data() + static_cast<size_t>(other) * width_;
-      const uint8_t* edges = after_.Row(y);
-      for (int x = 0; x < width_; ++x) {
-        if (std::abs(edges[x] - kNoEdge) < kSharpEdge) continue;
-        const bool stay = Near(now[x], was[x]);
-        const bool follow = Near(now[x], moved[x]);
-        if (stay && follow) continue;
-        ++telling;
-        if (!stay && !follow) ++unsettled;
-      }
-    }
-    if (telling >= 64 && unsettled * 100 > telling * kUnsettledPercent) return false;
-  }
-  std::fill(tile_compared_.begin(), tile_compared_.end(), 0u);
-  std::fill(tile_differ_.begin(), tile_differ_.end(), 0u);
-  uint64_t compared = 0;
-  uint64_t differ = 0;
-  for (int y = 0; y < height_; ++y) {
-    const uint32_t* now = PixelRow(frame, y);
-    const uint32_t* was = clean_.data() + static_cast<size_t>(y) * width_;
-    const int other = y + shift;
-    const uint32_t* moved = other >= 0 && other < height_ ? clean_.data() + static_cast<size_t>(other) * width_ : nullptr;
-    const int row = position + y;
-    uint32_t* canvas = reinterpret_cast<uint32_t*>(pixels_.Row(row));
-    uint8_t* edges = edges_.Row(row);
-    uint8_t* states = states_.Row(row);
-    uint8_t* votes = votes_.Row(row);
-    uint16_t* sources = reinterpret_cast<uint16_t*>(sources_.Row(row));
-    const uint8_t* edges_now = after_.Row(y);
-    // By the pointer, hover effects come and go. Nothing seen there says what anything is, and it only fills gaps.
-    const bool band = y >= band_first_ && y <= band_last_;
-    // Nor does anything seen above or below where content moves, such as a bar it slides under.
-    const bool aside = y < follow_first_ || y > follow_last_;
-    const size_t base = static_cast<size_t>(y) * width_;
-    bool wrote = false;
-    for (int x0 = 0; x0 < width_; x0 += 4) {
-      const int count = std::min(4, width_ - x0);
-      int stays = 0;
-      int follows = 0;
-      if (count == 4) {
-        stays = Near4(now + x0, was + x0, slack);
-        follows = moved != nullptr ? Near4(now + x0, moved + x0, slack) : 0;
-        // Plain, over content already seen following the scroll: nothing to learn or to keep.
-        if ((stays & follows) == 0xF && (states[x0] & kRankMask) == kConfirmed && (states[x0 + 1] & kRankMask) == kConfirmed &&
-            (states[x0 + 2] & kRankMask) == kConfirmed && (states[x0 + 3] & kRankMask) == kConfirmed) {
-          continue;
-        }
-      } else {
-        for (int b = 0; b < count; ++b) {
-          if (Near(now[x0 + b], was[x0 + b])) stays |= 1 << b;
-          if (moved != nullptr && Near(now[x0 + b], moved[x0 + b])) follows |= 1 << b;
-        }
-      }
-      for (int b = 0; b < count; ++b) {
-        const int x = x0 + b;
-        const size_t v = base + x;
-        const bool stay = ((stays >> b) & 1) != 0;
-        const bool follow = ((follows >> b) & 1) != 0;
-        const uint32_t color = now[x];
-        Held held{canvas[x], edges[x], states[x], votes[x]};
-        const int rank = held.state & kRankMask;
-        uint16_t& source = sources[std::min(x / kCell, slices_ - 1)];
-        if (band) {
-          if (rank == kEmpty || (rank == kSuspect && follow && !stay)) {
-            held.Take(color, edges_now[x], kSuspect);
-            wrote = true;
-          }
-          continue;
-        }
-        // Where something may lie over the content, what is seen there only fills gaps.
-        const bool suspect = aside || Suspect(v, false);
-        const auto fill = [&] {
-          if (rank != kEmpty) return;
-          held.Take(color, edges_now[x], kSuspect);
-          wrote = true;
-        };
-        // Content held there, seen moving, is hidden when something holds still over it.
-        const bool content = rank == kConfirmed || (rank == kSeen && (held.state & (kChanging | kBehind)) == kChanging);
-        if (follow && !stay) {
-          Bump(follow_n_[v]);
-          if (follow_n_[v] == 1 && stay_n_[v] >= kPlateKnown) ++behind_count_;
-          // A see-through bar tints content alike in two readings, so it seems to follow the scroll too.
-          if (rank == kConfirmed) {
-            wrote = held.VoteConfirmed(color, edges_now[x], !suspect, dissent_n_[v]) || wrote;
-            continue;
-          }
-          if (suspect) {
-            fill();
-            continue;
-          }
-          // Seen holding still there before, it was hidden by something in front, unless it merely looked the same.
-          if ((held.state & kBehind) != 0 && !Near(held.color, color) && source < height_) Bump(occluded_n_[static_cast<size_t>(source) * width_ + x]);
-          held.Take(color, edges_now[x], kConfirmed);
-          wrote = true;
-        } else if (stay && !follow && moved != nullptr) {
-          Bump(stay_n_[v]);
-          if (stay_n_[v] == kPlateKnown && follow_n_[v] >= 1) ++behind_count_;
-          ObservePlate(x, y, color, &compared, &differ);
-          if (content) {
-            if (!Near(held.color, color)) Bump(occluded_n_[v]);
-            continue;
-          }
-          if (suspect) {
-            fill();
-            continue;
-          }
-          held.VoteBehind(color, edges_now[x]);
-          source = static_cast<uint16_t>(y);
-          wrote = true;
-        } else {
-          const bool changing = !stay;
-          if (changing && moved != nullptr) Bump(neither_n_[v]);
-          // Plain, and just what has been seen holding still there, it is that rather than content.
-          const Plate& plate = plates_.back();
-          const bool still = !changing && plate.count[v] >= kPlateKnown && Near(plate.color[v], color);
-          if (rank == kConfirmed) {
-            // Plain, it still says what the content looks like, as when a picture loading has filled in.
-            if (!changing && !still && moved != nullptr) wrote = held.VoteConfirmed(color, edges_now[x], !suspect, dissent_n_[v]) || wrote;
-            continue;
-          }
-          if (suspect) {
-            fill();
-            continue;
-          }
-          if (still) {
-            held.VoteBehind(color, edges_now[x]);
-            source = static_cast<uint16_t>(y);
-          } else {
-            held.VoteColor(color, edges_now[x], changing);
-          }
-          wrote = true;
-        }
-      }
-    }
-    if (wrote) MarkChanged(row);
-  }
-
-  // A background that changes as a whole, all over the view, starts a version of its own.
-  bool changed = false;
-  if (compared >= std::max<uint64_t>(2000, static_cast<uint64_t>(width_) * height_ / 100) && differ * 100 >= compared * 30) {
-    int tiles = 0;
-    int differing = 0;
-    for (size_t t = 0; t < tile_compared_.size(); ++t) {
-      if (tile_compared_[t] < 32) continue;
-      ++tiles;
-      if (static_cast<uint64_t>(tile_differ_[t]) * 100 >= static_cast<uint64_t>(tile_compared_[t]) * 30) ++differing;
-    }
-    changed = tiles >= 4 && differing * 2 >= tiles;
-  }
-  version_votes_ = changed ? version_votes_ + 1 : 0;
-  if (version_votes_ >= 2 && plates_.size() < kMaxPlates) {
-    const size_t view = static_cast<size_t>(width_) * height_;
-    plates_.push_back(Plate{std::vector<uint32_t>(view, 0), std::vector<uint8_t>(view, 0)});
-    version_votes_ = 0;
-  }
-  return true;
-}
-
-void Stitcher::ObservePlate(int x, int y, uint32_t color, uint64_t* compared, uint64_t* differ) {
-  Plate& plate = plates_.back();
-  const size_t index = static_cast<size_t>(y) * width_ + x;
-  uint8_t& count = plate.count[index];
-  uint32_t& held = plate.color[index];
-  if (count == 0) {
-    held = color;
-    count = 1;
-    return;
-  }
-  const bool same = Near(held, color);
-  if (count >= kPlateKnown) {
-    const size_t tile = static_cast<size_t>(y / kVersionTile) * tile_columns_ + x / kVersionTile;
-    ++*compared;
-    ++tile_compared_[tile];
-    if (!same) {
-      ++*differ;
-      ++tile_differ_[tile];
-    }
-  }
-  if (same) {
-    Bump(count);
-  } else if (--count == 0) {
-    held = color;
-    count = 1;
-  }
-}
-
-// At rest a reading is as sharp as it gets. It takes the place of anything seen less well, and of content changed in
-// place, as a picture that has loaded, once two readings in a row agree on it.
-void Stitcher::RestUpdate(const PixelView& frame, int position) {
-  const __m128i slack = PixelSlack();
-  for (int y = 0; y < height_; ++y) {
-    const uint32_t* now = PixelRow(frame, y);
-    const uint32_t* was = clean_.data() + static_cast<size_t>(y) * width_;
-    const int row = position + y;
-    uint32_t* canvas = reinterpret_cast<uint32_t*>(pixels_.Row(row));
-    uint8_t* edges = edges_.Row(row);
-    uint8_t* states = states_.Row(row);
-    uint8_t* votes = votes_.Row(row);
-    const uint8_t* edges_now = after_.Row(y);
-    const bool band = y >= band_first_ && y <= band_last_;
-    const size_t base = static_cast<size_t>(y) * width_;
-    bool wrote = false;
-    for (int x0 = 0; x0 < width_; x0 += 4) {
-      const int count = std::min(4, width_ - x0);
-      if (count == 4 && Near4(now + x0, canvas + x0, slack) == 0xF && (states[x0] & kRankMask) >= kSeen && (states[x0 + 1] & kRankMask) >= kSeen &&
-          (states[x0 + 2] & kRankMask) >= kSeen && (states[x0 + 3] & kRankMask) >= kSeen) {
-        continue;
-      }
-      for (int b = 0; b < count; ++b) {
-        const int x = x0 + b;
-        const size_t v = base + x;
-        const uint32_t color = now[x];
-        Held held{canvas[x], edges[x], states[x], votes[x]};
-        const int rank = held.state & kRankMask;
-        if (rank <= kSuspect) {
-          const bool suspect = Suspect(v, band);
-          if (rank == kSuspect && suspect) continue;
-          held.Take(color, edges_now[x], suspect ? kSuspect : kSeen);
-          wrote = true;
-        } else if (rank == kConfirmed && follow_n_[v] > 0 && !Suspect(v, band) && Near(color, was[x]) && !Near(color, held.color)) {
-          held.Take(color, edges_now[x], kConfirmed);
-          wrote = true;
-        }
-      }
-    }
-    if (wrote) MarkChanged(row);
-  }
-}
-
-// A blurred reading only fills what nothing better has been seen of.
-void Stitcher::Fill(const PixelView& frame, int position) {
-  for (int y = 0; y < height_; ++y) {
-    const uint32_t* now = PixelRow(frame, y);
-    const int row = position + y;
-    uint32_t* canvas = reinterpret_cast<uint32_t*>(pixels_.Row(row));
-    uint8_t* edges = edges_.Row(row);
-    uint8_t* states = states_.Row(row);
-    uint8_t* votes = votes_.Row(row);
-    const uint8_t* edges_now = after_.Row(y);
-    bool wrote = false;
-    for (int x = 0; x < width_; ++x) {
-      if ((states[x] & kRankMask) != kEmpty) continue;
-      Held{canvas[x], edges[x], states[x], votes[x]}.Take(now[x], edges_now[x], kSuspect);
-      wrote = true;
-    }
-    if (wrote) MarkChanged(row);
-  }
-}
-
-// Frames caught in motion can sit between two pixel rows, and rounding must not add up over a long capture. The rows
-// already held say exactly where the frame belongs, and how well it fits says whether it is sharp. At rest, nothing
-// moved to compare, so everything drawn takes part.
-int Stitcher::Settle(const EdgeFrame& edges, const Motion& motion, int position, bool* clean, bool at_rest) const {
-  int best = position;
-  double best_cost = 2.0;
-  bool compared = false;
-  for (const int nudge : {0, -1, 1, -2, 2}) {
-    const int at = position + nudge;
-    uint64_t sad = 0;
-    uint64_t total = 0;
-    for (int cy = 0; cy < cell_rows_; ++cy) {
-      const int y0 = cy * kCell;
-      if (at + y0 < min_position_ || at + y0 + kCell > max_position_ + height_) continue;
-      for (int cx = 0; cx < slices_; ++cx) {
-        const CellState state = motion.cells[static_cast<size_t>(cy) * slices_ + cx];
-        if (at_rest ? state == CellState::kBlank : state != CellState::kMoving) continue;
-        const int x = cx * kCell;
-        for (int i = 0; i < kCell; ++i) {
-          const uint8_t* held = edges_.Row(at + y0 + i) + x;
-          const uint8_t* now = edges.Row(y0 + i) + x;
-          sad += Sad16(held, now);
-          total += Energy16(held) + Energy16(now);
-        }
-      }
-    }
-    if (total == 0) continue;
-    compared = true;
-    const double cost = static_cast<double>(sad) / static_cast<double>(total);
-    if (cost < best_cost * 0.98) {
-      best_cost = cost;
-      best = at;
-    }
-  }
-  *clean = compared ? best_cost <= config::kScrollCleanShare
-                    : motion.moving_energy > 0 && WithinShare(motion.moving_sad, motion.moving_energy, config::kScrollCleanShare);
-  return best;
+void Stitcher::Finish() {
+  if (ref_.empty()) return;
+  // The last reading placed is the one the image is checked against from here on, and nothing changed in it.
+  std::swap(now_, ref_);
+  std::swap(now_hash_, ref_hash_);
+  std::fill(changed_.begin(), changed_.end(), static_cast<uint8_t>(0));
+  std::fill(changed_in_row_.begin(), changed_in_row_.end(), 0u);
+  Place(position_, 0, true);
+  std::swap(now_, ref_);
+  std::swap(now_hash_, ref_hash_);
 }
 
 bool Stitcher::RowsBlank(int first, int last, int left, int right) const {
-  const int from = left / kCell;
-  const int to = std::min(right / kCell, slices_);
   for (int row = first; row < last; ++row) {
-    const uint8_t* edges = edges_.Row(row);
-    for (int slice = from; slice < to; ++slice) {
-      if (Energy16(edges + static_cast<ptrdiff_t>(slice) * kCell) > 32) return false;
+    if (!Held(row)) continue;
+    const uint32_t* pixels = reinterpret_cast<const uint32_t*>(pixels_.Row(row));
+    for (int x = left + 1; x < right; ++x) {
+      if (!Near(pixels[x], pixels[left])) return false;
     }
   }
   return true;
 }
 
-// Which version of the background was on screen when rows of the capture first passed the middle of the view.
-int Stitcher::VersionAt(int first, int last) const {
-  const int center = (first + last) / 2;
-  int nearest = static_cast<int>(plates_.size()) - 1;
-  int distance = INT_MAX;
-  for (const auto& [position, version] : history_) {
-    const int offset = center - position;
-    if (offset >= height_ / 4 && offset < height_ * 3 / 4) return version;
-    if (std::abs(offset - height_ / 2) < distance) {
-      distance = std::abs(offset - height_ / 2);
-      nearest = version;
-    }
-  }
-  return nearest;
+// The first and last places of the view the image spans. An elastic end shows empty space past the content for a
+// moment, so where the view came to rest short of how far it went, and nothing but that lies beyond, it ends there.
+void Stitcher::Ends(const Crop& view, int* top, int* bottom) const {
+  *top = min_position_;
+  *bottom = max_position_;
+  if (*top < rest_min_ && RowsBlank(*top + view.top, rest_min_ + view.top, view.left, view.right)) *top = rest_min_;
+  if (*bottom > rest_max_ && RowsBlank(rest_max_ + view.bottom, *bottom + view.bottom, view.left, view.right)) *bottom = rest_max_;
 }
 
-void Stitcher::Finish() {
-  const Crop crop = FinalCrop();
-  const Crop kept = ViewCrop();
-  const int width = width_;
-  const int height = height_;
-  const size_t view = static_cast<size_t>(width) * height;
-  const auto index = [&](int x, int y) { return static_cast<size_t>(y) * width + x; };
+int Stitcher::span() const {
+  int top = 0;
+  int bottom = 0;
+  Ends(ViewCrop(), &top, &bottom);
+  return bottom - top;
+}
 
-  // The rows of the view content was seen moving in, from the first to the last.
-  std::vector<uint32_t> row_follow(static_cast<size_t>(height), 0);
-  for (int y = 0; y < height; ++y) {
-    const uint8_t* follows = follow_n_.data() + index(0, y);
-    for (int x = 0; x < width; ++x) row_follow[y] += follows[x];
-  }
-  const uint32_t row_least = std::max<uint32_t>(4, static_cast<uint32_t>(width / 64));
-  const int top = std::clamp(static_cast<int>(kept.top), 0, height);
-  const int bottom = std::clamp(static_cast<int>(kept.bottom), top, height);
-  int band_top = top;
-  while (band_top < bottom && row_follow[band_top] < row_least) ++band_top;
-  int band_bottom = bottom;
-  while (band_bottom > band_top && row_follow[band_bottom - 1] < row_least) --band_bottom;
-  const int left = crop.left;
-  const int right = crop.right;
-  if (band_top >= band_bottom || right <= left) return;
-
-  // What lies behind, column by column: the color most of it shows, and whether that is most of it.
-  std::vector<uint32_t> column_color(static_cast<size_t>(width), 0xFF000000u);
-  std::vector<uint8_t> column_plain(static_cast<size_t>(width), 0);
-  {
-    std::vector<uint32_t> values;
-    std::vector<uint32_t> bins;
-    for (int x = left; x < right; ++x) {
-      values.clear();
-      for (int y = band_top; y < band_bottom; ++y) values.push_back(bottom_frame_[index(x, y)]);
-      double share = 0.0;
-      column_color[x] = MostCommon(values, bins, &share);
-      column_plain[x] = share >= kPlainShare ? 1 : 0;
-    }
-  }
-  const Plate& latest = plates_.back();
-  const int middle = (top + bottom) / 2;
-  const auto still_color = [&](size_t v, int y) { return latest.count[v] > 0 ? latest.color[v] : y < middle ? top_frame_[v] : bottom_frame_[v]; };
-  const auto shown = [&](size_t v, int y) { return y < middle ? top_frame_[v] : bottom_frame_[v]; };
-
-  // A background holding still behind the content shows between and beside it, all the way down the view. What it
-  // shows between the content says what colors it is made of.
-  size_t behind = 0;
-  size_t behind_apart = 0;
-  size_t beside = 0;
-  int behind_rows = 0;
-  int beside_rows = 0;
-  std::vector<uint32_t> palette(4096, 0);
-  const auto coarse = [](uint32_t color) { return ((color >> 4) & 0xF) | (((color >> 12) & 0xF) << 4) | (((color >> 20) & 0xF) << 8); };
-  for (int y = band_top; y < band_bottom; ++y) {
-    bool any_behind = false;
-    bool any_beside = false;
-    for (int x = left; x < right; ++x) {
-      const size_t v = index(x, y);
-      if (latest.count[v] < kPlateKnown || occluded_n_[v] >= kSeedMin) continue;
-      if (follow_n_[v] > 0) {
-        ++behind;
-        any_behind = true;
-        ++palette[coarse(latest.color[v])];
-        if (Distance(latest.color[v], column_color[x]) > kBackgroundSlack) ++behind_apart;
-      } else if (column_plain[x] == 0) {
-        ++beside;
-        any_beside = true;
-      }
-    }
-    behind_rows += any_behind ? 1 : 0;
-    beside_rows += any_beside ? 1 : 0;
-  }
-  const int band_height = band_bottom - band_top;
-  const bool seen_behind = behind >= std::max<size_t>(500, view / 500) && behind_apart * 5 >= behind && behind_rows * 10 >= band_height * 3;
-  fixed_background_ = seen_behind || (beside >= std::max<size_t>(2000, view / 100) && beside_rows * 2 >= band_height);
-  // A color it never shows between the content, there to be seen often enough, is no part of it.
-  const auto foreign = [&](uint32_t color) {
-    const uint32_t bin = coarse(color);
-    return static_cast<uint64_t>(palette[bin]) * 2000 < behind;
-  };
-
-  // What gives away something fixed in front: hiding content seen elsewhere, tinting what moves under it, or never
-  // moving while it stands out from a plain background or from the colors of a fixed one.
-  const size_t band_area = static_cast<size_t>(band_bottom - band_top) * (right - left);
-  size_t overlays = 0;
-  for (size_t v = 0; v < view; ++v) overlays += Overlay(v) ? 1 : 0;
-  // As much tinted as that is a background changing by itself instead.
-  const bool tints = overlays * 4 <= band_area;
-  std::vector<uint8_t> front(view, 0);
-  std::vector<size_t> queue;
-  for (int y = top; y < bottom; ++y) {
-    for (int x = left; x < right; ++x) {
-      const size_t v = index(x, y);
-      const bool inert = follow_n_[v] == 0;
-      const bool hides = occluded_n_[v] >= kSeedMin && occluded_n_[v] * 4 >= stay_n_[v];
-      const bool tinted = tints && Overlay(v);
-      const bool stands_out = inert && stay_n_[v] > 0 &&
-                              (seen_behind ? foreign(still_color(v, y)) : column_plain[x] != 0 && Distance(still_color(v, y), column_color[x]) > kBackgroundSlack);
-      if (!hides && !tinted && !stands_out) continue;
-      front[v] = 1;
-      queue.push_back(v);
-    }
-  }
-  // Plain parts of the same thing count too: what never moved and continues smoothly from it.
-  size_t grown = 0;
-  const size_t grow_limit = view / 2;
-  for (size_t head = 0; head < queue.size() && grown <= grow_limit; ++head) {
-    const size_t v = queue[head];
-    const int x = static_cast<int>(v % width);
-    const int y = static_cast<int>(v / width);
-    const uint32_t color = shown(v, y);
-    const int neighbors[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
-    for (const auto& [nx, ny] : neighbors) {
-      if (nx < left || nx >= right || ny < top || ny >= bottom) continue;
-      const size_t n = index(nx, ny);
-      if (front[n] != 0 || follow_n_[n] != 0) continue;
-      const uint32_t next = shown(n, ny);
-      if (Distance(color, next) > kGrowStep || (column_plain[nx] != 0 && Distance(next, column_color[nx]) <= kBackgroundSlack)) continue;
-      front[n] = 2;
-      ++grown;
-      queue.push_back(n);
-    }
-  }
-  if (grown > grow_limit) {
-    for (uint8_t& mark : front) mark = mark == 2 ? 0 : mark;
-  }
-
-  // Each thing fixed in front belongs to the end of the capture nearer to it, and shows only there. One reaching over
-  // most of the view, as a rail down its side does, is split between the two.
-  const std::vector<uint8_t> joined = Dilate(front, width, height, kBridge);
-  std::vector<uint8_t> not_top(view, 0);     // What the reading at the top must not show,
-  std::vector<uint8_t> not_bottom(view, 0);  // and the one at the bottom.
-  int top_rows = band_top;
-  int bottom_start = band_bottom;
-  {
-    std::vector<uint8_t> visited(view, 0);
-    std::vector<size_t> members;
-    std::vector<size_t> stack;
-    for (size_t start = 0; start < view; ++start) {
-      if (joined[start] == 0 || visited[start] != 0) continue;
-      members.clear();
-      stack.assign(1, start);
-      visited[start] = 1;
-      int box_left = width;
-      int box_top = height;
-      int box_right = 0;
-      int box_bottom = 0;
-      size_t pixels = 0;
-      while (!stack.empty()) {
-        const size_t v = stack.back();
-        stack.pop_back();
-        members.push_back(v);
-        const int x = static_cast<int>(v % width);
-        const int y = static_cast<int>(v / width);
-        if (front[v] != 0) {
-          ++pixels;
-          box_left = std::min(box_left, x);
-          box_top = std::min(box_top, y);
-          box_right = std::max(box_right, x + 1);
-          box_bottom = std::max(box_bottom, y + 1);
-        }
-        for (int ny = std::max(y - 1, 0); ny <= std::min(y + 1, height - 1); ++ny) {
-          for (int nx = std::max(x - 1, 0); nx <= std::min(x + 1, width - 1); ++nx) {
-            const size_t n = index(nx, ny);
-            if (joined[n] == 0 || visited[n] != 0) continue;
-            visited[n] = 1;
-            stack.push_back(n);
-          }
-        }
-      }
-      if (pixels < kFrontMinPixels) continue;
-      if ((box_bottom - box_top) * 10 > (bottom - top) * 6) {
-        for (const size_t v : members) {
-          const int y = static_cast<int>(v / width);
-          if (y < middle) {
-            not_bottom[v] = 1;
-            top_rows = std::max(top_rows, y + 1);
-          } else {
-            not_top[v] = 1;
-            bottom_start = std::min(bottom_start, y);
-          }
-        }
-        continue;
-      }
-      const int area_left = std::max(box_left - kBridge, 0);
-      const int area_top = std::max(box_top - kBridge, 0);
-      const int area_right = std::min(box_right + kBridge, width);
-      const int area_bottom = std::min(box_bottom + kBridge, height);
-      const bool upper = box_top + box_bottom <= top + bottom;
-      std::vector<uint8_t>& keep_out = upper ? not_bottom : not_top;
-      for (int y = area_top; y < area_bottom; ++y) std::fill_n(keep_out.begin() + static_cast<ptrdiff_t>(index(area_left, y)), area_right - area_left, uint8_t{1});
-      if (upper) {
-        top_rows = std::max(top_rows, area_bottom);
-      } else {
-        bottom_start = std::min(bottom_start, area_top);
-      }
-    }
-  }
-
-  // The background as the view showed it, for each version of it, repeated a view at a time below the first.
-  std::vector<std::vector<uint32_t>> tiles;
-  int span = band_height;
-  if (fixed_background_) {
-    tiles.resize(plates_.size());
-    std::vector<uint8_t> known(view);
-    int period = 0;
-    for (size_t version = plates_.size(); version-- > 0;) {
-      const Plate& plate = plates_[version];
-      for (size_t v = 0; v < view; ++v) known[v] = plate.count[v] >= kPlateKnown && joined[v] == 0 ? 1 : 0;
-      tiles[version] = plate.color;
-      if (version + 1 == plates_.size()) period = FindPeriod(tiles[version], known, width, left, right, band_top, band_bottom);
-      Inpaint(tiles[version], known, width, height, left, right, period, column_color);
-    }
-    // Whole repeats of a pattern join up without a seam.
-    if (period > 0 && period <= span) span = period * (span / period);
-  }
-  std::vector<int> slot_versions;
-  const auto version_of_slot = [&](int slot) {
-    if (slot >= static_cast<int>(slot_versions.size())) slot_versions.resize(static_cast<size_t>(slot) + 1, -1);
-    int& version = slot_versions[static_cast<size_t>(slot)];
-    if (version < 0) {
-      const int first = top_position_ + band_top + slot * span;
-      version = VersionAt(first, first + span);
-    }
-    return version;
-  };
-  const int bottom_version = fixed_background_ ? VersionAt(bottom_position_ + band_top, bottom_position_ + band_bottom) : 0;
-
-  for (int row = crop.top; row < crop.bottom; ++row) {
-    uint32_t* out = reinterpret_cast<uint32_t*>(pixels_.Row(row));
-    const uint8_t* states = states_.Row(row);
-    const int from_top = row - top_position_;
-    const int from_bottom = row - bottom_position_;
-    const bool top_end = from_top >= 0 && from_top < top_rows;
-    const bool bottom_end = from_bottom >= bottom_start && from_bottom < height;
-    const uint32_t* behind_row = nullptr;
-    if (fixed_background_) {
-      int plate_row = 0;
-      int version = 0;
-      if (from_bottom >= band_top) {
-        plate_row = from_bottom;
-        version = bottom_version;
-      } else if (from_top < band_top) {
-        plate_row = from_top;
-        version = version_of_slot(0);
-      } else {
-        plate_row = band_top + (from_top - band_top) % span;
-        version = version_of_slot((from_top - band_top) / span);
-      }
-      behind_row = tiles[static_cast<size_t>(version)].data() + index(0, std::clamp(plate_row, 0, height - 1));
-    }
-    // Within the view at either end, the screen there shows what is not fixed in front as well as anything can: all
-    // of it on the near half, and on the far half, where what belongs to the other end may lie, what was not seen
-    // clearly. Around the pointer, content seen clearly elsewhere is free of hover effects.
-    const bool top_view = from_top < height;
-    const bool bottom_view = from_bottom >= 0;
-    const bool top_near = from_top < middle;
-    const bool bottom_near = from_bottom >= middle;
-    const bool top_hover = from_top >= top_band_first_ && from_top <= top_band_last_;
-    const bool bottom_hover = from_bottom >= bottom_band_first_ && from_bottom <= bottom_band_last_;
-    for (int x = left; x < right; ++x) {
-      const size_t at_bottom = bottom_view ? index(x, from_bottom) : 0;
-      const size_t at_top = top_view ? index(x, from_top) : 0;
-      if (bottom_end && not_bottom[at_bottom] == 0) {
-        out[x] = bottom_frame_[at_bottom];
-        continue;
-      }
-      if (top_end && not_top[at_top] == 0) {
-        out[x] = top_frame_[at_top];
-        continue;
-      }
-      const uint8_t state = states[x];
-      const int rank = state & kRankMask;
-      const bool seen = rank == kConfirmed || (rank == kSeen && (state & kBehind) == 0);
-      const bool use_bottom = bottom_view && not_bottom[at_bottom] == 0 && !(seen && bottom_hover);
-      const bool use_top = top_view && not_top[at_top] == 0 && !(seen && top_hover);
-      if (use_bottom && bottom_near) {
-        out[x] = bottom_frame_[at_bottom];
-      } else if (use_top && top_near) {
-        out[x] = top_frame_[at_top];
-      } else if (seen) {
-      } else if (use_bottom) {
-        out[x] = bottom_frame_[at_bottom];
-      } else if (use_top) {
-        out[x] = top_frame_[at_top];
-      } else if (rank < kSuspect || (state & kBehind) != 0) {
-        out[x] = behind_row != nullptr ? behind_row[x] : column_color[x];
-      }
-    }
-  }
-  changed_first_ = std::min(changed_first_, crop.top);
-  changed_last_ = std::max(changed_last_, crop.bottom);
+PixelView Stitcher::Composed(int first, int last) const {
+  return PixelView{pixels_.Row(first), width_, std::max(last - first, 0), width_ * 4};
 }
 
 Stitcher::Crop Stitcher::ViewCrop() const {
@@ -1916,28 +1519,37 @@ Stitcher::Crop Stitcher::ViewCrop() const {
 
 Stitcher::Crop Stitcher::FinalCrop() const {
   Crop crop = ViewCrop();
-  crop.top += top_position_;
-  crop.bottom += bottom_position_;
+  int top = 0;
+  int bottom = 0;
+  Ends(crop, &top, &bottom);
+  crop.top += top;
+  crop.bottom += bottom;
   return crop;
 }
 
 void Stitcher::Copy(const Crop& crop, uint8_t* to, ptrdiff_t stride) const {
+  const size_t bytes = static_cast<size_t>(crop.right - crop.left) * 4;
   for (int row = crop.top; row < crop.bottom; ++row) {
-    std::memcpy(to, pixels_.Row(row) + static_cast<ptrdiff_t>(crop.left) * 4, static_cast<size_t>(crop.right - crop.left) * 4);
+    if (Held(row)) {
+      std::memcpy(to, pixels_.Row(row) + static_cast<ptrdiff_t>(crop.left) * 4, bytes);
+    } else {
+      std::memset(to, 0, bytes);
+    }
     to += stride;
   }
 }
 
-bool Stitcher::replaced() const { return last_lost_replaced_; }
-
-PixelView Stitcher::Rows(int first, int last) const { return PixelView{pixels_.Row(first), width_, last - first, width_ * 4}; }
+void Stitcher::MarkChanged(int first, int last) {
+  dirty_first_ = std::min(dirty_first_, first);
+  dirty_last_ = std::max(dirty_last_, last);
+}
 
 bool Stitcher::TakeChanges(int* first, int* last) {
-  if (changed_first_ >= changed_last_) return false;
-  *first = changed_first_;
-  *last = changed_last_;
-  changed_first_ = INT_MAX;
-  changed_last_ = INT_MIN;
+  if (dirty_first_ >= dirty_last_) return false;
+  *first = dirty_first_;
+  *last = dirty_last_;
+  dirty_first_ = INT_MAX;
+  dirty_last_ = INT_MIN;
   return true;
 }
 

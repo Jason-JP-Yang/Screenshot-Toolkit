@@ -363,9 +363,13 @@ Image Session::ThumbRows(int changed_from, int changed_to, int* at) const {
   const int last = std::min({ThumbCeil(changed_to), ThumbFloor(held_last), kLongRows});
   *at = first;
   if (last <= first) return Image();
-  const double top = (first - kLongOrigin) / k_ + anchor_ - held_first;
-  const double bottom = (last - kLongOrigin) / k_ + anchor_ - held_first;
-  return ResampleArea(stitcher_.Rows(held_first, held_last), 0.0, top, surface_width_ / k_, bottom, surface_width_, last - first);
+  // The image as it stands, fixed parts and all, only for the rows these thumbnail rows draw on.
+  const double top = (first - kLongOrigin) / k_ + anchor_;
+  const double bottom = (last - kLongOrigin) / k_ + anchor_;
+  const int from = std::max(static_cast<int>(std::floor(top)), held_first);
+  const int to = std::min(static_cast<int>(std::ceil(bottom)), held_last);
+  if (to <= from) return Image();
+  return ResampleArea(stitcher_.Composed(from, to), 0.0, top - from, surface_width_ / k_, bottom - from, surface_width_, last - first);
 }
 
 void Session::Post(std::unique_ptr<ScrollUpdate> update) const {
