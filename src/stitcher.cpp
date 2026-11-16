@@ -19,8 +19,9 @@ constexpr int kMinMoves = 4;   // Scrolls seen before anything is said to change
 constexpr int kCell = 8;       // Pixels along a side of the squares fixed things are found in.
 constexpr int kSpread = 32;    // Pixels along a side of the squares a background must be seen in enough of.
 constexpr int kBarMoves = 8;   // Scrolls seen before a scroll bar at the side is looked for while recording.
-constexpr int kReach = 24;     // How far one side of a gap in the background is carried into it.
-constexpr int kSpan = 160;     // How wide a gap in the background may be to be filled by blending its two sides.
+constexpr int kReach = 48;     // How far one side of a gap in the background is carried into it.
+constexpr int kSpan = 400;     // How wide a gap in the background may be to be filled by blending its two sides.
+constexpr uint64_t kDeferBytes = 256ull << 20;  // The most rows held for the picture behind them may take.
 
 // What a pixel of the view is, as of the last reading placed.
 constexpr uint8_t kHeld = 1;   // It shows something that holds still.
@@ -34,13 +35,14 @@ constexpr uint8_t kNew = 32;   // Nothing that could be seen scrolled to it: it 
 constexpr uint8_t kStayed = 1;
 constexpr uint8_t kFollowed = 2;
 
-constexpr int kFlat = 2;  // Per color channel, what a flat color, as a message's inside, differs from itself by.
 
 // What a content pixel keeps above its color.
-constexpr uint32_t kSure = 1u << 24;      // It was seen to scroll, showing this,
-constexpr uint32_t kAgreed = 4u << 24;    // and seen so twice in a row: one sight may be something fixed that moved once.
+constexpr uint32_t kSure = 1u << 24;      // It was seen, showing this, in the row of the view its sight says.
 constexpr uint32_t kFrozen = 2u << 24;    // It is part of something that changes by itself, taken whole.
-constexpr uint32_t kBehind = 8u << 24;    // Of a row made: not surely content, so the background shows there if there is one.
+constexpr uint32_t kUnseen = 4u << 24;    // Of a row made: no content known, as what was always behind something fixed.
+constexpr uint32_t kBehind = 8u << 24;    // Of a row made: not content, so the background shows there if there is one,
+constexpr uint32_t kUnsure = 16u << 24;   // or not known either way, seen too seldom to tell,
+constexpr uint32_t kClear = 64u << 24;    // or surely see-through: unlike itself again and again, never alike.
 constexpr uint32_t kDynamic = 32u << 24;  // It has been seen to change by itself as it scrolled, as a video does.
 constexpr uint32_t kVoted = 1u << 31;     // Of a vote: something was seen. Below it, by how much the color leads.
 
@@ -148,10 +150,10 @@ bool Stitcher::Start(const PixelView& first, float scale, int limit_rows, Sink* 
   const int capacity = origin * 2 + height_;
   const size_t stride = static_cast<size_t>(width_) * 4;
   if (!truth_.Reserve(stride, capacity, origin) || !votes_.Reserve(stride, capacity, origin) || !made_.Reserve(stride, capacity, origin) ||
-      !backs_.Reserve(static_cast<size_t>(width_), capacity, origin)) {
+      !backs_.Reserve(static_cast<size_t>(width_), capacity, origin) || !sights_.Reserve(static_cast<size_t>(width_) * 2, capacity, origin)) {
     return false;
   }
-  if (!truth_.Ensure(0, height_) || !votes_.Ensure(0, height_) || !backs_.Ensure(0, height_)) return false;
+  if (!truth_.Ensure(0, height_) || !votes_.Ensure(0, height_) || !backs_.Ensure(0, height_) || !sights_.Ensure(0, height_)) return false;
   row_base_ = origin;
   held_.assign(static_cast<size_t>(capacity), 0);
   tones_.assign(static_cast<size_t>(capacity), kMixed);
@@ -169,8 +171,8 @@ bool Stitcher::Start(const PixelView& first, float scale, int limit_rows, Sink* 
   back_.clear();
   column_true_.assign(static_cast<size_t>(width_), 0);
   column_odd_.assign(static_cast<size_t>(width_), 0);
-  backdrop_.assign(static_cast<size_t>(width_), 0);
-  backdrop_count_.assign(static_cast<size_t>(width_), 0);
+  shades_.assign(4096, Shade{});
+  strip_.clear();
   line_.assign(static_cast<size_t>(width_), 0);
   textured_ = false;
   tile_top_ = 0;
@@ -179,20 +181,17 @@ bool Stitcher::Start(const PixelView& first, float scale, int limit_rows, Sink* 
   bar_ = edge_ = width_;
   bar_ready_ = false;
   tracker_.SetRef(first);
+  // Until content is made, the page's own color is what the first reading mostly shows.
+  uint32_t count = 0;
   for (int y = 0; y < height_; ++y) {
     const uint32_t* pixels_in = PixelRow(first, y);
-    for (int x = 0; x < width_; ++x) {
-      uint32_t& count = backdrop_count_[static_cast<size_t>(x)];
-      if (count == 0) {
-        backdrop_[static_cast<size_t>(x)] = pixels_in[x] & kColor;
-        count = 1;
-      } else {
-        count = Same(backdrop_[static_cast<size_t>(x)], pixels_in[x]) ? count + 1 : count - 1;
-      }
-    }
+    for (int x = 0; x < width_; ++x) Majority(page_, count, pixels_in[x]);
   }
   position_ = min_position_ = max_position_ = rest_min_ = rest_max_ = 0;
   serial_ = 0;
+  start_.resize(pixels);
+  for (int y = 0; y < height_; ++y) std::memcpy(start_.data() + static_cast<size_t>(y) * width_, PixelRow(first, y), static_cast<size_t>(width_) * 4);
+  back_final_ = false;
   Capture(top_, first, 0);
   Capture(bottom_, first, 0);
   kept_ = true;
@@ -260,7 +259,7 @@ bool Stitcher::Accept(const PixelView& frame, int shift, bool sharp) {
   if (std::abs(place) > limit_rows_) return false;
   const int low = std::min(from, place);
   const int high = std::max(from, place) + height_;
-  if (!truth_.Ensure(low, high) || !votes_.Ensure(low, high) || !backs_.Ensure(low, high)) return false;
+  if (!truth_.Ensure(low, high) || !votes_.Ensure(low, high) || !backs_.Ensure(low, high) || !sights_.Ensure(low, high)) return false;
   // Rows coming into view start with nothing seen of them.
   const int enter_first = shift > 0 ? std::max(from + height_, place) : place;
   const int enter_last = shift > 0 ? place + height_ : std::min(from, place + height_);
@@ -269,6 +268,7 @@ bool Stitcher::Accept(const PixelView& frame, int shift, bool sharp) {
     std::memset(truth_.Row(row), 0, static_cast<size_t>(width_) * 4);
     std::memset(votes_.Row(row), 0, static_cast<size_t>(width_) * 4);
     std::memset(backs_.Row(row), 0, static_cast<size_t>(width_));
+    std::memset(sights_.Row(row), 0, static_cast<size_t>(width_) * 2);
   }
   const PixelView ref = tracker_.ref();
   // What changes by itself is taken whole before any of it leaves the view, or goes under what is fixed at its edge.
@@ -281,7 +281,7 @@ bool Stitcher::Accept(const PixelView& frame, int shift, bool sharp) {
   if (sorted) {
     Sort(ref, frame, shift, place);
   } else {
-    Blur(ref, frame, place);
+    Blur(ref, frame);
   }
   ++serial_;
   const int old_min = min_position_;
@@ -293,7 +293,7 @@ bool Stitcher::Accept(const PixelView& frame, int shift, bool sharp) {
   // The view is told apart after the first scroll, and again as more is seen: often at first, then less often. Nothing
   // counts for the content before, when what is fixed is not known yet.
   if (sorted && moves_ >= next_segment_) {
-    Segment();
+    Segment(false, frame);
     next_segment_ = moves_ + std::clamp(moves_ / 2, 1, 16);
   }
   const int leave_first = shift > 0 ? from : std::max(place + height_, from);
@@ -303,6 +303,7 @@ bool Stitcher::Accept(const PixelView& frame, int shift, bool sharp) {
   truth_.Release(leave_first, leave_last);
   votes_.Release(leave_first, leave_last);
   backs_.Release(leave_first, leave_last);
+  sights_.Release(leave_first, leave_last);
   tracker_.Promote();
   kept_ = true;
   pending_ = 0;
@@ -323,16 +324,19 @@ void Stitcher::Stay() {
     uint8_t* state = mask_.data() + static_cast<size_t>(y) * width_;
     const int row = position_ + y;
     const bool wanted = !Done(row);
-    uint32_t* votes = wanted ? reinterpret_cast<uint32_t*>(votes_.Row(row)) : nullptr;
+    uint32_t* truth = wanted ? reinterpret_cast<uint32_t*>(truth_.Row(row)) : nullptr;
+    uint16_t* sights = wanted ? reinterpret_cast<uint16_t*>(sights_.Row(row)) : nullptr;
     for (int x = 0; x < width_; ++x) {
       if (changed[x] == 0) continue;
       const size_t index = static_cast<size_t>(y) * width_ + x;
       const uint8_t was = state[x];
       if ((was & kHeld) != 0 && moved_[index] == 0) Bump(flips_[index]);
       state[x] = static_cast<uint8_t>((was & (kHeld | kSeen)) | kOther);
-      // A change seen only at rest might be a scroll too small to tell, so it counts barely: content seen to scroll
-      // stays as seen, and the end's own reading shows what changed.
-      if (segments_ > 0 && wanted && (was & kHeld) == 0 && fixed_[index] == 0) Vote(votes[x], pixels[x], 1);
+      // Content changed in place, as a picture that loaded, is what the content there shows from now on.
+      if (wanted && (was & kHeld) == 0 && fixed_[index] == 0 && (truth[x] & (kSure | kFrozen)) == kSure) {
+        truth[x] = kSure | (truth[x] & kDynamic) | (pixels[x] & kColor);
+        sights[x] = static_cast<uint16_t>(y + 1);
+      }
       if (top) top_.pixels[index] = pixels[x];
       if (bottom) bottom_.pixels[index] = pixels[x];
     }
@@ -459,20 +463,22 @@ bool Stitcher::Lively(size_t index) const {
 // Tells every pixel of the reading at `place` apart, by comparison with the reading `shift` rows before it, and lets
 // the content rows it shows see it. Row y shows what row y + shift of `ref` did, so rows are gone through with the
 // rows they came from still as they were.
-// A pixel that shows what scrolled to it, and did not before, is content passing. One that holds still though
-// something else scrolled to it shows what holds still there: something fixed in front of the content, or a
-// background seen through it. One plain enough to do both tells little. One that did neither changed by itself, and
-// when what it showed before did not scroll on either, something that holds still there came, went or changed.
-// How each pixel of the view behaved is kept whatever it is thought to be, so that what was taken for something fixed
-// can turn out to be content or background. Only what scrolled out from under a band along the top or bottom says
+// For telling fixed things apart: a pixel that shows what scrolled to it, and did not before, is content passing. One
+// that holds still though something else scrolled to it shows what holds still there. One that did neither changed by
+// itself, and when what it showed before did not scroll on either, something that holds still there came, went or
+// changed. How each pixel of the view behaved is kept whatever it is thought to be, so that what was taken for
+// something fixed can turn out otherwise. Only what scrolled out from under a band along the top or bottom says
 // nothing of what holds still: lined up with the band, plain content would seem to hold still.
+// For the content: each pixel of it is compared with itself as seen a quarter of the view away. Content looks the same
+// wherever it is in the view. Where the content is see-through, what shows is the background behind it, which differs
+// from place to place, and that is then what the background is, there and wherever it shows through after.
 void Stitcher::Sort(const PixelView& ref, const PixelView& now, int shift, int place) {
   constexpr int kSlack = config::kScrollPixelSlack;
   ++moves_;
   max_step_ = std::max(max_step_, std::abs(shift));
   const __m128i slack = SlackOf(kSlack);
-  std::fill(backdrop_count_.begin(), backdrop_count_.end(), 0u);
   const bool down = shift > 0;
+  const int apart = std::max(config::kScrollMinStep * 2, height_ / 4);
   for (int i = 0; i < height_; ++i) {
     const int y = down ? i : height_ - 1 - i;
     const int source = y + shift;
@@ -510,11 +516,13 @@ void Stitcher::Sort(const PixelView& ref, const PixelView& now, int shift, int p
     const bool hovered = tracker_.Hovered(y);
     // A row made already, or one lit up by the pointer, learns nothing here, and nothing is learned of the content
     // before what is fixed has been told apart once.
-    const bool wanted = !hovered && !Done(row);
+    const bool alive = !Done(row);
+    const bool wanted = alive && !hovered;
     const bool learn = wanted && segments_ > 0;
-    uint32_t* truth = wanted ? reinterpret_cast<uint32_t*>(truth_.Row(row)) : nullptr;
-    uint32_t* votes = wanted ? reinterpret_cast<uint32_t*>(votes_.Row(row)) : nullptr;
-    uint8_t* backs = wanted ? backs_.Row(row) : nullptr;
+    uint32_t* truth = alive ? reinterpret_cast<uint32_t*>(truth_.Row(row)) : nullptr;
+    uint32_t* votes = alive ? reinterpret_cast<uint32_t*>(votes_.Row(row)) : nullptr;
+    uint8_t* backs = alive ? backs_.Row(row) : nullptr;
+    uint16_t* sights = alive ? reinterpret_cast<uint16_t*>(sights_.Row(row)) : nullptr;
     for (x = 0; x < width_; ++x) {
       const bool stay = (how[x] & kStayed) != 0;
       const bool follow = (how[x] & kFollowed) != 0;
@@ -529,59 +537,36 @@ void Stitcher::Sort(const PixelView& ref, const PixelView& now, int shift, int p
           // Content came in front of what held still here.
           if ((was & kHeld) != 0 && Lead(wall[x]) >= 2 && !Near(a[x], wall[x], kSlack)) Bump(covers[x]);
           fresh[x] = 0;
-        } else if (stay) {
-          // What came in place holds still: something fixed came, went or changed there.
+        } else if (stay && !follow) {
+          // What came in place holds still though content scrolled to it: something fixed came, went or changed there.
           if (trusted && fresh[x] != 0) Bump(flips[x]);
           fresh[x] = 0;
-          if (!follow) {
-            if (trusted) {
-              Bump(still[x]);
-              Vote(wall[x], a[x], 2);
-            }
-          } else if (trusted && moved[x] == 0 && Apart(a[x], m[x]) > kFlat) {
-            // A smooth picture that holds still differs a little from itself that far away, if not by as much as a
-            // reading may vary by.
+          if (trusted) {
+            Bump(still[x]);
             Vote(wall[x], a[x], 2);
           }
-        } else {
+        } else if (!stay) {
           ++column_odd_[static_cast<size_t>(x)];
-          if (!hidden) {
-            if (!hovered && odd[x] < 0xFFFF) ++odd[x];
-            // Unless what showed here before scrolled on.
-            fresh[x] = static_cast<uint8_t>(moved[x] == 0 && on != nullptr && !Near(on[x], s[x], kSlack) ? 1 : 0);
-          }
+          if (!hovered && !hidden && odd[x] < 0xFFFF) ++odd[x];
+          // Unless what showed here before scrolled on.
+          if (trusted) fresh[x] = static_cast<uint8_t>(moved[x] == 0 && on != nullptr && !Near(on[x], s[x], kSlack) ? 1 : 0);
         }
       }
-      const bool take = learn && open;
       uint8_t is = static_cast<uint8_t>(was & (kHeld | kSeen));
-      bool sure = false;
       if (entered || hidden) {
-        // What changed is new content. What held still tells nothing.
         if (!stay) {
           is = static_cast<uint8_t>(is & kSeen);
-          if (take) Vote(votes[x], a[x], 1);
         } else if (!open) {
           is = static_cast<uint8_t>(is | kHeld);
         }
         is = static_cast<uint8_t>(is | kNew);
       } else if (follow && !stay) {
         is = kTrue | kSeen;
-        sure = take;
       } else if (stay && !follow) {
-        // In front of the content, or behind it and seen through it: either way it shows nothing of the content.
         is = static_cast<uint8_t>(is | kHeld);
-        if (take) Bump(backs[x], 2);
       } else if (stay) {
         if (!open) is = static_cast<uint8_t>(is | kHeld);
         if ((is & kHeld) == 0) is = static_cast<uint8_t>(is | (origin[x] & kTrue));
-        if (take) {
-          if (textured_ && Lead(wall[x]) >= 2 && Near(a[x], wall[x], kSlack)) {
-            Bump(backs[x], 2);
-          } else if (moved[x] != 0 && moved[x] * 3 >= still[x]) {
-            // Only where content scrolls: a plain stretch of something fixed looks just as plain.
-            Vote(votes[x], a[x], 2);
-          }
-        }
       } else {
         // Changing on from where it was, it goes with the content, as a video does. Changing where it is in the view,
         // it does not, as what a pointer lights up.
@@ -589,53 +574,52 @@ void Stitcher::Sort(const PixelView& ref, const PixelView& now, int shift, int p
       }
       state[x] = is;
       if (wanted) {
-        if (sure && (truth[x] & kFrozen) == 0) {
-          const uint32_t agreed = (truth[x] & kSure) != 0 && Near(truth[x], a[x], kSlack) ? kAgreed : 0;
-          truth[x] = kSure | agreed | (truth[x] & kDynamic) | (a[x] & kColor);
-          Vote(votes[x], a[x], 2);
-        }
         // Content that changes as it scrolls is remembered as such, so that all of it is taken whole together.
         if ((is & kFlux) != 0) truth[x] |= kDynamic;
-      }
-      // A column's backdrop is what the page shows there, not something fixed over it.
-      if (!open) continue;
-      uint32_t& count = backdrop_count_[static_cast<size_t>(x)];
-      if (count == 0) {
-        backdrop_[static_cast<size_t>(x)] = a[x] & kColor;
-        count = 1;
-      } else {
-        count = Same(backdrop_[static_cast<size_t>(x)], a[x]) ? count + 1 : count - 1;
+        // Over a picture, content shows only where content has been seen to scroll through: elsewhere, as where no
+        // content ever passes, what shows is the picture.
+        if (learn && open && (!textured_ || moved[x] != 0) && (truth[x] & kFrozen) == 0) {
+          uint32_t& anchor = truth[x];  // The sight it is compared with, and in which row of the view that was.
+          if ((anchor & kSure) == 0) {
+            anchor = kSure | (anchor & kDynamic) | (a[x] & kColor);
+            sights[x] = static_cast<uint16_t>(y + 1);
+          } else if (std::abs(y + 1 - static_cast<int>(sights[x])) >= apart) {
+            // Once each quarter of the view it moves, either way, so that neither counts more often than the other.
+            // Alike at both places, it is content, unless it showed at each just what holds still there, as plain
+            // parts of a picture behind it do.
+            const size_t before = static_cast<size_t>(sights[x] - 1) * width_ + x;
+            const bool behind = Through(before, anchor) && Through(base + x, a[x]);
+            const bool content = Near(anchor, a[x], kSlack) && !behind;
+            if (content) {
+              Vote(votes[x], a[x], 2);
+            } else {
+              Bump(backs[x], 2);
+            }
+            // Only what is surely see-through, unlike itself again and again and never alike, as something animated
+            // is now and then, tells what the background is, at both places.
+            if (!content && backs[x] >= 4 && votes[x] == 0 && (anchor & kDynamic) == 0) Vote(wall_[before], anchor, 1);
+            anchor = kSure | (anchor & kDynamic) | (a[x] & kColor);
+            sights[x] = static_cast<uint16_t>(y + 1);
+          }
+          if (backs[x] >= 4 && votes[x] == 0 && (anchor & kDynamic) == 0) Vote(wall[x], a[x], 1);
+        }
       }
     }
   }
 }
 
-// A reading that does not line up pixel for pixel tells little apart: what holds still stays what it was and tells
-// nothing of the content, and what changed counts only for content that is never seen better.
-void Stitcher::Blur(const PixelView& ref, const PixelView& now, int place) {
-  std::fill(backdrop_count_.begin(), backdrop_count_.end(), 0u);
+// A reading that does not line up pixel for pixel tells nothing apart, and nothing of the content: it only says where
+// the view went.
+void Stitcher::Blur(const PixelView& ref, const PixelView& now) {
   for (int y = 0; y < height_; ++y) {
     const uint32_t* a = PixelRow(now, y);
     const uint32_t* s = PixelRow(ref, y);
     uint8_t* state = mask_.data() + static_cast<size_t>(y) * width_;
     uint8_t* how = how_.data() + static_cast<size_t>(y) * width_;
-    const int row = place + y;
-    const bool wanted = segments_ > 0 && !tracker_.Hovered(y) && !Done(row);
-    uint32_t* votes = wanted ? reinterpret_cast<uint32_t*>(votes_.Row(row)) : nullptr;
     for (int x = 0; x < width_; ++x) {
       const bool stay = Near(a[x], s[x], config::kScrollPixelSlack);
       how[x] = stay ? kStayed : 0;
       state[x] = static_cast<uint8_t>(state[x] & (stay ? kHeld | kSeen : kSeen));
-      const bool open = fixed_[static_cast<size_t>(y) * width_ + x] == 0;
-      if (wanted && !stay && open) Vote(votes[x], a[x], 1);
-      if (!open) continue;
-      uint32_t& count = backdrop_count_[static_cast<size_t>(x)];
-      if (count == 0) {
-        backdrop_[static_cast<size_t>(x)] = a[x] & kColor;
-        count = 1;
-      } else {
-        count = Same(backdrop_[static_cast<size_t>(x)], a[x]) ? count + 1 : count - 1;
-      }
     }
   }
 }
@@ -724,8 +708,16 @@ void Stitcher::Freeze(const PixelView& ref, int place, int first, int last) {
   }
 }
 
-// Makes content rows [first, last), those not made yet. Rows within a view of either end are held for the end to be
-// painted on when the capture finishes, and meanwhile shown with it painted as it stands. All others are final.
+// Whether rows made are held until the capture finishes even away from the ends, so that all of them are painted from
+// what is found of the view in the end: whether a picture is behind the content, and what is fixed. Within a bound, as
+// held rows are not packed.
+bool Stitcher::Deferring() const {
+  return static_cast<uint64_t>(max_position_ - min_position_ + height_) * static_cast<uint64_t>(width_) * 4 <= kDeferBytes;
+}
+
+// Makes content rows [first, last), those not made yet. Rows within a view of either end, and over a picture all rows,
+// are held for the ends and the picture to be painted on when the capture finishes, and meanwhile shown with them
+// painted as they stand. All others are final.
 void Stitcher::Make(int first, int last) {
   std::vector<uint32_t> block;
   int block_first = 0;
@@ -743,7 +735,7 @@ void Stitcher::Make(int first, int last) {
     Compose(row, line_.data());
     Mark(row, row + 1);
     bool final = true;
-    if (InEnds(row) && made_.Ensure(row, row + 1)) {
+    if ((InEnds(row) || Deferring()) && made_.Ensure(row, row + 1)) {
       std::memcpy(made_.Row(row), line_.data(), static_cast<size_t>(width_) * 4);
       held_[static_cast<size_t>(row + row_base_)] = 1;
       Paint(row, line_.data());
@@ -762,31 +754,43 @@ void Stitcher::Make(int first, int last) {
     ++block_rows;
   }
   send();
+  Page();
 }
 
-// Tells the view apart, from how each of its pixels behaved over all the readings so far.
-// - Rows content was never seen in, from the top and from the bottom of the view, are a header or a bar to type in.
+// Tells the view apart, from how each of its pixels behaved over all the readings so far, and once the view has gone a
+// little way, from what the screens at the two ends of the capture show alike: what holds still.
+// - Rows the two ends show alike, nearly all across, from the top and from the bottom of the view, are a header or a
+//   bar to type in. A few rows at the very edge may differ at the two ends with nothing seen to scroll in them, as a
+//   sliver of a taskbar below a window's edge: they belong to the band the rows next to them make. Before the view has
+//   gone that far, the bands are the rows content was never seen to scroll in.
 // - What holds still where content came in front of it again and again, at many places across the view and in many
 //   colors, is a picture behind the content, as a chat's wallpaper.
-// - What holds still where content hardly ever showed is something fixed in front of the content. Over a picture,
-//   only what came, went or changed by itself, as a date shown while scrolling, or what stands alone small, as a
-//   button: anything larger is the picture itself, where no content happened to pass.
-// Fixed things near each other are one, filled out to its box. Each belongs at the end of the view it reaches, the top
-// if it reaches both, or else the nearer one. A thing that would cover much of the view is no thing in front of it,
-// but a background not told for one, and is left alone.
-void Stitcher::Segment() {
+// - A column that holds still in a color other than the page's own nearly all the way down, as the edge of a window,
+//   runs down the whole image as content does, and holds nothing fixed together.
+// - What holds still where content never scrolled is the detail of something fixed in front of the content, unless
+//   content scrolls over a picture: then only the bands are. So is what the two ends show alike, edge for edge.
+// Detail near other detail, or above or below it in the same columns, as the icons down a side bar or a panel's
+// heading and its list, is one thing, which belongs at the end of the view it reaches, the top if it reaches both, or
+// else the nearer one. The thing is its detail and what holds still in a color other than the page's own, reached
+// from it without crossing anything else: a panel's plain inside, its edge and its shadow, however far they are from
+// what is drawn on it. What holds still in the page's own color looks the same whatever it is taken for, and content
+// coming out from under the thing is never part of it. Detail all over the view is a background.
+void Stitcher::Segment(bool final, const PixelView& now) {
   const double began = NowSeconds();
   ++segments_;
   ++revision_;
-  const size_t pixels = static_cast<size_t>(width_) * height_;
+  constexpr int kSlack = config::kScrollPixelSlack;
   const int columns = (width_ + kCell - 1) / kCell;
   const int rows = (height_ + kCell - 1) / kCell;
   const int inside = (edge_ + kCell - 1) / kCell;  // Columns of squares left of a scroll bar.
   const size_t cells = static_cast<size_t>(columns) * rows;
   const int gap = std::max(1, static_cast<int>(std::lround(config::kScrollClusterGap * scale_ / kCell)));
   const int reach = static_cast<int>(std::lround(config::kScrollBottomReach * scale_));
+  const bool ends = bottom_.place - top_.place >= config::kScrollMinStep * 2;
   const auto type = [&](size_t i) { return TypeOf(still_[i], moved_[i], flips_[i], covers_[i]); };
-  const auto empty = [&](int y) {
+  const auto alike = [&](size_t i) { return Near(top_.pixels[i], bottom_.pixels[i], kSlack); };
+  // Whether content was never seen to scroll or show a background anywhere in a row.
+  const auto quiet = [&](int y) {
     const size_t base = static_cast<size_t>(y) * width_;
     int count = 0;
     for (int x = 0; x < edge_; ++x) {
@@ -795,9 +799,25 @@ void Stitcher::Segment() {
     }
     return count <= std::max(2, edge_ / 64);
   };
+  // Whether the screens at the two ends show a row alike, nearly all across.
+  const auto same = [&](int y) {
+    const size_t base = static_cast<size_t>(y) * width_;
+    int count = 0;
+    for (int x = 0; x < edge_; ++x) count += alike(base + x) ? 0 : 1;
+    return count <= std::max(2, edge_ / 32);
+  };
   const auto band = [&](bool top) {
+    const auto row = [&](int k) { return top ? k : height_ - 1 - k; };
     int length = 0;
-    while (length < height_ / 3 && empty(top ? length : height_ - 1 - length)) ++length;
+    if (ends) {
+      int skip = 0;
+      while (skip < kCell * 2 && !same(row(skip)) && quiet(row(skip))) ++skip;
+      length = skip;
+      while (length < height_ / 3 && same(row(length))) ++length;
+      if (length == skip) length = 0;
+    } else {
+      while (length < height_ / 3 && quiet(row(length))) ++length;
+    }
     return length < height_ / 3 ? length : 0;
   };
   top_band_ = band(true);
@@ -805,20 +825,44 @@ void Stitcher::Segment() {
   const int first = top_band_;
   const int last = height_ - bottom_band_;
 
-  // Squares that may show something fixed, and those of them where it came, went or changed by itself.
+  const auto held = [&](size_t i) { return type(i) != kMoving && (!ends || alike(i)); };
+  const auto color = [&](size_t i) {
+    return ends ? top_.pixels[i] : PixelRow(now, static_cast<int>(i / width_))[i % width_];
+  };
+  const auto own = [&](size_t i) { return Near(color(i), page_, kSlack); };  // In the page's own color.
+  std::vector<uint8_t> strip(static_cast<size_t>(width_), 0);
+  if (last > first) {
+    std::vector<int> standing(static_cast<size_t>(width_), 0);
+    for (int y = first; y < last; ++y) {
+      const size_t base = static_cast<size_t>(y) * width_;
+      for (int x = 0; x < edge_; ++x) standing[static_cast<size_t>(x)] += held(base + x) && !own(base + x) ? 1 : 0;
+    }
+    for (int x = 0; x < edge_; ++x) strip[static_cast<size_t>(x)] = standing[static_cast<size_t>(x)] * 10 >= (last - first) * 9 ? 1 : 0;
+  }
+
+  // Squares showing the detail of something fixed. Not where content was seen to scroll through, as through a column
+  // before it sticks, nor where the two ends differ, as where content comes out from under something fixed, nor what
+  // shows the page's own color. And squares where content was seen passing in front of what both ends show alike.
   std::vector<uint16_t> holds(cells, 0);
-  std::vector<uint16_t> changes(cells, 0);
+  std::vector<uint8_t> passed(cells, 0);
   for (int y = first; y < last; ++y) {
     const size_t base = static_cast<size_t>(y) * width_;
     const size_t line = static_cast<size_t>(y / kCell) * columns;
     for (int x = 0; x < edge_; ++x) {
-      const uint8_t is = type(base + x);
-      if (is == kFixed) ++holds[line + x / kCell];
-      if (is == kChanging) ++changes[line + x / kCell];
+      const size_t i = base + x;
+      if (ends && moved_[i] != 0 && alike(i) && !own(i)) passed[line + x / kCell] = 1;
+      if (strip[static_cast<size_t>(x)] != 0 || moved_[i] != 0 || (ends && !alike(i)) || own(i)) continue;
+      const uint8_t is = type(i);
+      bool detail = is == kFixed || is == kChanging;
+      if (!detail && ends && x + 1 < edge_ && y + 1 < last) {
+        detail = (strip[static_cast<size_t>(x) + 1] == 0 && alike(i + 1) && !Near(top_.pixels[i], top_.pixels[i + 1], kSlack)) ||
+                 (alike(i + width_) && !Near(top_.pixels[i], top_.pixels[i + width_], kSlack));
+      }
+      if (detail) ++holds[line + x / kCell];
     }
   }
   grid_.assign(cells, 0);
-  for (size_t cell = 0; cell < cells; ++cell) grid_[cell] = static_cast<uint8_t>(changes[cell] >= 3 ? 2 : holds[cell] + changes[cell] >= 3 ? 1 : 0);
+  for (size_t cell = 0; cell < cells; ++cell) grid_[cell] = static_cast<uint8_t>(holds[cell] >= 3 ? 1 : 0);
 
   if (!textured_) {
     uint32_t base = 0;
@@ -844,47 +888,27 @@ void Stitcher::Segment() {
         if (place < 0xFFFF) ++place;
       }
     }
+    // A picture behind the content shows between the content all over the view, as a chat's wallpaper does. What
+    // only seems to, as a column that slid and stuck, a panel that slid in, or what changed by itself, does so in a
+    // few places only, and taken for a picture it would leave everything fixed in the view to show at both ends.
     int places = 0;
-    for (const uint16_t place : spread) places += place >= 4 ? 1 : 0;
-    textured_ = seen >= std::max<uint64_t>(400, pixels / 300) && places >= 6 && apart * 5 >= seen;
+    for (const uint16_t place : spread) places += place >= kSpread ? 1 : 0;
+    const uint64_t area = static_cast<uint64_t>(last - first) * static_cast<uint64_t>(edge_);
+    const int area_places = ((edge_ + kSpread - 1) / kSpread) * ((last - first + kSpread - 1) / kSpread);
+    textured_ = seen >= std::max<uint64_t>(1000, area / 400) && places >= std::max(12, area_places / 40) && apart * 5 >= seen;
     texture_seen_ = seen;
     texture_apart_ = apart;
   }
 
-  if (textured_) {
-    std::vector<uint8_t> keep(cells, 0);
-    std::vector<uint8_t> visited(cells, 0);
-    for (int start = 0; start < static_cast<int>(cells); ++start) {
-      if (grid_[static_cast<size_t>(start)] == 0 || visited[static_cast<size_t>(start)] != 0 || start % columns >= inside) continue;
-      stack_.clear();
-      stack_.push_back(start);
-      visited[static_cast<size_t>(start)] = 1;
-      RECT box{start % columns, start / columns, start % columns + 1, start / columns + 1};
-      for (size_t head = 0; head < stack_.size(); ++head) {
-        const int cx = stack_[head] % columns;
-        const int cy = stack_[head] / columns;
-        box.left = std::min<LONG>(box.left, cx);
-        box.top = std::min<LONG>(box.top, cy);
-        box.right = std::max<LONG>(box.right, cx + 1);
-        box.bottom = std::max<LONG>(box.bottom, cy + 1);
-        for (int ny = std::max(cy - 1, 0); ny <= std::min(cy + 1, rows - 1); ++ny) {
-          for (int nx = std::max(cx - 1, 0); nx <= std::min(cx + 1, inside - 1); ++nx) {
-            const size_t next = static_cast<size_t>(ny) * columns + nx;
-            if (grid_[next] == 0 || visited[next] != 0) continue;
-            visited[next] = 1;
-            stack_.push_back(ny * columns + nx);
-          }
-        }
-      }
-      const bool alone = (box.right - box.left) * kCell * 4 <= edge_ && (box.bottom - box.top) * kCell * 4 <= last - first;
-      for (const int cell : stack_) keep[static_cast<size_t>(cell)] = static_cast<uint8_t>(alone || grid_[static_cast<size_t>(cell)] == 2 ? 1 : 0);
-    }
-    grid_.swap(keep);
-  }
+  // Over a picture, the bands are the only fixed things. Whatever else holds still is the picture itself where no
+  // content passed, or shows as the screens at the ends had it, and nothing shows it elsewhere: the content comes from
+  // where it was seen to move, and the picture from where it was seen through the content.
+  if (textured_) std::fill(grid_.begin(), grid_.end(), static_cast<uint8_t>(0));
 
-  std::vector<uint8_t> ends(cells, 0);
+  std::vector<uint8_t> owner(cells, 0);
   std::vector<uint8_t> visited(cells, 0);
-  const LONG most = static_cast<LONG>(inside) * std::max(1, (last - first + kCell - 1) / kCell) * 2;
+  const int stack = std::max(gap, (last - first) / (kCell * 3));  // Squares apart that things one above another join across.
+  const size_t most = static_cast<size_t>(inside) * std::max(1, (last - first + kCell - 1) / kCell) / 4;
   elements_ = 0;
   for (int start = 0; start < static_cast<int>(cells); ++start) {
     if (grid_[static_cast<size_t>(start)] == 0 || visited[static_cast<size_t>(start)] != 0 || start % columns >= inside) continue;
@@ -899,7 +923,7 @@ void Stitcher::Segment() {
       box.top = std::min<LONG>(box.top, cy);
       box.right = std::max<LONG>(box.right, cx + 1);
       box.bottom = std::max<LONG>(box.bottom, cy + 1);
-      for (int ny = std::max(cy - gap, 0); ny <= std::min(cy + gap, rows - 1); ++ny) {
+      for (int ny = std::max(cy - stack, 0); ny <= std::min(cy + stack, rows - 1); ++ny) {
         for (int nx = std::max(cx - gap, 0); nx <= std::min(cx + gap, inside - 1); ++nx) {
           const size_t next = static_cast<size_t>(ny) * columns + nx;
           if (grid_[next] == 0 || visited[next] != 0) continue;
@@ -908,35 +932,76 @@ void Stitcher::Segment() {
         }
       }
     }
-    if ((box.right - box.left) * (box.bottom - box.top) * 5 > most) continue;
+    // Content seen passing in front of much of it makes it a picture behind the content, as a chat's wallpaper before
+    // enough of it is seen to tell so all over the view. Nothing ever passes in front of something fixed, but for what
+    // happens to look alike along its rim.
+    size_t behind = 0;
+    for (const int cell : stack_) behind += passed[static_cast<size_t>(cell)];
+    if (stack_.size() > most || behind >= std::max<size_t>(2, stack_.size() / 20)) continue;
     const int top = box.top * kCell;
     const int bottom = std::min<int>(box.bottom * kCell, height_);
     const uint8_t end = top <= first + reach ? kTopKind : bottom >= last - reach || top + bottom >= height_ ? kBottomKind : kTopKind;
     ++elements_;
-    // With a margin for its edges and shadow, which may hold still too faintly to be told.
-    for (int cy = std::max<int>(box.top - 2, 0); cy < std::min<int>(box.bottom + 2, rows); ++cy) {
-      for (int cx = std::max<int>(box.left - 2, 0); cx < std::min<int>(box.right + 2, inside); ++cx) {
-        uint8_t& cell = ends[static_cast<size_t>(cy) * columns + cx];
-        if (cell == 0) cell = end;
-      }
+    if (final) Trace("stitch: fixed %ld,%d-%ld,%d at the %s end, %zu squares of detail", box.left * kCell, top, box.right * kCell, bottom,
+                     end == kTopKind ? "top" : "bottom", stack_.size());
+    for (const int cell : stack_) {
+      uint8_t& slot = owner[static_cast<size_t>(cell)];
+      if (slot == 0) slot = end;
     }
   }
   for (int y = 0; y < height_; ++y) {
-    uint8_t* fixed = fixed_.data() + static_cast<size_t>(y) * width_;
-    const uint8_t* owners = ends.data() + static_cast<size_t>(y / kCell) * columns;
+    const size_t base = static_cast<size_t>(y) * width_;
+    uint8_t* fixed = fixed_.data() + base;
+    const uint8_t* owners = owner.data() + static_cast<size_t>(y / kCell) * columns;
     const uint8_t banded = y < first ? kTopKind : y >= last ? kBottomKind : 0;
-    for (int x = 0; x < width_; ++x) fixed[x] = static_cast<uint8_t>(x >= edge_ ? 0 : banded != 0 ? banded : owners[x / kCell]);
+    for (int x = 0; x < width_; ++x) {
+      uint8_t is = 0;
+      if (x < edge_) {
+        if (banded != 0) {
+          is = banded;
+        } else if (owners[x / kCell] != 0 && strip[static_cast<size_t>(x)] == 0 && held(base + x)) {
+          is = owners[x / kCell];
+        }
+      }
+      fixed[x] = is;
+    }
   }
-  if (textured_) Background();
+  stack_.clear();
+  for (int y = first; y < last; ++y) {
+    for (int x = 0; x < edge_; ++x) {
+      const int i = y * width_ + x;
+      if (fixed_[static_cast<size_t>(i)] != 0) stack_.push_back(i);
+    }
+  }
+  while (!stack_.empty()) {
+    const int i = stack_.back();
+    stack_.pop_back();
+    const int x = i % width_;
+    const int y = i / width_;
+    const uint8_t kind = fixed_[static_cast<size_t>(i)];
+    const auto reach_to = [&](int next) {
+      const size_t at = static_cast<size_t>(next);
+      if (fixed_[at] != 0 || strip[at % static_cast<size_t>(width_)] != 0 || !held(at) || own(at)) return;
+      fixed_[at] = kind;
+      stack_.push_back(next);
+    };
+    if (x > 0) reach_to(i - 1);
+    if (x + 1 < edge_) reach_to(i + 1);
+    if (y > first) reach_to(i - width_);
+    if (y + 1 < last) reach_to(i + width_);
+  }
+  if (textured_) Background(false);
   Trace("stitch: told apart after %d scrolls in %.1f ms: bands %d and %d, background %d, %d fixed things", moves_, (NowSeconds() - began) * 1000.0,
         top_band_, bottom_band_, textured_ ? 1 : 0, elements_);
 }
 
-// The background behind the content, as the view shows it between the bands at its top and bottom: each pixel what
-// it showed while holding still. A gap, where nothing was seen or something fixed stands in front, is filled from
-// what was seen on either side of it: blended across, down its column where it is short that way, else along its row,
-// and else the background's commonest color. One color is never carried far.
-void Stitcher::Background() {
+// The one picture of the background, as the view shows it between the bands at its top and bottom. With `ends`, once
+// every row is made: first the screen the capture began with, taken at rest, wherever the content there was seen to be
+// see-through; then what was seen through the content as it scrolled; then the screens at the ends, wherever the
+// content there is see-through. Before, only what was seen through the content. A gap left, where content always
+// covered the picture, is filled from what was seen on either side of it: blended across, down its column where it is
+// short that way, else along its row, and else the picture's commonest color. One color is never carried far.
+void Stitcher::Background(bool ends) {
   const size_t pixels = static_cast<size_t>(width_) * height_;
   tile_top_ = top_band_;
   tile_period_ = height_ - top_band_ - bottom_band_;
@@ -949,19 +1014,61 @@ void Stitcher::Background() {
   back_.assign(pixels, 0);
   uint32_t base = 0;
   uint32_t count = 0;
+  // Of a screen showing content rows from `place` on: its pixels where the content was found surely see-through.
+  const auto take = [&](const uint32_t* screen, int place) {
+    for (int y = tile_top_; y < bottom; ++y) {
+      const int row = place + y;
+      if (!Held(row)) continue;
+      const uint32_t* line = reinterpret_cast<const uint32_t*>(made_.Row(row));
+      for (int x = 0; x < width_; ++x) {
+        const size_t i = static_cast<size_t>(y) * width_ + x;
+        if (known[i] != 0 || fixed_[i] != 0 || (line[x] & kClear) == 0) continue;
+        known[i] = 1;
+        back_[i] = screen[i] & kColor;
+        Majority(base, count, back_[i]);
+      }
+    }
+  };
+  if (ends) take(start_.data(), 0);
+  // Not what came and went while holding still, as a button to jump to the end or a date shown while scrolling, even
+  // if it went only as the capture ended: that floats in front of the picture, and is no part of it.
+  const auto went = [&](size_t i) {
+    return TypeOf(still_[i], moved_[i], flips_[i], covers_[i]) == kChanging || (fresh_[i] != 0 && moved_[i] == 0);
+  };
   for (int y = tile_top_; y < bottom; ++y) {
-    for (int x = 0; x < edge_; ++x) {
+    for (int x = 0; x < width_; ++x) {
       const size_t i = static_cast<size_t>(y) * width_ + x;
-      if (fixed_[i] != 0 || Lead(wall_[i]) < 2) continue;
-      // Only what is known to hold still behind the content: where content scrolls, what seemed to hold still may
-      // have been content that happened to look alike.
-      const uint8_t is = TypeOf(still_[i], moved_[i], flips_[i], covers_[i]);
-      if (is != kBack && is != kFixed) continue;
+      if (known[i] != 0 || fixed_[i] != 0 || Lead(wall_[i]) < 2 || went(i)) continue;
       known[i] = 1;
       back_[i] = wall_[i] & kColor;
       Majority(base, count, back_[i]);
     }
   }
+  if (ends) {
+    take(top_.pixels.data(), top_.place);
+    take(bottom_.pixels.data(), bottom_.place);
+    // Then what either end shows wherever its content is not opaque, as plain parts of the picture no content ever
+    // passed: so long as the other end shows the same there, or content.
+    constexpr int kSlack = config::kScrollPixelSlack;
+    for (int y = tile_top_; y < bottom; ++y) {
+      const int top_row = top_.place + y;
+      const int bottom_row = bottom_.place + y;
+      const uint32_t* top_line = Held(top_row) ? reinterpret_cast<const uint32_t*>(made_.Row(top_row)) : nullptr;
+      const uint32_t* bottom_line = Held(bottom_row) ? reinterpret_cast<const uint32_t*>(made_.Row(bottom_row)) : nullptr;
+      for (int x = 0; x < width_; ++x) {
+        const size_t i = static_cast<size_t>(y) * width_ + x;
+        if (known[i] != 0 || fixed_[i] != 0 || went(i)) continue;
+        const bool from_top = top_line != nullptr && (top_line[x] & kBehind) != 0;
+        const bool from_bottom = bottom_line != nullptr && (bottom_line[x] & kBehind) != 0;
+        if (!from_top && !from_bottom) continue;
+        if (from_top && from_bottom && !Near(top_.pixels[i], bottom_.pixels[i], kSlack)) continue;
+        known[i] = 1;
+        back_[i] = (from_top ? top_.pixels[i] : bottom_.pixels[i]) & kColor;
+        Majority(base, count, back_[i]);
+      }
+    }
+  }
+  back_final_ = ends;
   wall_base_ = base;
   // Fills the unknown run [from, to) of a line whose pixels lie `step` apart, `low` and `high` being its ends.
   const auto fill = [&](size_t origin, size_t step, int from, int to, int low, int high) {
@@ -986,7 +1093,7 @@ void Stitcher::Background() {
       known[at(k)] = 2;
     }
   };
-  for (int x = 0; x < edge_; ++x) {
+  for (int x = 0; x < width_; ++x) {
     for (int y = tile_top_; y < bottom;) {
       if (known[static_cast<size_t>(y) * width_ + x] != 0) {
         ++y;
@@ -1000,14 +1107,14 @@ void Stitcher::Background() {
   }
   for (int y = tile_top_; y < bottom; ++y) {
     const size_t origin = static_cast<size_t>(y) * width_;
-    for (int x = 0; x < edge_;) {
+    for (int x = 0; x < width_;) {
       if (known[origin + x] != 0) {
         ++x;
         continue;
       }
       int end = x;
-      while (end < edge_ && known[origin + end] == 0) ++end;
-      fill(origin, 1, x, end, 0, edge_);
+      while (end < width_ && known[origin + end] == 0) ++end;
+      fill(origin, 1, x, end, 0, width_);
       x = end;
     }
     for (int x = 0; x < width_; ++x) {
@@ -1032,30 +1139,72 @@ int Stitcher::TileRow(int row) const {
   return tile_top_ + (offset % tile_period_ + tile_period_) % tile_period_;
 }
 
-// One content row in view: each pixel as it showed when seen to scroll twice alike, or taken whole; or else as most of
-// the clear places it passed showed it, if it was seen clear more often than the background through it, and over a
-// picture, more than once; or else the background, which is, where there is no picture, what was seen there all the
-// same, or what its column mostly is.
+// One content row in view: each pixel as taken whole; or as it looked wherever it was in the view, if it looked alike
+// far apart more often than not, or it was seen just once, as when the view scrolls fast. Otherwise what it is is not
+// known, and the background shows there if there is one: it looked unlike itself far apart, as see-through content
+// does, or what scrolled under something that stuck after it moved; or, seen just once, it showed just what holds still
+// where it was seen; or it was never seen, as what was always behind something fixed. Content that changes by itself
+// as it scrolls is the one exception, and shows as last seen.
 void Stitcher::Blend(int row, uint32_t* out) const {
   const uint32_t* truth = reinterpret_cast<const uint32_t*>(truth_.Row(row));
   const uint32_t* votes = reinterpret_cast<const uint32_t*>(votes_.Row(row));
   const uint8_t* backs = backs_.Row(row);
+  const uint16_t* sights = reinterpret_cast<const uint16_t*>(sights_.Row(row));
   for (int x = 0; x < width_; ++x) {
-    if ((truth[x] & kFrozen) != 0 || (truth[x] & (kSure | kAgreed)) == (kSure | kAgreed)) {
-      out[x] = truth[x] & (kColor | kFrozen);
+    const uint32_t anchor = truth[x];
+    if ((anchor & kFrozen) != 0) {
+      out[x] = anchor & (kColor | kFrozen);
       continue;
     }
-    const uint32_t lead = Lead(votes[x]);
-    if (lead > backs[x] && (!textured_ || lead >= 4)) {
+    if ((anchor & kSure) == 0) {
+      out[x] = page_ | kBehind | kUnsure | kUnseen;
+      continue;
+    }
+    if (Lead(votes[x]) > backs[x]) {
       out[x] = votes[x] & kColor;
+    } else if (backs[x] == 0) {
+      const bool through = Through(static_cast<size_t>(std::max<int>(sights[x], 1) - 1) * width_ + x, anchor);
+      out[x] = through ? page_ | kBehind | kUnsure | kUnseen : anchor & kColor;
+    } else if ((anchor & kDynamic) != 0) {
+      out[x] = (anchor & kColor) | kBehind;
     } else {
-      out[x] = ((votes[x] & kVoted) != 0 ? votes[x] & kColor : backdrop_[static_cast<size_t>(x)]) | kBehind;
+      out[x] = page_ | kBehind | kUnseen | (backs[x] >= 4 && votes[x] == 0 ? kClear : 0u);
     }
   }
 }
 
+// Whether a pixel of the view showing `color` showed just what holds still there: what it mostly showed while holding
+// still, or where that was never seen, as on plain parts of a picture behind the content that look alike a scroll
+// apart, the picture as filled in so far.
+bool Stitcher::Through(size_t index, uint32_t color) const {
+  constexpr int kSlack = config::kScrollPixelSlack;
+  if (Lead(wall_[index]) >= 2) return Near(color, wall_[index], kSlack);
+  return textured_ && back_.size() == wall_.size() && Near(color, back_[index], kSlack);
+}
+
+// Counts the content a row made shows toward the page's own color.
+void Stitcher::Tally(const uint32_t* line) {
+  for (int x = 0; x < edge_; ++x) {
+    if ((line[x] & kUnseen) != 0) continue;
+    const uint32_t color = line[x] & kColor;
+    Shade& shade = shades_[(color >> 12 & 0xF00u) | (color >> 8 & 0xF0u) | (color >> 4 & 0xFu)];
+    ++shade.count;
+    Majority(shade.color, shade.lead, color);
+  }
+}
+
+// The page's own color: the color most of the content made shows.
+void Stitcher::Page() {
+  const Shade* most = nullptr;
+  for (const Shade& shade : shades_) {
+    if (shade.count != 0 && (most == nullptr || shade.count > most->count)) most = &shade;
+  }
+  if (most != nullptr) page_ = most->color;
+}
+
 void Stitcher::Compose(int row, uint32_t* out) {
   Blend(row, out);
+  Tally(out);
   uint32_t tone = kNoTone;
   for (int x = 0; x < width_ && tone != kMixed; ++x) {
     const uint32_t color = out[x] & kColor;
@@ -1064,12 +1213,26 @@ void Stitcher::Compose(int row, uint32_t* out) {
   tones_[static_cast<size_t>(row + row_base_)] = tone;
 }
 
-// Shows the background behind a content row made, where the content is not surely known.
+// Shows the one picture of the background behind a content row made, where the content is see-through or not known:
+// as finally known once the capture finishes, and meanwhile as seen so far. Beneath a scroll bar drawn over the
+// content too. With no picture, content never seen shows its column's one color, as a side bar's or a window edge's,
+// and else the page's own color, as now known.
 void Stitcher::Render(int row, uint32_t* line) const {
-  if (!textured_ || back_.empty()) return;
-  const uint32_t* tile = back_.data() + static_cast<size_t>(TileRow(row)) * width_;
-  for (int x = 0; x < edge_; ++x) {
-    if ((line[x] & kBehind) != 0) line[x] = tile[x] | kBehind;
+  if (!textured_ || back_.empty()) {
+    const bool strips = strip_.size() == static_cast<size_t>(width_);
+    for (int x = 0; x < bar_; ++x) {
+      if ((line[x] & kUnseen) == 0) continue;
+      const uint32_t strip = strips ? strip_[static_cast<size_t>(x)] : kNoTone;
+      line[x] = (strip != kNoTone ? strip : page_) | (line[x] & ~kColor);
+    }
+    return;
+  }
+  const size_t base = static_cast<size_t>(TileRow(row)) * width_;
+  for (int x = 0; x < bar_; ++x) {
+    if ((line[x] & kBehind) == 0) continue;
+    const size_t i = base + static_cast<size_t>(x);
+    const bool live = !back_final_ && fixed_[i] == 0 && Lead(wall_[i]) >= 2;
+    line[x] = ((live ? wall_[i] : back_[i]) & kColor) | (line[x] & (kBehind | kUnsure));
   }
 }
 
@@ -1091,8 +1254,9 @@ void Stitcher::Send(int first, std::vector<uint32_t>& block, int rows, bool fina
 }
 
 // Paints the ends on a content row. Within a view of an end, the row is that end's screen as it was, but where the
-// screen shows something fixed that belongs at the other end: the content behind it shows there instead. Whatever is
-// fixed and belongs at an end shows from that end's screen wherever the screen reaches, so that it shows whole.
+// screen shows something fixed that belongs at the other end: there the other end's screen shows the content behind
+// it, if it reaches the row and shows content there, and else the content behind shows as made. Whatever is fixed and
+// belongs at an end shows from that end's screen wherever the screen reaches, so that it shows whole.
 void Stitcher::Paint(int row, uint32_t* line) const {
   Render(row, line);
   const int at_top = row - top_.place;
@@ -1103,6 +1267,9 @@ void Stitcher::Paint(int row, uint32_t* line) const {
     const size_t at = static_cast<size_t>(row - end->place) * width_;
     const size_t top_at = top ? static_cast<size_t>(at_top) * width_ : 0;
     const size_t bottom_at = bottom ? static_cast<size_t>(at_bottom) * width_ : 0;
+    const bool across = end == &top_ ? bottom : top;  // Whether the other end's screen reaches the row too.
+    const End& other = end == &top_ ? bottom_ : top_;
+    const size_t other_at = end == &top_ ? bottom_at : top_at;
     for (int x = 0; x < edge_; ++x) {
       if (bottom && fixed_[bottom_at + x] == kBottomKind) {
         line[x] = bottom_.pixels[bottom_at + x] & kColor;
@@ -1110,6 +1277,8 @@ void Stitcher::Paint(int row, uint32_t* line) const {
         line[x] = top_.pixels[top_at + x] & kColor;
       } else if (fixed_[at + x] == 0) {
         line[x] = end->pixels[at + x] & kColor;
+      } else if (across && fixed_[other_at + x] == 0) {
+        line[x] = other.pixels[other_at + x] & kColor;
       }
     }
   }
@@ -1127,8 +1296,9 @@ bool Stitcher::InEnds(int row) const {
   return (row >= min_position_ && row < min_position_ + height_) || (row >= max_position_ && row < max_position_ + height_);
 }
 
-// Rows held near an end that the end has moved away from are final as they are.
+// Rows held near an end that the end has moved away from are final as they are, unless they wait for the picture.
 void Stitcher::Flush(int old_min, int old_max) {
+  if (Deferring()) return;
   const auto flush = [&](int first, int last) {
     std::vector<uint32_t> block;
     int start = 0;
@@ -1248,6 +1418,30 @@ int Stitcher::Cap(bool top) const {
   return 0;
 }
 
+// Per column, the one color it shows nearly all the way down in the screens at both ends, if it does, as the plain
+// inside of a bar along the side or the edge of a window: it runs on down the image where content was never seen.
+void Stitcher::Strips() {
+  constexpr int kSlack = config::kScrollPixelSlack;
+  std::vector<uint32_t> counts(static_cast<size_t>(width_), 0);
+  strip_.assign(static_cast<size_t>(width_), 0);
+  for (const End* end : {&top_, &bottom_}) {
+    for (int y = 0; y < height_; ++y) {
+      const uint32_t* pixels = end->pixels.data() + static_cast<size_t>(y) * width_;
+      for (int x = 0; x < width_; ++x) Majority(strip_[static_cast<size_t>(x)], counts[static_cast<size_t>(x)], pixels[x]);
+    }
+  }
+  std::fill(counts.begin(), counts.end(), 0u);
+  for (const End* end : {&top_, &bottom_}) {
+    for (int y = 0; y < height_; ++y) {
+      const uint32_t* pixels = end->pixels.data() + static_cast<size_t>(y) * width_;
+      for (int x = 0; x < width_; ++x) counts[static_cast<size_t>(x)] += Near(pixels[x], strip_[static_cast<size_t>(x)], kSlack) ? 1 : 0;
+    }
+  }
+  for (int x = 0; x < width_; ++x) {
+    if (static_cast<uint64_t>(counts[static_cast<size_t>(x)]) * 10 < static_cast<uint64_t>(height_) * 2 * 9) strip_[static_cast<size_t>(x)] = kNoTone;
+  }
+}
+
 // Draws the bar's plain track on a row of content.
 void Stitcher::Fill(uint32_t* line) const {
   if (!bar_ready_) return;
@@ -1260,6 +1454,7 @@ void Stitcher::Fill(uint32_t* line) const {
 // bottom end; what holds still; where content passed in front of it; and the background as it repeats.
 void Stitcher::Dump() const {
   const size_t pixels = static_cast<size_t>(width_) * height_;
+  TraceImage(L"start", start_.data(), width_, height_);
   TraceImage(L"top", top_.pixels.data(), width_, height_);
   TraceImage(L"bottom", bottom_.pixels.data(), width_, height_);
   std::vector<uint32_t> picture(pixels, 0);
@@ -1382,14 +1577,16 @@ void Stitcher::Finish() {
   Freeze(tracker_.ref(), position_, 0, height_);
   FindBar();
   Tracks();
-  Segment();
+  Segment(true, tracker_.ref());
+  Strips();
   Make(position_, position_ + height_);
+  if (textured_) Background(true);
   Trace("stitch: view %dx%d, %d scrolls, bands %d and %d, background %d, bar %d, edge %d, %d fixed things", width_, height_, moves_,
         top_band_, bottom_band_, textured_ ? 1 : 0, bar_, edge_, elements_);
   Trace("stitch: content came in front of what holds still again and again at %llu pixels, %llu unlike its commonest color",
         static_cast<unsigned long long>(texture_seen_), static_cast<unsigned long long>(texture_apart_));
   if (Tracing()) Dump();
-  // Everything held is final now, with each end painted on as the screen showed it there.
+  // Everything held is final now, with each end painted on as the screen showed it there, and the picture behind.
   std::vector<uint32_t> block;
   int start = 0;
   int rows = 0;
@@ -1397,35 +1594,25 @@ void Stitcher::Finish() {
     if (rows > 0) Send(start, block, rows, true);
     rows = 0;
   };
-  const auto emit = [&](int first, int last) {
-    for (int row = first; row < last; ++row) {
-      if (!Held(row)) {
-        send();
-        continue;
-      }
-      held_[static_cast<size_t>(row + row_base_)] = 0;
-      std::memcpy(line_.data(), made_.Row(row), static_cast<size_t>(width_) * 4);
-      Paint(row, line_.data());
-      if (rows == 0) {
-        block.clear();
-        start = row;
-      }
-      block.insert(block.end(), line_.begin(), line_.end());
-      ++rows;
+  for (int row = min_position_; row < max_position_ + height_; ++row) {
+    if (!Held(row) || rows >= 256) send();
+    if (!Held(row)) continue;
+    held_[static_cast<size_t>(row + row_base_)] = 0;
+    std::memcpy(line_.data(), made_.Row(row), static_cast<size_t>(width_) * 4);
+    Paint(row, line_.data());
+    if (rows == 0) {
+      block.clear();
+      start = row;
     }
-    send();
-  };
-  if (max_position_ < min_position_ + height_) {
-    emit(min_position_, max_position_ + height_);
-  } else {
-    emit(min_position_, min_position_ + height_);
-    emit(max_position_, max_position_ + height_);
+    block.insert(block.end(), line_.begin(), line_.end());
+    ++rows;
   }
+  send();
   truth_.Release(position_, position_ + height_);
   votes_.Release(position_, position_ + height_);
   backs_.Release(position_, position_ + height_);
-  made_.Release(min_position_, min_position_ + height_);
-  made_.Release(max_position_, max_position_ + height_);
+  sights_.Release(position_, position_ + height_);
+  made_.Release(min_position_, max_position_ + height_);
 }
 
 }  // namespace sstk

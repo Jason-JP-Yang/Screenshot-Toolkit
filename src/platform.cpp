@@ -43,8 +43,13 @@ bool OverlayVisibleToCapture() {
 }
 
 bool Tracing() {
-  static const bool enabled = EnvironmentFlag(L"SSTK_TRACE");
-  return enabled;
+  static const bool by_environment = EnvironmentFlag(L"SSTK_TRACE");
+  if (by_environment) return true;
+  wchar_t path[MAX_PATH + 32];
+  const DWORD length = GetTempPathW(MAX_PATH, path);
+  if (length == 0 || length >= MAX_PATH) return false;
+  wcscat_s(path, L"ScreenshotToolkit.trace");
+  return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
 }
 
 void TraceImage(const wchar_t* name, const uint32_t* pixels, int width, int height) {

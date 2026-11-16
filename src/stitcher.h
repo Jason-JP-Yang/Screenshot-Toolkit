@@ -13,7 +13,8 @@
 //   content behind it shows.
 // Within a view of each end, the image is that end's screen as it was, less what belongs at the other end. Content
 // that changes by itself, as a video does, is taken whole from the last reading that shows all of it. Rows within a
-// view of either end are held until the capture finishes, and all others are handed on as they leave the view.
+// view of either end are held until the capture finishes, and all others are handed on as they leave the view; over
+// a picture, every row is held, so that all of them show the one picture as finally known.
 // A scroll bar at the side runs down the whole image as its plain track, with the arrows at its two ends as the screen
 // showed them there; its thumb, which only says where the view was, is left out.
 #pragma once
@@ -99,15 +100,20 @@ class Stitcher {
   bool Anchored() const;
   bool Lively(size_t index) const;
   void Sort(const PixelView& ref, const PixelView& now, int shift, int place);
-  void Blur(const PixelView& ref, const PixelView& now, int place);
+  void Blur(const PixelView& ref, const PixelView& now);
   void Capture(End& end, const PixelView& frame, int place);
   void Freeze(const PixelView& ref, int place, int first, int last);
   void Make(int first, int last);
-  void Segment();
-  void Background();
+  bool Deferring() const;
+  void Segment(bool final, const PixelView& now);
+  void Background(bool ends);
+  void Strips();
   const End* Showing(int row) const;
   int TileRow(int row) const;
   void Compose(int row, uint32_t* out);
+  bool Through(size_t index, uint32_t color) const;
+  void Tally(const uint32_t* line);
+  void Page();
   void Blend(int row, uint32_t* out) const;
   void Render(int row, uint32_t* line) const;
   bool Consensus(int row, uint32_t* out) const;
@@ -150,12 +156,22 @@ class Stitcher {
   std::vector<uint16_t> odd_;    // Readings it changed by itself in.
   std::vector<uint32_t> wall_;   // What it mostly showed while holding still: the layer that holds still.
   std::vector<uint8_t> fixed_;   // The end what is fixed in front of the content there belongs at, if anything is.
-  std::vector<uint32_t> back_;   // The background behind the content, gaps filled, where there is one.
+  std::vector<uint32_t> back_;   // The background behind the content, gaps filled, where there is one,
+  bool back_final_ = false;      // as finally known.
+  std::vector<uint32_t> start_;  // The reading the capture began with, taken at rest.
 
   std::vector<uint32_t> column_true_;  // Per column: pixels seen to scroll, and pixels that changed by themselves.
   std::vector<uint32_t> column_odd_;
-  std::vector<uint32_t> backdrop_;     // Per column: its most common color, for content never seen clear.
-  std::vector<uint32_t> backdrop_count_;
+  // Of the content made, per coarse color: how much of it showed that, and the exact color most of that did. The
+  // fullest is the page's own color, which content never seen shows.
+  struct Shade {
+    uint64_t count = 0;
+    uint32_t color = 0;
+    uint32_t lead = 0;
+  };
+  std::vector<Shade> shades_;
+  uint32_t page_ = 0;
+  std::vector<uint32_t> strip_;  // Per column: the one color it shows nearly all the way down at both ends, if any.
   bool textured_ = false;    // Whether content scrolls over a picture that holds still behind it, as a chat's wallpaper.
   uint64_t texture_seen_ = 0;
   uint64_t texture_apart_ = 0;
@@ -175,7 +191,8 @@ class Stitcher {
   RowPlane truth_;   // Per pixel of a content row in view: what it last showed when seen to scroll, or taken whole.
   RowPlane votes_;   // Per pixel of a content row in view: what most of the clear places it passed showed.
   RowPlane backs_;   // Per pixel of a content row in view: how often it showed the background through it.
-  RowPlane made_;    // Rows made and held, near the ends.
+  RowPlane sights_;  // Per pixel of a content row in view: the row of the view it was first seen to scroll in, plus one.
+  RowPlane made_;    // Rows made and held: near the ends, and over a picture all of them, until the picture is known.
   std::vector<uint8_t> held_;    // Per content row: whether it is made and held.
   std::vector<uint32_t> tones_;  // Per content row made: its one color, if it has just one.
   int row_base_ = 0;
