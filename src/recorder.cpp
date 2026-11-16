@@ -5,8 +5,11 @@
 #include "stitcher.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <utility>
 
 namespace sstk {
@@ -15,11 +18,9 @@ namespace {
 
 constexpr double kSendInterval = 1.0 / 30.0;
 constexpr double kHoldReferenceSeconds = 1.5;
-
-PixelView Crop(const PixelView& view, const RECT& rect) {
-  return PixelView{view.data + static_cast<ptrdiff_t>(rect.top) * view.stride + static_cast<ptrdiff_t>(rect.left) * 4, static_cast<int>(rect.right - rect.left),
-                   static_cast<int>(rect.bottom - rect.top), view.stride};
-}
+constexpr uint32_t kQuietPixels = 24;
+constexpr int kHintSlack = 16;              // How far what moved may reach past an area the app reported and still be in it.
+constexpr size_t kMostWaiting = 16u << 20;  // Bytes of rows that may wait to be packed before the readings wait for them.
 
 // Screen pixels read into memory, reused from one reading to the next.
 class Grabber {
@@ -57,6 +58,10 @@ class Grabber {
   // Without CAPTUREBLT, so the pointer never flickers.
   bool Read(HDC screen, int x, int y) { return BitBlt(dc_, 0, 0, width_, height_, screen, x, y, SRCCOPY) != FALSE; }
 
+  void Fill(const PixelView& from) {
+    for (int y = 0; y < height_; ++y) std::memcpy(bits_ + static_cast<size_t>(y) * width_ * 4, from.data + static_cast<ptrdiff_t>(y) * from.stride, static_cast<size_t>(width_) * 4);
+  }
+
   PixelView view() const { return PixelView{bits_, width_, height_, width_ * 4}; }
 
   void Release() {
@@ -81,11 +86,73 @@ class Grabber {
   int height_ = 0;
 };
 
+// Packs finished rows into the long image on a thread of its own, so that reading the screen never waits for it,
+// short of too much piling up.
+class Packer {
+ public:
+  explicit Packer(LongImage* image) : image_(image), thread_([this] { Main(); }) {}
+  ~Packer() { Finish(); }
+  Packer(const Packer&) = delete;
+  Packer& operator=(const Packer&) = delete;
+
+  void Add(int first, int count, std::vector<uint32_t> pixels) {
+    std::unique_lock lock(mutex_);
+    room_.wait(lock, [&] { return waiting_ <= kMostWaiting; });
+    waiting_ += pixels.size() * 4;
+    blocks_.push_back(Block{first, count, std::move(pixels)});
+    lock.unlock();
+    work_.notify_one();
+  }
+
+  // Packs what is left, and ends the thread.
+  void Finish() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    work_.notify_one();
+    if (thread_.joinable()) thread_.join();
+  }
+
+ private:
+  struct Block {
+    int first = 0;
+    int count = 0;
+    std::vector<uint32_t> pixels;
+  };
+
+  void Main() {
+    std::unique_lock lock(mutex_);
+    for (;;) {
+      work_.wait(lock, [&] { return stop_ || !blocks_.empty(); });
+      if (blocks_.empty()) return;
+      Block block = std::move(blocks_.front());
+      blocks_.pop_front();
+      lock.unlock();
+      image_->Add(block.first, block.count, block.pixels.data());
+      const size_t bytes = block.pixels.size() * 4;
+      block.pixels = std::vector<uint32_t>{};
+      lock.lock();
+      waiting_ -= bytes;
+      room_.notify_all();
+    }
+  }
+
+  LongImage* image_;
+  std::mutex mutex_;
+  std::condition_variable work_;
+  std::condition_variable room_;
+  std::deque<Block> blocks_;
+  size_t waiting_ = 0;
+  bool stop_ = false;
+  std::thread thread_;
+};
+
 // One scrolling screenshot, stepped by the recorder's thread.
-class Session {
+class Session : private Stitcher::Sink {
  public:
   explicit Session(ScrollRequest request);
-  ~Session();
+  ~Session() override;
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
 
@@ -97,20 +164,25 @@ class Session {
   double Interval() const;
 
  private:
+  void Rows(int first, int count, std::vector<uint32_t> pixels, bool final) override;
+
   void StepWaiting(double now, POINT cursor);
   void StepLocked(double now, POINT cursor);
-  bool Lock(const ScrollPlan& plan, const PixelView& before, const PixelView& after, POINT local, double now);
+  bool FindArea(bool wheel, RECT* area, RECT* frame);
+  bool Lock(const RECT& area, const RECT& frame, int after, POINT local, double now);
   bool WheelFits(POINT point, double now);
   bool WindowStays() const;
   bool Grab(Grabber& grabber, const RECT& rect);
+  void ReadBars();
   void CheckMismatch(double now);
+  void Draw(const PixelView& rows, int first);
+  void DrawBars();
   void Send(bool locked);
   void End(bool early);
   void Post(std::unique_ptr<ScrollUpdate> update) const;
 
-  int ThumbFloor(int row) const { return kLongOrigin + static_cast<int>(std::floor((row - anchor_) * k_ + 1e-6)); }
-  int ThumbCeil(int row) const { return kLongOrigin + static_cast<int>(std::ceil((row - anchor_) * k_ - 1e-6)); }
-  Image ThumbRows(int changed_from, int changed_to, int* at) const;
+  int ThumbFloor(int row) const { return kLongOrigin + static_cast<int>(std::floor(row * k_ + 1e-6)); }
+  int ThumbCeil(int row) const { return kLongOrigin + static_cast<int>(std::ceil(row * k_ - 1e-6)); }
 
   ScrollRequest request_;
   HDC screen_ = nullptr;
@@ -125,28 +197,37 @@ class Session {
   double mismatch_since_ = 0.0;
   bool done_ = false;
 
-  // Before anything has moved: the last two readings of the whole window.
+  // Before anything has moved: the last two readings of the whole window, and what tells a scroll between them.
   Grabber grab_[2];
   int current_ = 0;
   bool have_before_ = false;
   bool seen_motion_ = false;
   double before_since_ = 0.0;
-  EdgeFrame before_;
-  EdgeFrame after_;
-  MotionFinder finder_;
-  Motion motion_;
+  Tracker finder_;
 
+  // Once the area is known, only it is read. The stitcher lines each reading up with the last one it kept, so the two
+  // take turns.
   bool locked_ = false;
   Stitcher stitcher_;
-  RECT follow_{};     // What is read from then on, in monitor pixels.
-  RECT area_{};       // The part of it the thumbnail shows, as first judged.
-  int view_top_ = 0;  // Its rows within the reading.
-  int view_bottom_ = 0;
-  int anchor_ = 0;    // The content row at the area's top when the capture started.
+  Grabber frames_[2];
+  int kept_ = 0;
+  RECT follow_{};  // The area, in monitor pixels. Content row 0 is its first row when the capture started.
   int limit_rows_ = 0;
   int thumb_width_ = 0;
-  int surface_width_ = 0;
   double k_ = 1.0;  // Thumbnail pixels per screen pixel.
+
+  // What the window shows right above and below the area: read as it is, and set on the two ends of the image.
+  RECT head_rect_{};  // Monitor pixels.
+  RECT tail_rect_{};
+  std::vector<uint32_t> head_;
+  std::vector<uint32_t> tail_;
+  int head_rows_ = 0;
+  int tail_rows_ = 0;
+
+  std::shared_ptr<LongImage> image_;
+  std::unique_ptr<Packer> packer_;
+  std::vector<ScrollPiece> pieces_;  // Thumbnail rows of finished rows, not sent yet.
+  bool view_changed_ = false;
 };
 
 Session::Session(ScrollRequest request)
@@ -158,6 +239,7 @@ Session::Session(ScrollRequest request)
 }
 
 Session::~Session() {
+  packer_.reset();
   if (screen_ != nullptr) ReleaseDC(nullptr, screen_);
 }
 
@@ -234,7 +316,88 @@ void Session::CheckMismatch(double now) {
   }
 }
 
-// What moved says what is being scrolled, whichever window part it is, and whatever its scroll bar looks like.
+// What moved says what is being scrolled. Of the areas the app reported as scrolling, it is the smallest one around
+// everything that moved: scrolling a page moves what is in a list inside it too, but reaches beyond the list.
+// `frame` is the area together with whatever the window shows above and below it across the same columns, as bars
+// that belong with it. Those are no part of what scrolls, and go on the ends of the image as they are.
+bool Session::FindArea(bool wheel, RECT* area, RECT* frame) {
+  const PixelView& reading = finder_.now();
+  const RECT whole{0, 0, reading.width, reading.height};
+  const auto within = [&](const std::vector<RECT>& reported) {
+    std::vector<RECT> rects;
+    for (RECT rect : reported) {
+      OffsetRect(&rect, -watch_.left, -watch_.top);
+      RECT inside{};
+      if (IntersectRect(&inside, &rect, &whole)) rects.push_back(inside);
+    }
+    return rects;
+  };
+  const std::vector<RECT> hints = within(request_.hints.areas);
+  const std::vector<RECT> frames = within(request_.hints.frames);
+  // Other things may change in the window at the same time, so where the whole of it shows no one shift, each area
+  // is looked at by itself, largest first.
+  Tracker::Match match;
+  bool sure = false;
+  bool found = finder_.Register(0, &match, &sure);
+  for (size_t i = 0; i < hints.size() && !found; ++i) {
+    if (finder_.Focus(hints[i]) > kQuietPixels) found = finder_.Register(0, &match, &sure);
+  }
+  if (!found || (!wheel && !sure)) {
+    finder_.Focus(whole);
+    return false;
+  }
+  finder_.Focus(whole);
+  const RECT box = finder_.MovedBox(match.shift);
+  Trace("scroll: waiting: shift %d explains %u of %u, moved %ld,%ld-%ld,%ld, wheel %d", match.shift, match.explained, match.compared, box.left, box.top, box.right, box.bottom, wheel);
+  if (box.right <= box.left) return false;
+  if (!wheel && box.bottom - box.top < static_cast<int>(config::kScrollAreaMinHeight * request_.scale)) return false;
+  const auto size = [](const RECT& rect) { return (rect.right - rect.left) * (rect.bottom - rect.top); };
+  const auto holds = [](const RECT& outer, const RECT& inner) {
+    return outer.left <= inner.left + kHintSlack && outer.top <= inner.top + kHintSlack && outer.right >= inner.right - kHintSlack && outer.bottom >= inner.bottom - kHintSlack;
+  };
+  const auto smallest = [&](const std::vector<RECT>& among, const RECT& first, const RECT& second) {
+    const RECT* least = nullptr;
+    for (const RECT& rect : among) {
+      if (holds(rect, first) && holds(rect, second) && (least == nullptr || size(rect) < size(*least))) least = &rect;
+    }
+    return least;
+  };
+  const RECT* chosen = smallest(hints, box, box);
+  if (chosen == nullptr) {
+    // What moved reaches beyond every area reported, as a ruler beside a document does. It is then the smallest part
+    // of the window around both what moved and the area most of it lies in.
+    const RECT* most = nullptr;
+    long shared = 0;
+    for (const RECT& hint : hints) {
+      RECT both{};
+      if (IntersectRect(&both, &hint, &box) && size(both) > shared) {
+        most = &hint;
+        shared = size(both);
+      }
+    }
+    if (most != nullptr && shared * 2 >= size(box)) chosen = smallest(frames, box, *most);
+  }
+  // What the app reports is the area, whole. Otherwise it is what moved, if that is worth following.
+  *area = chosen != nullptr ? *chosen : box;
+  *frame = *area;
+  if (chosen == nullptr && box.right - box.left < static_cast<int>(config::kScrollAreaMinWidth * request_.scale)) return false;
+  if (chosen != nullptr) {
+    // As wide as the area, give or take a scroll bar, a part of the window around it holds nothing beside it.
+    const int slack = static_cast<int>(std::lround(config::kScrollBarWidth * request_.scale));
+    for (const RECT& outer : frames) {
+      if (std::abs(outer.left - area->left) > slack || std::abs(outer.right - area->right) > slack || outer.top > area->top || outer.bottom < area->bottom) continue;
+      frame->left = std::min(frame->left, outer.left);
+      frame->right = std::max(frame->right, outer.right);
+      frame->top = std::min(frame->top, outer.top);
+      frame->bottom = std::max(frame->bottom, outer.bottom);
+    }
+    // The area takes the columns of the bars above and below it, so that the image is as wide all the way down.
+    area->left = frame->left;
+    area->right = frame->right;
+  }
+  return area->right - area->left >= Tracker::kSegment * 2 && area->bottom - area->top > Tracker::kMinOverlap * 2;
+}
+
 void Session::StepWaiting(double now, POINT cursor) {
   if (now - started_ >= config::kScrollStartSeconds) {
     End(false);
@@ -246,69 +409,78 @@ void Session::StepWaiting(double now, POINT cursor) {
     return;
   }
   const PixelView reading = grab_[slot].view();
-  after_.Build(reading);
   if (!have_before_) {
-    std::swap(before_, after_);
+    finder_.Reset(reading.width, reading.height);
+    finder_.SetRef(reading);
     current_ = slot;
     have_before_ = true;
     before_since_ = now;
     return;
   }
-  if (after_.SameAs(before_)) return;
+  if (finder_.Load(reading, RECT{0, 0, reading.width, reading.height}, INT_MAX, -1, kQuietPixels) <= kQuietPixels) return;
   last_change_ = now;
-  finder_.Analyze(before_, after_, 0, 0, motion_);
   const bool wheel = now - last_wheel_ < config::kScrollWheelActiveSeconds;
-  Trace("scroll: waiting: moved %d blurred %d shift %d, %d moving, wheel %d", motion_.moved, motion_.blurred, motion_.shift, motion_.moving, wheel);
-  if (motion_.moved && (wheel || !motion_.blurred)) {
-    const POINT local{cursor.x - request_.monitor.left - watch_.left, cursor.y - request_.monitor.top - watch_.top};
-    std::vector<RECT> hints = request_.areas;
-    for (RECT& hint : hints) OffsetRect(&hint, -watch_.left, -watch_.top);
-    const ScrollPlan plan = PlanScrollArea(before_, after_, motion_, local, wheel, request_.scale, hints);
-    if (plan.found) {
-      // Without a wheel to say so, one reading may be an animation. The next will tell, measured from the same place.
-      if (!wheel && !seen_motion_) {
-        seen_motion_ = true;
-        return;
-      }
-      if (!Lock(plan, grab_[current_].view(), reading, local, now)) End(true);
+  // Caught in motion, a reading says little, and the last settled one is held on to until the motion can be measured
+  // from it.
+  const bool widely = finder_.changed_rows() * 8 >= reading.height;
+  RECT area{};
+  RECT frame{};
+  if (FindArea(wheel, &area, &frame)) {
+    // Without a wheel to say so, one reading may be an animation. The next will tell, measured from the same place.
+    if (!wheel && !seen_motion_) {
+      seen_motion_ = true;
       return;
     }
+    const POINT local{cursor.x - request_.monitor.left - watch_.left - area.left, cursor.y - request_.monitor.top - watch_.top - area.top};
+    if (!Lock(area, frame, slot, local, now)) End(true);
+    return;
   }
   seen_motion_ = false;
-  // Caught in motion, a reading says little. The last sharp one is held on to until the motion can be measured from it.
-  const bool unplaced = !motion_.moved && !motion_.blurred && motion_.changed_energy > motion_.fixed_energy;
-  if ((unplaced || motion_.blurred) && now - before_since_ < kHoldReferenceSeconds) return;
-  std::swap(before_, after_);
+  if (widely && now - before_since_ < kHoldReferenceSeconds) return;
+  finder_.Promote();
   current_ = slot;
   before_since_ = now;
 }
 
-bool Session::Lock(const ScrollPlan& plan, const PixelView& before, const PixelView& after, POINT local, double now) {
-  follow_ = plan.rect;
+// Starts following the area, from the two readings of the whole window that showed it scroll: the one before, and
+// the one in `after`. They are let go one by one, as soon as what they hold of the area is copied.
+bool Session::Lock(const RECT& area, const RECT& frame, int after, POINT local, double now) {
+  finder_ = Tracker{};
+  follow_ = area;
   OffsetRect(&follow_, watch_.left, watch_.top);
-  const int width = follow_.right - follow_.left;
-  const int height = follow_.bottom - follow_.top;
+  const int width = area.right - area.left;
+  const int height = area.bottom - area.top;
   limit_rows_ = std::max(std::min(config::kScrollMaxHeight, config::kScrollMaxPixels / width), height);
-  const POINT pointer{local.x - plan.rect.left, local.y - plan.rect.top};
-  if (!stitcher_.Start(Crop(before, plan.rect), request_.scale, limit_rows_, plan.hinted, plan.box, pointer)) return false;
-  stitcher_.Feed(Crop(after, plan.rect), pointer);
-  const Stitcher::Crop crop = stitcher_.ViewCrop();
-  view_top_ = crop.top;
-  view_bottom_ = crop.bottom;
-  anchor_ = view_top_;
-  area_ = RECT{follow_.left + crop.left, follow_.top + view_top_, follow_.left + crop.right, follow_.top + view_bottom_};
-  const int area_width = area_.right - area_.left;
-  thumb_width_ = ThumbnailSize(RECT{0, 0, area_width, view_bottom_ - view_top_}, request_.scale).cx;
-  k_ = static_cast<double>(thumb_width_) / area_width;
-  surface_width_ = std::max(static_cast<int>(width * k_), thumb_width_);
+  head_rect_ = RECT{follow_.left, frame.top + watch_.top, follow_.right, follow_.top};
+  tail_rect_ = RECT{follow_.left, follow_.bottom, follow_.right, frame.bottom + watch_.top};
+  head_rows_ = head_rect_.bottom - head_rect_.top;
+  tail_rows_ = tail_rect_.bottom - tail_rect_.top;
+  const auto copy = [&](const PixelView& reading, int top, int rows, std::vector<uint32_t>& out) {
+    out.resize(static_cast<size_t>(width) * rows);
+    for (int y = 0; y < rows; ++y) std::memcpy(out.data() + static_cast<size_t>(y) * width, PixelRow(reading, top + y) + area.left, static_cast<size_t>(width) * 4);
+  };
+  const PixelView before = grab_[1 - after].view();
+  copy(before, frame.top, head_rows_, head_);
+  copy(before, area.bottom, tail_rows_, tail_);
+  if (!frames_[0].Ensure(screen_, width, height)) return false;
+  frames_[0].Fill(CropView(before, area));
+  grab_[1 - after].Release();
+  if (!frames_[1].Ensure(screen_, width, height)) return false;
+  frames_[1].Fill(CropView(grab_[after].view(), area));
+  grab_[after].Release();
+
+  thumb_width_ = ThumbnailSize(RECT{0, 0, width, head_rows_ + height + tail_rows_}, request_.scale).cx;
+  k_ = static_cast<double>(thumb_width_) / width;
+  image_ = std::make_shared<LongImage>(width);
+  packer_ = std::make_unique<Packer>(image_.get());
+  if (!stitcher_.Start(frames_[0].view(), request_.scale, limit_rows_, this)) return false;
+  stitcher_.Feed(frames_[1].view(), local);
+  kept_ = stitcher_.kept() ? 1 : 0;
   locked_ = true;
+  view_changed_ = true;
   last_scroll_ = now;
   last_change_ = now;
-  Trace("scroll: following %dx%d at %ld,%ld%s, showing %d columns from %d and rows %d to %d, shift %d, %d moving cells", width, height, follow_.left, follow_.top, plan.hinted ? " as reported" : "",
-        area_width, crop.left, view_top_, view_bottom_, motion_.shift, motion_.moving);
-  grab_[1].Release();
-  before_ = EdgeFrame{};
-  after_ = EdgeFrame{};
+  Trace("scroll: following %dx%d at %ld,%ld, with %d rows above and %d below", width, height, follow_.left, follow_.top, head_rows_, tail_rows_);
   Send(true);
   return true;
 }
@@ -318,12 +490,18 @@ void Session::StepLocked(double now, POINT cursor) {
     End(false);
     return;
   }
-  if (!Grab(grab_[0], follow_)) {
+  const int slot = 1 - kept_;
+  if (!Grab(frames_[slot], follow_)) {
     End(true);
     return;
   }
   const POINT local{cursor.x - request_.monitor.left - follow_.left, cursor.y - request_.monitor.top - follow_.top};
-  switch (stitcher_.Feed(grab_[0].view(), local)) {
+  const Stitcher::Step step = stitcher_.Feed(frames_[slot].view(), local);
+  if (stitcher_.kept()) {
+    kept_ = slot;
+    view_changed_ = true;
+  }
+  switch (step) {
     case Stitcher::Step::kSame:
       mismatch_since_ = 0.0;
       break;
@@ -349,27 +527,50 @@ void Session::StepLocked(double now, POINT cursor) {
       if (done_) return;
       break;
   }
-  if (now - last_send_ >= kSendInterval) Send(false);
+  // Nothing new to show is nothing to send, and nothing for the screen to draw again.
+  if ((view_changed_ || !pieces_.empty()) && now - last_send_ >= kSendInterval) Send(false);
   if (stitcher_.grown() + stitcher_.height() >= limit_rows_) {
     Trace("scroll: reached the longest a capture may be");
     End(false);
   }
 }
 
-Image Session::ThumbRows(int changed_from, int changed_to, int* at) const {
-  const int held_first = stitcher_.first_row();
-  const int held_last = stitcher_.last_row();
-  const int first = std::max({ThumbFloor(changed_from), ThumbCeil(held_first), 0});
-  const int last = std::min({ThumbCeil(changed_to), ThumbFloor(held_last), kLongRows});
-  *at = first;
-  if (last <= first) return Image();
-  // The image as it stands, fixed parts and all, only for the rows these thumbnail rows draw on.
-  const double top = (first - kLongOrigin) / k_ + anchor_;
-  const double bottom = (last - kLongOrigin) / k_ + anchor_;
-  const int from = std::max(static_cast<int>(std::floor(top)), held_first);
-  const int to = std::min(static_cast<int>(std::ceil(bottom)), held_last);
-  if (to <= from) return Image();
-  return ResampleArea(stitcher_.Composed(from, to), 0.0, top - from, surface_width_ / k_, bottom - from, surface_width_, last - first);
+// Rows from the stitcher: drawn small for the thumbnail, and handed on to be packed once final.
+void Session::Rows(int first, int count, std::vector<uint32_t> pixels, bool final) {
+  Draw(PixelView{reinterpret_cast<const uint8_t*>(pixels.data()), stitcher_.width(), count, stitcher_.width() * 4}, first);
+  if (final) packer_->Add(first, count, std::move(pixels));
+}
+
+// Thumbnail rows for rows of the image, the first of them content row `first`. Thumbnail rows these rows only reach
+// into are drawn from what is here of them, and again from the rest when that comes.
+void Session::Draw(const PixelView& rows, int first) {
+  const int from = std::max(ThumbFloor(first), 0);
+  const int to = std::min(ThumbCeil(first + rows.height), kLongRows);
+  if (to <= from || rows.height <= 0) return;
+  const double top = std::max((from - kLongOrigin) / k_ - first, 0.0);
+  const double bottom = std::min((to - kLongOrigin) / k_ - first, static_cast<double>(rows.height));
+  Image image = ResampleArea(rows, 0.0, top, rows.width, bottom, thumb_width_, to - from);
+  if (image) pieces_.push_back(ScrollPiece{from, std::move(image)});
+}
+
+void Session::DrawBars() {
+  const int width = stitcher_.width();
+  if (head_rows_ > 0) Draw(PixelView{reinterpret_cast<const uint8_t*>(head_.data()), width, head_rows_, width * 4}, stitcher_.first_row() - head_rows_);
+  if (tail_rows_ > 0) Draw(PixelView{reinterpret_cast<const uint8_t*>(tail_.data()), width, tail_rows_, width * 4}, stitcher_.last_row());
+}
+
+// Reads the bar beside the end of the image the view rests at again, as it is now. The other stays as it was when the
+// capture began, beside the end the view was at then: what shows there may be content that has scrolled on since.
+void Session::ReadBars() {
+  Grabber bar;
+  const auto read = [&](const RECT& rect, int rows, std::vector<uint32_t>& out) {
+    RECT local = rect;
+    if (rows <= 0 || !Grab(bar, local)) return;
+    const PixelView view = bar.view();
+    for (int y = 0; y < rows; ++y) std::memcpy(out.data() + static_cast<size_t>(y) * view.width, PixelRow(view, y), static_cast<size_t>(view.width) * 4);
+  };
+  if (stitcher_.position() == stitcher_.first_row()) read(head_rect_, head_rows_, head_);
+  if (stitcher_.position() + stitcher_.height() == stitcher_.last_row()) read(tail_rect_, tail_rows_, tail_);
 }
 
 void Session::Post(std::unique_ptr<ScrollUpdate> update) const {
@@ -380,51 +581,60 @@ void Session::Send(bool locked) {
   auto update = std::make_unique<ScrollUpdate>();
   update->session = request_.session;
   update->locked = locked;
-  update->area = area_;
+  update->area = follow_;
   update->thumb_width = thumb_width_;
   update->surface_left = follow_.left;
-  update->surface_width = surface_width_;
-  int from = 0;
-  int to = 0;
-  if (stitcher_.TakeChanges(&from, &to)) update->rows = ThumbRows(from, to, &update->at);
-  update->content_top = ThumbCeil(stitcher_.first_row() + view_top_);
-  update->content_bottom = ThumbFloor(stitcher_.last_row() - stitcher_.height() + view_bottom_);
-  update->view_bottom = std::clamp(ThumbFloor(stitcher_.position() + view_bottom_), update->content_top, update->content_bottom);
+  update->surface_width = thumb_width_;
+  // The rows not made yet show as they would be made now, with whatever is fixed where the image will have it.
+  if (view_changed_) stitcher_.Preview();
+  DrawBars();
+  update->pieces = std::move(pieces_);
+  pieces_.clear();
+  view_changed_ = false;
+  update->content_top = ThumbCeil(stitcher_.first_row() - head_rows_);
+  update->content_bottom = ThumbFloor(stitcher_.last_row() + tail_rows_);
+  update->view_bottom = std::clamp(ThumbFloor(stitcher_.position() + stitcher_.height() + tail_rows_), update->content_top, update->content_bottom);
   last_send_ = NowSeconds();
   Post(std::move(update));
 }
 
 void Session::End(bool early) {
   done_ = true;
-  if (locked_) {
-    stitcher_.Finish();
-    Send(false);
-    Trace("scroll: rows %d to %d of the view follow the scroll, fixed background %d", stitcher_.follow_first(), stitcher_.follow_last(), stitcher_.fixed_background());
-  }
   auto update = std::make_unique<ScrollUpdate>();
   update->session = request_.session;
   update->finished = true;
-  const int grown = locked_ ? stitcher_.span() : 0;
-  // An early end still keeps a capture that has grown far enough to be worth having.
-  if (grown > 0 && (!early || grown >= stitcher_.height() * config::kScrollPartialShare)) {
-    const Stitcher::Crop crop = stitcher_.FinalCrop();
-    const int width = crop.right - crop.left;
-    const int rows = crop.bottom - crop.top;
-    auto image = std::make_shared<Image>(Image::Allocate(width, rows));
-    if (*image) {
-      stitcher_.Copy(crop, image->data(), image->stride());
+  int grown = 0;
+  if (locked_) {
+    stitcher_.Finish();
+    // The ends are settled only now.
+    const int top = stitcher_.first_row();
+    const int bottom = stitcher_.last_row();
+    grown = bottom - top - stitcher_.height();
+    // An early end still keeps a capture that has grown far enough to be worth having.
+    const bool keep = grown > 0 && (!early || grown >= stitcher_.height() * config::kScrollPartialShare);
+    if (keep) {
+      ReadBars();
+      DrawBars();
+      if (head_rows_ > 0) packer_->Add(top - head_rows_, head_rows_, std::move(head_));
+      if (tail_rows_ > 0) packer_->Add(bottom, tail_rows_, std::move(tail_));
+      packer_->Finish();
+      image_->Seal(top - head_rows_, bottom + tail_rows_, 0, stitcher_.width());
+      Trace("scroll: %dx%d packed into %.1f MB", image_->width(), image_->height(), image_->packed_bytes() / 1048576.0);
       update->outcome = early ? ScrollOutcome::kPartial : ScrollOutcome::kSucceeded;
-      update->image = std::move(image);
-      update->area = RECT{follow_.left + crop.left, area_.top, follow_.left + crop.right, area_.bottom};
-      const int top = area_.top + crop.top - anchor_;
-      update->image_rect = RECT{update->area.left, top, update->area.right, top + rows};
+      update->image = image_;
+      update->area = follow_;
+      update->image_rect = RECT{follow_.left, follow_.top + top - head_rows_, follow_.right, follow_.top + bottom + tail_rows_};
       update->thumb_width = thumb_width_;
       update->surface_left = follow_.left;
-      update->surface_width = surface_width_;
-      update->content_top = ThumbCeil(crop.top);
-      update->content_bottom = ThumbFloor(crop.bottom);
+      update->surface_width = thumb_width_;
+      update->pieces = std::move(pieces_);
+      update->content_top = ThumbCeil(top - head_rows_);
+      update->content_bottom = ThumbFloor(bottom + tail_rows_);
       update->view_bottom = update->content_top;
+    } else {
+      packer_->Finish();
     }
+    pieces_.clear();
   }
   Trace("scroll: finished %s with outcome %d, %d rows grown", early ? "early" : "normally", static_cast<int>(update->outcome), grown);
   Post(std::move(update));

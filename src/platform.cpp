@@ -2,8 +2,12 @@
 
 #include "config/core.h"
 
+#include <wincodec.h>
+
 #include <cstdarg>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace sstk {
 
@@ -38,9 +42,49 @@ bool OverlayVisibleToCapture() {
   return visible;
 }
 
-void Trace(const char* format, ...) {
+bool Tracing() {
   static const bool enabled = EnvironmentFlag(L"SSTK_TRACE");
-  if (!enabled) return;
+  return enabled;
+}
+
+void TraceImage(const wchar_t* name, const uint32_t* pixels, int width, int height) {
+  if (!Tracing() || pixels == nullptr || width <= 0 || height <= 0) return;
+  wchar_t directory[MAX_PATH + 1];
+  const DWORD length = GetTempPathW(MAX_PATH, directory);
+  if (length == 0 || length >= MAX_PATH) return;
+  const std::wstring path = std::wstring(directory) + L"ScreenshotToolkit-" + name + L".png";
+  // PNG takes no 32-bit pixels without alpha, and the top byte here says nothing.
+  const UINT stride = static_cast<UINT>(width) * 3;
+  std::vector<BYTE> bytes(static_cast<size_t>(stride) * height);
+  for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) {
+    bytes[i * 3] = static_cast<BYTE>(pixels[i]);
+    bytes[i * 3 + 1] = static_cast<BYTE>(pixels[i] >> 8);
+    bytes[i * 3 + 2] = static_cast<BYTE>(pixels[i] >> 16);
+  }
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  {
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> options;
+    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    const bool written =
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
+        SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+        SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) && SUCCEEDED(encoder->CreateNewFrame(&frame, &options)) &&
+        SUCCEEDED(frame->Initialize(options.Get())) && SUCCEEDED(frame->SetSize(static_cast<UINT>(width), static_cast<UINT>(height))) &&
+        SUCCEEDED(frame->SetPixelFormat(&format)) && IsEqualGUID(format, GUID_WICPixelFormat24bppBGR) &&
+        SUCCEEDED(frame->WritePixels(static_cast<UINT>(height), stride, static_cast<UINT>(bytes.size()), bytes.data())) &&
+        SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+    if (!written) Trace("trace: could not write %ls", path.c_str());
+  }
+  if (SUCCEEDED(com)) CoUninitialize();
+}
+
+void Trace(const char* format, ...) {
+  if (!Tracing()) return;
 
   char line[512];
   int prefix = snprintf(line, sizeof(line), "%12.4f ", NowSeconds());

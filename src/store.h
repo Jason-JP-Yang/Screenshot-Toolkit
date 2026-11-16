@@ -2,6 +2,7 @@
 #pragma once
 
 #include "image.h"
+#include "longimage.h"
 #include "platform.h"
 
 #include <wincodec.h>
@@ -21,8 +22,7 @@ namespace sstk {
 struct Shot {
   std::shared_ptr<const Image> frame;  // Null once archived; see Store::ReleaseFrame.
   std::vector<uint8_t> archive;        // Lossless copy of the whole frame, far smaller than the raw pixels.
-  std::shared_ptr<const Image> long_frame;  // The scrolling screenshot once taken, kept the same way.
-  std::vector<uint8_t> long_archive;
+  std::shared_ptr<const LongImage> long_image;  // The scrolling screenshot once taken, packed from the start.
   SYSTEMTIME local_time{};
   std::wstring path;
   RECT region{};
@@ -45,7 +45,12 @@ class Store {
   void Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long = false);
 
   // Gives the shot its scrolling screenshot.
-  void SetLongFrame(const std::shared_ptr<Shot>& shot, std::shared_ptr<const Image> image);
+  void SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image);
+
+  // A scrolling screenshot goes on the clipboard as a promise, since its bitmap is far larger than everything else
+  // this program holds. This makes the bitmap when something asks for it, and the other forgets the promise.
+  HGLOBAL RenderLongClipboard();
+  void ForgetLongClipboard();
 
   // Blocks until the shot's latest selection is on disk, then returns its path.
   std::wstring WaitUntilSaved(const std::shared_ptr<Shot>& shot);
@@ -54,8 +59,8 @@ class Store {
   // whether the shot is the one this program last meant to put on the clipboard.
   bool Discard(const std::shared_ptr<Shot>& shot);
 
-  // Frees the raw pixels of a shot, and of its scrolling screenshot, once they are safely archived and nothing is
-  // still using them. Returns whether the shot is free of raw pixels now. Later crops decode the archive on the worker.
+  // Frees the raw pixels of a shot once they are safely archived and nothing is still using them. Returns whether the
+  // shot is free of raw pixels now. Later crops decode the archive on the worker.
   bool ReleaseFrame(const std::shared_ptr<Shot>& shot);
 
   // Returns the shot's raw pixels, restoring them if released. Blocks for the short time decoding takes.
@@ -72,9 +77,11 @@ class Store {
 
  private:
   void WorkerMain();
-  std::shared_ptr<const Image> FrameForWork(const std::shared_ptr<Shot>& shot, bool in_long);
+  std::shared_ptr<const Image> FrameForWork(const std::shared_ptr<Shot>& shot);
   void PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence);
-  bool SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame, const RECT& region, bool in_long);
+  bool SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame, const RECT& region);
+  bool SaveLongToDisk(Shot& shot, const LongImage& image);
+  bool EnsureCodec();
   std::shared_ptr<const Image> DecodeArchive(const std::vector<uint8_t>& archive);
 
   HWND controller_ = nullptr;
@@ -99,7 +106,7 @@ class Store {
   // Decoded on demand for crops of a released shot, and kept until the worker runs out of work.
   std::shared_ptr<const Image> work_frame_;
   const Shot* work_frame_shot_ = nullptr;
-  bool work_frame_in_long_ = false;
+  std::shared_ptr<const LongImage> clipboard_long_;  // What the promise on the clipboard is made good from.
 };
 
 }  // namespace sstk

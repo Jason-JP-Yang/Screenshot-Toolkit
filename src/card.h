@@ -69,8 +69,8 @@ class Card {
 
   // Adds the option of a scrolling screenshot of the app window, once its scrollable areas are known. It shows the
   // app window until the screenshot starts. Returns false if there is no such window among the options.
-  bool OfferScroll(std::vector<RECT> areas);
-  const std::vector<RECT>& scroll_areas() const { return scroll_areas_; }
+  bool OfferScroll(ScrollHints hints);
+  const ScrollHints& scroll_hints() const { return scroll_hints_; }
   HWND app() const { return app_; }
 
   // A scrolling screenshot growing in place of the selected scroll option: started, extended, and then kept as
@@ -195,7 +195,7 @@ class Card {
 
   HWND app_ = nullptr;
   RECT app_rect_{};
-  std::vector<RECT> scroll_areas_;
+  ScrollHints scroll_hints_;
   int scroll_source_ = -1;
   int before_scroll_ = 0;  // The selection to go back to if the scrolling screenshot fails.
   Long long_;

@@ -56,23 +56,16 @@ inline constexpr double kScrollActiveHold = 0.6;
 inline constexpr int kScrollMaxHeight = 30000;
 inline constexpr int kScrollMaxPixels = 90'000'000;
 
-// How readings are compared, on an edge map whose values run to 127 either way, in cells of 16 by 16 pixels.
-inline constexpr int kScrollEdgeDeadZone = 6;           // Steps this small are shade rather than edges.
-inline constexpr uint32_t kScrollBlankCell = 160;       // A cell with less edge energy than this has nothing to compare.
-inline constexpr float kScrollFollowShare = 0.4f;       // Differences within this share of a cell's energy still match
-inline constexpr float kScrollStayShare = 0.2f;         // the scroll, or say it stayed where it was.
-inline constexpr float kScrollLooseShare = 0.62f;       // Blurred by motion, this is still enough to place a reading.
-inline constexpr float kScrollCleanShare = 0.22f;       // A reading this close to the rows held is sharp enough to be read pixel by pixel.
+// How readings are compared.
 inline constexpr int kScrollPixelSlack = 6;             // Per color channel, for two readings of a pixel to show the same.
-inline constexpr int kScrollMinMovingCells = 3;         // Cells that must follow a shift for it to count as a scroll,
-inline constexpr int kScrollMinMovingCellsAlone = 12;   // and with no wheel turning.
-inline constexpr double kScrollMovingShare = 0.35;      // Of the cells that do not stay put, how many must follow it.
 inline constexpr double kScrollReplacedShare = 0.9;     // Changes across this much of an area replace it, rather than animate in it.
-inline constexpr double kScrollBarrierShare = 0.12;     // Of the rows compared, how many a column must hold still to count as a panel.
+inline constexpr int kScrollMinStep = 24;               // Rows a view must move, or stop short of, before it is read: slow and fast scrolls then read alike.
 
 // Device independent pixels.
 inline constexpr float kScrollPointerBand = 56.0f;      // Above and below the pointer, where hover effects are taken for granted.
 inline constexpr float kScrollBarWidth = 24.0f;         // The widest a scroll bar may be.
+inline constexpr float kScrollClusterGap = 48.0f;       // Fixed things nearer than this to each other are one cluster.
+inline constexpr float kScrollBottomReach = 64.0f;      // A cluster reaching this near the bottom of the view sits at the bottom.
 inline constexpr float kScrollAreaMinWidth = 120.0f;    // The smallest area worth following.
 inline constexpr float kScrollAreaMinHeight = 96.0f;
 inline constexpr float kScrollHiddenMinHeight = 48.0f;  // How much must be hidden to say content overflows without a scroller.

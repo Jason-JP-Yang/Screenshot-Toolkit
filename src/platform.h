@@ -42,6 +42,12 @@ bool OverlayVisibleToCapture();
 // Appends a line to %TEMP%\ScreenshotToolkit.log when SSTK_TRACE is set. No-op otherwise.
 void Trace(const char* format, ...);
 
+// Whether SSTK_TRACE is set.
+bool Tracing();
+
+// Writes BGRX pixels as %TEMP%\ScreenshotToolkit-<name>.png when SSTK_TRACE is set. No-op otherwise.
+void TraceImage(const wchar_t* name, const uint32_t* pixels, int width, int height);
+
 // Asks Windows never to apply EcoQoS throttling, which would add wake-up latency to a background process.
 void DisablePowerThrottling();
 

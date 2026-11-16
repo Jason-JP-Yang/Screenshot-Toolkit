@@ -37,6 +37,8 @@ struct App {
   Store store;
   std::unique_ptr<Overlay> overlay;
   HGLOBAL pending_clipboard = nullptr;
+  bool pending_promise = false;  // A bitmap to be made only when something asks for it, as for a scrolling screenshot.
+  bool installing_clipboard = false;
   uint64_t pending_clipboard_sequence = 0;
   int clipboard_attempts = 0;
   DWORD installed_clipboard_sequence = 0;
@@ -71,11 +73,12 @@ void DropPendingClipboard(App& app) {
     GlobalFree(app.pending_clipboard);
     app.pending_clipboard = nullptr;
   }
+  app.pending_promise = false;
   KillTimer(app.controller, kClipboardTimer);
 }
 
 void InstallPendingClipboard(App& app) {
-  if (app.pending_clipboard == nullptr) return;
+  if (app.pending_clipboard == nullptr && !app.pending_promise) return;
   if (app.pending_clipboard_sequence != app.store.latest_clipboard_sequence()) {
     DropPendingClipboard(app);
     return;
@@ -90,7 +93,11 @@ void InstallPendingClipboard(App& app) {
     }
     return;
   }
+  // Emptying it tells this window that what it had there is gone, which is not so for what it is about to put.
+  app.installing_clipboard = true;
   EmptyClipboard();
+  app.installing_clipboard = false;
+  // With no bitmap, the format alone goes on the clipboard, and WM_RENDERFORMAT comes for the rest.
   if (SetClipboardData(CF_DIB, app.pending_clipboard) != nullptr) {
     app.pending_clipboard = nullptr;  // The system owns the memory from here on.
   }
@@ -139,9 +146,19 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
       DropPendingClipboard(*app);
       app->clearing_clipboard = false;
       app->pending_clipboard = reinterpret_cast<HGLOBAL>(lparam);
+      app->pending_promise = lparam == 0;
       app->pending_clipboard_sequence = static_cast<uint64_t>(wparam);
       app->clipboard_attempts = 0;
       InstallPendingClipboard(*app);
+      return 0;
+    case WM_RENDERFORMAT:
+      // Something asks for the bitmap promised. The clipboard is open already, and takes it as it is.
+      if (wparam == CF_DIB) {
+        if (HGLOBAL dib = app->store.RenderLongClipboard(); dib != nullptr && SetClipboardData(CF_DIB, dib) == nullptr) GlobalFree(dib);
+      }
+      return 0;
+    case WM_DESTROYCLIPBOARD:
+      if (!app->installing_clipboard) app->store.ForgetLongClipboard();
       return 0;
     case kMsgClearClipboard:
       app->clipboard_attempts = 0;

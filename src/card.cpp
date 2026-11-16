@@ -393,17 +393,17 @@ RectF Card::SourceRect() const {
                static_cast<float>(rect.bottom)};
 }
 
-bool Card::OfferScroll(std::vector<RECT> areas) {
+bool Card::OfferScroll(ScrollHints hints) {
   if (app_ == nullptr) return false;
   if (scroll_source_ >= 0) {
     // A later look at the app saw more.
-    if (regions_.back().kind == RegionKind::kScroll) scroll_areas_ = std::move(areas);
+    if (regions_.back().kind == RegionKind::kScroll) scroll_hints_ = std::move(hints);
     return false;
   }
   for (size_t i = 0; i < regions_.size(); ++i) {
     if (!NearlyEqual(regions_[i].rect, app_rect_)) continue;
     scroll_source_ = static_cast<int>(i);
-    scroll_areas_ = std::move(areas);
+    scroll_hints_ = std::move(hints);
     regions_.push_back(Region{RegionKind::kScroll, regions_[i].rect});
     crisp_surfaces_.resize(regions_.size());
     crisp_sizes_.resize(regions_.size());
@@ -436,7 +436,9 @@ bool Card::BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& n
 
 void Card::DrawLong(const ScrollUpdate& update) {
   if (!long_.surface) return;
-  if (update.rows) compositor_.Upload(long_.surface.Get(), POINT{0, update.at}, update.rows);
+  for (const ScrollPiece& piece : update.pieces) {
+    if (piece.rows) compositor_.Upload(long_.surface.Get(), POINT{0, piece.at}, piece.rows);
+  }
   SetLongView(update.content_top, update.content_bottom, update.view_bottom);
 }
 
@@ -444,16 +446,18 @@ void Card::KeepLong(const ScrollUpdate& update) {
   const int index = static_cast<int>(regions_.size()) - 1;
   regions_[index].kind = RegionKind::kLong;
   long_size_ = SIZE{update.image->width(), update.image->height()};
-  // What moved over the whole capture may say more than the first scroll did about which columns belong to it.
   long_.area = update.area;
   long_.view_width = std::max(static_cast<int>(std::lround((update.area.right - update.area.left) * long_.scale)), 1);
-  // Finished, it shows from the top, as the image does when opened.
+  // The last rows come with the image. Finished, it shows from the top, as the image does when opened.
+  for (const ScrollPiece& piece : update.pieces) {
+    if (piece.rows && long_.surface) compositor_.Upload(long_.surface.Get(), POINT{0, piece.at}, piece.rows);
+  }
   SetLongView(update.content_top, update.content_bottom, update.content_top);
   const double stretch = 1.0 / long_.scale;
   const double skipped = update.image_rect.top - long_.area.top;
   const double top = (long_.view_top - kLongOrigin) * stretch - skipped;
   const double bottom = (long_.view_bottom - kLongOrigin) * stretch - skipped;
-  long_.pixels = ResampleArea(*update.image, 0.0, top, update.image->width(), bottom, long_.view_width, long_.view_bottom - long_.view_top);
+  long_.pixels = update.image->Resample(top, bottom, long_.view_width, long_.view_bottom - long_.view_top);
 }
 
 void Card::DropLong(const TimeBase& now) {
@@ -532,7 +536,7 @@ void Card::Tick(double now, Store& store) {
     }
   }
   // The thumbnails exist from here on, and later crops can come from the archive.
-  if (!crisp_surfaces_.empty() && (shot_->frame || shot_->long_frame)) store.ReleaseFrame(shot_);
+  if (!crisp_surfaces_.empty() && shot_->frame) store.ReleaseFrame(shot_);
   for (auto it = crisp_layers_.begin(); it != crisp_layers_.end();) {
     if ((*it)->retire_at != 0.0 && now >= (*it)->retire_at) {
       plane_scaled_->RemoveVisual((*it)->visual.Get());

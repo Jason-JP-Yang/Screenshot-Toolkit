@@ -21,6 +21,7 @@ add_executable(ScreenshotToolkit WIN32
   src/hook.cpp
   src/image.cpp
   src/install.cpp
+  src/longimage.cpp
   src/motion.cpp
   src/overlay.cpp
   src/platform.cpp
@@ -30,6 +31,7 @@ add_executable(ScreenshotToolkit WIN32
   src/sprite.cpp
   src/stitcher.cpp
   src/store.cpp
+  src/tracker.cpp
   res/app.rc
 )
 
@@ -52,13 +54,13 @@ target_link_options(ScreenshotToolkit PRIVATE
   /DELAYLOAD:d3d11.dll /DELAYLOAD:dcomp.dll /DELAYLOAD:dxgi.dll
   /DELAYLOAD:ole32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:windowscodecs.dll
   /DELAYLOAD:dwmapi.dll /DELAYLOAD:psapi.dll
-  /DELAYLOAD:wtsapi32.dll /DELAYLOAD:userenv.dll
+  /DELAYLOAD:wtsapi32.dll /DELAYLOAD:userenv.dll /DELAYLOAD:cabinet.dll
   $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
 )
 
 target_link_libraries(ScreenshotToolkit PRIVATE
   user32 gdi32 advapi32 ole32 shell32 uuid
-  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv delayimp
+  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv cabinet delayimp
 )
 
 # Publishes the built program to release/<version>, which is not versioned by git.

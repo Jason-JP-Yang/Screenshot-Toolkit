@@ -23,6 +23,7 @@ namespace {
 constexpr int kMaxTreeDepth = 256;
 constexpr size_t kMaxSiblingsCompared = 64;
 constexpr size_t kMaxVerified = 12;
+constexpr size_t kMaxEnclosed = 4;
 constexpr int kMaxAncestorSteps = 160;
 constexpr int kTextProbe = 2048;
 // Where to look for an area on screen, as shares of its width and height, center first.
@@ -137,14 +138,20 @@ class Look {
       FindText();
       Settle();
     }
+    // An app that describes nothing of its content still has windows that say how far they scroll.
+    if (!overflows_) {
+      FindWindows();
+      Settle();
+    }
   }
 
   bool overflows() const { return overflows_; }
 
-  std::vector<RECT> TakeAreas(const RECT& monitor) {
+  ScrollHints TakeHints(const RECT& monitor) {
     std::sort(areas_.begin(), areas_.end(), [](const RECT& a, const RECT& b) { return Area(a) > Area(b); });
     for (RECT& area : areas_) OffsetRect(&area, -monitor.left, -monitor.top);
-    return std::move(areas_);
+    for (RECT& frame : frames_) OffsetRect(&frame, -monitor.left, -monitor.top);
+    return ScrollHints{std::move(areas_), std::move(frames_)};
   }
 
  private:
@@ -154,6 +161,10 @@ class Look {
     if (FAILED(automation_->get_RawViewWalker(&walker_)) || !walker_) return false;
     if (FAILED(automation_->CreateCacheRequest(&identity_)) || FAILED(identity_->put_TreeFilter(raw_.Get())) ||
         FAILED(identity_->AddProperty(UIA_RuntimeIdPropertyId))) {
+      return false;
+    }
+    if (FAILED(automation_->CreateCacheRequest(&placed_)) || FAILED(placed_->put_TreeFilter(raw_.Get())) ||
+        FAILED(placed_->AddProperty(UIA_RuntimeIdPropertyId)) || FAILED(placed_->AddProperty(UIA_BoundingRectanglePropertyId))) {
       return false;
     }
     root_id_ = ReadRuntimeId(root_.Get());
@@ -353,6 +364,60 @@ class Look {
     }
   }
 
+  // A window that keeps a range to scroll through longer than the page it shows, itself or through a scroll bar
+  // window of its own, holds more than it shows. Its own word for it, where it has no other.
+  void FindWindows() {
+    EnumChildWindows(
+        window_,
+        [](HWND child, LPARAM self) -> BOOL {
+          reinterpret_cast<Look*>(self)->ConsiderWindow(child);
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(this));
+  }
+
+  void ConsiderWindow(HWND child) {
+    if (!IsWindowVisible(child)) return;
+    wchar_t name[16]{};
+    GetClassNameW(child, name, static_cast<int>(std::size(name)));
+    const LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
+    const bool bar = _wcsicmp(name, L"ScrollBar") == 0;
+    if (bar ? (style & SBS_VERT) == 0 || !IsWindowEnabled(child) : (style & WS_VSCROLL) == 0) return;
+    // A range a window was only born with, and has no use for, says nothing.
+    SCROLLBARINFO state{sizeof(state)};
+    if (!bar && (!GetScrollBarInfo(child, OBJID_VSCROLL, &state) || (state.rgstate[0] & (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_UNAVAILABLE)) != 0)) return;
+    SCROLLINFO info{sizeof(info), SIF_RANGE | SIF_PAGE};
+    if (!GetScrollInfo(child, bar ? SB_CTL : SB_VERT, &info) || info.nMax - info.nMin + 1 <= static_cast<int>(std::max<UINT>(info.nPage, 1))) return;
+    const HWND scrolled = bar ? GetParent(child) : child;
+    RECT rect{};
+    ComPtr<IUIAutomationElement> element;
+    if (scrolled == nullptr || !GetWindowRect(scrolled, &rect) || FAILED(automation_->ElementFromHandle(scrolled, &element))) return;
+    Consider(rect, element.Get());
+  }
+
+  // The parts of the window around an area, each as far as the ones around it let it show.
+  void Enclose(const Candidate& candidate) {
+    std::vector<RECT> chain;
+    ComPtr<IUIAutomationElement> current = candidate.element;
+    for (int step = 0; current && step < kMaxAncestorSteps && ReadRuntimeId(current.Get()) != root_id_; ++step) {
+      ComPtr<IUIAutomationElement> parent;
+      RECT rect{};
+      if (FAILED(walker_->GetParentElementBuildCache(current.Get(), placed_.Get(), &parent)) || !parent || FAILED(parent->get_CachedBoundingRectangle(&rect))) break;
+      chain.push_back(rect);
+      current = parent;
+    }
+    RECT clip = limit_;
+    for (auto outer = chain.rbegin(); outer != chain.rend(); ++outer) {
+      RECT shown{};
+      if (IntersectRect(&shown, &*outer, &clip)) clip = shown;
+      *outer = clip;
+    }
+    for (const RECT& frame : chain) {
+      if (EqualRect(&frame, &candidate.area) || std::any_of(frames_.begin(), frames_.end(), [&](const RECT& kept) { return EqualRect(&kept, &frame) != FALSE; })) continue;
+      frames_.push_back(frame);
+    }
+  }
+
   // An area counts only where the screen really shows it: at some place inside it, the window there is this one, and
   // what the app says is at that place lies within the area.
   bool Visible(const Candidate& candidate) {
@@ -395,6 +460,7 @@ class Look {
       if (!known) shown_.push_back(area);
       areas_.push_back(area);
       overflows_ = true;
+      if (areas_.size() <= kMaxEnclosed) Enclose(candidates_[i]);
     }
     candidates_.clear();
   }
@@ -411,9 +477,11 @@ class Look {
   ComPtr<IUIAutomationCondition> raw_;
   ComPtr<IUIAutomationTreeWalker> walker_;
   ComPtr<IUIAutomationCacheRequest> identity_;
+  ComPtr<IUIAutomationCacheRequest> placed_;
   RuntimeId root_id_;
   std::vector<Candidate> candidates_;
   std::vector<RECT> areas_;
+  std::vector<RECT> frames_;
   bool overflows_ = false;
 };
 
@@ -478,11 +546,12 @@ void ScrollDetector::Main() {
       look.Run();
       auto result = std::make_unique<ScrollAreas>();
       result->shot = job.shot;
-      result->areas = look.TakeAreas(job.monitor);
-      Trace("scroll: look %zu: %zu areas, overflows %d, in %.1f ms", attempt, result->areas.size(), look.overflows(), (NowSeconds() - started) * 1000.0);
-      const bool settled = offered && SameAreas(known, result->areas);
+      result->hints = look.TakeHints(job.monitor);
+      Trace("scroll: look %zu: %zu areas in %zu frames, overflows %d, in %.1f ms", attempt, result->hints.areas.size(), result->hints.frames.size(), look.overflows(),
+            (NowSeconds() - started) * 1000.0);
+      const bool settled = offered && SameAreas(known, result->hints.areas);
       if (look.overflows() && !settled) {
-        known = result->areas;
+        known = result->hints.areas;
         offered = true;
         if (PostMessageW(controller_, kMsgScrollAreas, 0, reinterpret_cast<LPARAM>(result.get()))) result.release();
       }

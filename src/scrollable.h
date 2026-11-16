@@ -3,10 +3,12 @@
 // scrollers that show only part of their content, content stacked beyond the edge of the box that clips it, lists
 // longer than what they render, and text documents with text out of view. Each must also be what the screen really
 // shows at that place, so that something covered by an overlay, a fullscreen element, or another window does not count.
-// A window that reports none of this, such as a game, is not offered a scrolling screenshot.
+// An app that describes none of its content is taken at its windows' word instead: one that says it scrolls further
+// than it shows. A window that reports none of this, such as a game, is not offered a scrolling screenshot.
 #pragma once
 
 #include "platform.h"
+#include "recorder.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -17,7 +19,7 @@ namespace sstk {
 
 struct ScrollAreas {
   uint64_t shot = 0;
-  std::vector<RECT> areas;  // What the app reports as scrolling, in monitor pixels, largest first.
+  ScrollHints hints;
 };
 
 class ScrollDetector {

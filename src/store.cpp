@@ -39,6 +39,20 @@ std::wstring AllocateFilePath(const SYSTEMTIME& time) {
   return path;
 }
 
+// Puts a finished temporary file in the place of the real one.
+bool MoveIntoPlace(const std::wstring& temporary, const std::wstring& path) {
+  // A viewer may be holding the previous version for a moment, so a replace is retried briefly.
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    if (MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+      SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+      return true;
+    }
+    Sleep(20);
+  }
+  DeleteFileW(temporary.c_str());
+  return false;
+}
+
 bool WriteFileAtomically(const std::wstring& path, IStream* stream) {
   STATSTG stat{};
   if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) return false;
@@ -62,17 +76,7 @@ bool WriteFileAtomically(const std::wstring& path, IStream* stream) {
     DeleteFileW(temporary.c_str());
     return false;
   }
-
-  // A viewer may be holding the previous version for a moment, so a replace is retried briefly.
-  for (int attempt = 0; attempt < 10; ++attempt) {
-    if (MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-      SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
-      return true;
-    }
-    Sleep(20);
-  }
-  DeleteFileW(temporary.c_str());
-  return false;
+  return MoveIntoPlace(temporary, path);
 }
 
 void RemoveShotFile(const std::wstring& path) {
@@ -128,6 +132,42 @@ HGLOBAL BuildDib(const Image& frame, const RECT& region) {
   return memory;
 }
 
+constexpr int kLongChunkRows = 128;  // Rows of a scrolling screenshot unpacked at a time.
+
+// The same for a whole scrolling screenshot, unpacked a few rows at a time.
+HGLOBAL BuildLongDib(const LongImage& image) {
+  const int width = image.width();
+  const int height = image.height();
+  const size_t row_bytes = (static_cast<size_t>(width) * 3 + 3) & ~static_cast<size_t>(3);
+  const size_t image_bytes = row_bytes * height;
+  if (width <= 0 || height <= 0 || image_bytes > 0xFFFFFFFFu - sizeof(BITMAPINFOHEADER)) return nullptr;
+
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + image_bytes);
+  if (memory == nullptr) return nullptr;
+  auto* header = static_cast<BITMAPINFOHEADER*>(GlobalLock(memory));
+  if (header == nullptr) {
+    GlobalFree(memory);
+    return nullptr;
+  }
+  *header = BITMAPINFOHEADER{};
+  header->biSize = sizeof(BITMAPINFOHEADER);
+  header->biWidth = width;
+  header->biHeight = height;
+  header->biPlanes = 1;
+  header->biBitCount = 24;
+  header->biCompression = BI_RGB;
+  header->biSizeImage = static_cast<DWORD>(image_bytes);
+
+  // Bottom-up, so each row is read straight to its place, with the stride running backwards.
+  uint8_t* pixels = reinterpret_cast<uint8_t*>(header + 1);
+  for (int row = 0; row < height; row += kLongChunkRows) {
+    const int count = std::min(kLongChunkRows, height - row);
+    image.Read(row, count, pixels + row_bytes * (height - 1 - row), -static_cast<ptrdiff_t>(row_bytes), true);
+  }
+  GlobalUnlock(memory);
+  return memory;
+}
+
 }  // namespace
 
 void Store::Start(HWND controller) {
@@ -177,10 +217,23 @@ void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool i
   wake_.notify_all();
 }
 
-void Store::SetLongFrame(const std::shared_ptr<Shot>& shot, std::shared_ptr<const Image> image) {
+void Store::SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image) {
   std::lock_guard lock(mutex_);
-  shot->long_frame = std::move(image);
-  shot->long_archive.clear();
+  shot->long_image = std::move(image);
+}
+
+HGLOBAL Store::RenderLongClipboard() {
+  std::shared_ptr<const LongImage> image;
+  {
+    std::lock_guard lock(mutex_);
+    image = clipboard_long_;
+  }
+  return image ? BuildLongDib(*image) : nullptr;
+}
+
+void Store::ForgetLongClipboard() {
+  std::lock_guard lock(mutex_);
+  clipboard_long_.reset();
 }
 
 bool Store::Discard(const std::shared_ptr<Shot>& shot) {
@@ -215,31 +268,93 @@ bool Store::IsIdle() {
   return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr && pending_discards_.empty();
 }
 
-std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot, bool in_long) {
+std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot) {
   {
     std::lock_guard lock(mutex_);
-    const std::shared_ptr<const Image>& raw = in_long ? shot->long_frame : shot->frame;
-    if (raw) return raw;
+    if (shot->frame) return shot->frame;
   }
-  if (work_frame_shot_ != shot.get() || work_frame_in_long_ != in_long) {
-    work_frame_ = DecodeArchive(in_long ? shot->long_archive : shot->archive);
+  if (work_frame_shot_ != shot.get()) {
+    work_frame_ = DecodeArchive(shot->archive);
     work_frame_shot_ = shot.get();
-    work_frame_in_long_ = in_long;
   }
   return work_frame_;
 }
 
 void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence) {
-  std::shared_ptr<const Image> frame = FrameForWork(shot, in_long);
-  if (!frame) return;
-  HGLOBAL dib = BuildDib(*frame, region);
-  if (dib == nullptr) return;
-  if (!PostMessageW(controller_, kMsgClipboardReady, static_cast<WPARAM>(sequence), reinterpret_cast<LPARAM>(dib))) {
+  HGLOBAL dib = nullptr;
+  {
+    std::lock_guard lock(mutex_);
+    clipboard_long_ = in_long ? shot->long_image : nullptr;
+    if (in_long && !clipboard_long_) return;
+  }
+  if (!in_long) {
+    std::shared_ptr<const Image> frame = FrameForWork(shot);
+    if (!frame) return;
+    dib = BuildDib(*frame, region);
+    if (dib == nullptr) return;
+  }
+  // Without a bitmap, the message stands for the promise of one.
+  if (!PostMessageW(controller_, kMsgClipboardReady, static_cast<WPARAM>(sequence), reinterpret_cast<LPARAM>(dib)) && dib != nullptr) {
     GlobalFree(dib);
   }
 }
 
-bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_pointer, const RECT& region, bool in_long) {
+bool Store::EnsureCodec() {
+  if (codec_factory_) return true;
+  const HRESULT result = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&codec_factory_));
+  if (FAILED(result)) Trace("save: factory failed with %08lx", result);
+  return SUCCEEDED(result);
+}
+
+// Encodes a scrolling screenshot straight into its file, a few rows at a time, so that neither its pixels nor the
+// file are ever held whole.
+bool Store::SaveLongToDisk(Shot& shot, const LongImage& image) {
+  if (shot.path.empty()) shot.path = AllocateFilePath(shot.local_time);
+  if (shot.path.empty()) {
+    Trace("save: no gallery path");
+    return false;
+  }
+  auto ok = [](HRESULT result, const char* step) {
+    if (FAILED(result)) Trace("save: %s failed with %08lx", step, result);
+    return SUCCEEDED(result);
+  };
+  if (!EnsureCodec()) return false;
+  const std::wstring temporary = shot.path + L".tmp";
+  const int width = image.width();
+  const int height = image.height();
+  const UINT stride = static_cast<UINT>((width * 3 + 3) & ~3);
+  bool written = false;
+  {
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> target;
+    ComPtr<IPropertyBag2> options;
+    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    written = ok(codec_factory_->CreateStream(&stream), "stream") && ok(stream->InitializeFromFilename(temporary.c_str(), GENERIC_WRITE), "file") &&
+              ok(codec_factory_->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder), "encoder") &&
+              ok(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "encoder init") && ok(encoder->CreateNewFrame(&target, &options), "new frame") &&
+              ok(target->Initialize(options.Get()), "frame init") && ok(target->SetSize(width, height), "size") && ok(target->SetResolution(96.0, 96.0), "resolution") &&
+              ok(target->SetPixelFormat(&format), "pixel format") && IsEqualGUID(format, GUID_WICPixelFormat24bppBGR);
+    std::vector<uint8_t> rows(static_cast<size_t>(stride) * kLongChunkRows);
+    for (int row = 0; written && row < height; row += kLongChunkRows) {
+      const int count = std::min(kLongChunkRows, height - row);
+      image.Read(row, count, rows.data(), stride, true);
+      written = ok(target->WritePixels(count, stride, stride * count, rows.data()), "write");
+    }
+    written = written && ok(target->Commit(), "frame commit") && ok(encoder->Commit(), "encoder commit");
+  }
+  if (!written) {
+    DeleteFileW(temporary.c_str());
+    return false;
+  }
+  if (!MoveIntoPlace(temporary, shot.path)) {
+    Trace("save: could not write the file, error %lu", GetLastError());
+    return false;
+  }
+  return true;
+}
+
+bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_pointer, const RECT& region) {
   if (shot.path.empty()) shot.path = AllocateFilePath(shot.local_time);
   if (shot.path.empty()) {
     Trace("save: no gallery path");
@@ -253,10 +368,7 @@ bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_poi
     return SUCCEEDED(result);
   };
 
-  if (!codec_factory_ && !ok(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                              IID_PPV_ARGS(&codec_factory_)), "factory")) {
-    return false;
-  }
+  if (!EnsureCodec()) return false;
 
   ComPtr<IStream> stream;
   if (!ok(CreateStreamOnHGlobal(nullptr, TRUE, &stream), "stream")) return false;
@@ -309,8 +421,7 @@ bool Store::SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame_poi
       std::vector<uint8_t> archive(first, first + static_cast<size_t>(stat.cbSize.QuadPart));
       GlobalUnlock(memory);
       std::lock_guard lock(mutex_);
-      std::vector<uint8_t>& kept = in_long ? shot.long_archive : shot.archive;
-      if (kept.empty()) kept = std::move(archive);
+      if (shot.archive.empty()) shot.archive = std::move(archive);
     }
   }
   return true;
@@ -347,12 +458,11 @@ std::shared_ptr<const Image> Store::DecodeArchive(const std::vector<uint8_t>& ar
 
 bool Store::ReleaseFrame(const std::shared_ptr<Shot>& shot) {
   std::lock_guard lock(mutex_);
-  if (!shot->frame && !shot->long_frame) return true;
+  if (!shot->frame) return true;
   if (shot->saved_version < shot->requested_version) return false;
   if (pending_clipboard_ == shot || active_shot_ == shot.get()) return false;
   if (!shot->archive.empty()) shot->frame.reset();
-  if (!shot->long_archive.empty()) shot->long_frame.reset();
-  return !shot->frame && !shot->long_frame;
+  return !shot->frame;
 }
 
 std::shared_ptr<const Image> Store::AcquireFrame(const std::shared_ptr<Shot>& shot) {
@@ -452,12 +562,17 @@ void Store::WorkerMain() {
       const RECT region = shot->region;
       const bool in_long = shot->region_in_long;
       const uint64_t version = shot->requested_version;
+      const std::shared_ptr<const LongImage> long_image = in_long ? shot->long_image : nullptr;
       lock.unlock();
       const double started = NowSeconds();
-      std::shared_ptr<const Image> frame = FrameForWork(shot, in_long);
-      const bool saved = frame != nullptr && SaveToDisk(*shot, frame, region, in_long);
+      bool saved = false;
+      if (in_long) {
+        saved = long_image != nullptr && SaveLongToDisk(*shot, *long_image);
+      } else {
+        std::shared_ptr<const Image> frame = FrameForWork(shot);
+        saved = frame != nullptr && SaveToDisk(*shot, frame, region);
+      }
       Trace("save: %s in %.1f ms", saved ? "ok" : "FAILED", (NowSeconds() - started) * 1000.0);
-      frame.reset();
       lock.lock();
       shot->saved_version = version;
       // A failed write still releases waiters so that the UI cannot hang on a full disk.

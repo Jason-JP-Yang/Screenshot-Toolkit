@@ -51,7 +51,7 @@ class Deck {
 
   // Scrolling screenshots. The option appears once the shot's scrollable areas are known, and is ready while it is
   // selected. Beginning fills in the request.
-  bool OfferScroll(uint64_t shot, std::vector<RECT>& areas);
+  bool OfferScroll(uint64_t shot, ScrollHints& hints);
   bool ScrollReady() const;
   bool BeginScroll(ScrollRequest& request);
   void ScrollUpdated(const ScrollUpdate& update);
@@ -506,11 +506,11 @@ bool Deck::Holds(const Card* card) const {
   return std::any_of(cards_.begin(), cards_.end(), [&](const auto& each) { return each.get() == card; });
 }
 
-bool Deck::OfferScroll(uint64_t shot, std::vector<RECT>& areas) {
+bool Deck::OfferScroll(uint64_t shot, ScrollHints& hints) {
   const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& card) { return card->shot()->id == shot; });
   if (found == cards_.end()) return false;
   Card* card = found->get();
-  if (card->OfferScroll(std::move(areas)) && card == front() && !card->busy) {
+  if (card->OfferScroll(std::move(hints)) && card == front() && !card->busy) {
     const TimeBase now = compositor_.Now();
     BindCapsuleToFront(now);
     UpdateSink();
@@ -530,7 +530,7 @@ bool Deck::BeginScroll(ScrollRequest& request) {
   Card* top = front();
   request.window = top->app();
   request.monitor = bounds_;
-  request.areas = top->scroll_areas();
+  request.hints = top->scroll_hints();
   request.scale = scale_;
 
   const TimeBase now = compositor_.Now();
@@ -566,7 +566,7 @@ void Deck::EndScroll(const ScrollUpdate& update) {
   }
   const TimeBase now = compositor_.Now();
   if (update.outcome != ScrollOutcome::kFailed && update.image != nullptr) {
-    store_.SetLongFrame(card->shot(), update.image);
+    store_.SetLongImage(card->shot(), update.image);
     card->KeepLong(update);
   } else {
     card->DropLong(now);
@@ -1474,7 +1474,7 @@ void Overlay::OnSelectorStep(int direction) {
 
 void Overlay::OnScrollAreas(std::unique_ptr<ScrollAreas> found) {
   for (auto& deck : decks_) {
-    if (deck->OfferScroll(found->shot, found->areas)) break;
+    if (deck->OfferScroll(found->shot, found->hints)) break;
   }
   SyncHookMode();
 }
@@ -1525,7 +1525,7 @@ void Overlay::StartScroll(Deck& deck) {
   if (!deck.BeginScroll(request)) return;
   request.session = ++scroll_session_;
   request.controller = controller_;
-  Trace("scroll: started over %zu areas", request.areas.size());
+  Trace("scroll: started over %zu areas", request.hints.areas.size());
   scroll_deck_ = &deck;
   recorder_ = std::make_unique<ScrollRecorder>(std::move(request));
   EnsureTicking();
