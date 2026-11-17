@@ -56,7 +56,34 @@ Image Halve(const Image& source);
 // Exact copy of a rectangle, keeping alpha.
 Image CopyRect(const Image& source, int left, int top, int width, int height);
 
-// Area-weighted reduction of a source rectangle. The rectangle may have fractional edges.
+// Area-weighted reduction of a source rectangle, made a few rows at a time from source rows given as they are needed.
+// The rectangle may have fractional edges.
+class Resampler {
+ public:
+  struct Span {
+    int first;
+    int last;
+    float first_weight;
+    float last_weight;
+  };
+
+  Resampler(int source_width, int source_height, double left, double top, double right, double bottom, int width, int height);
+
+  Span Row(int y) const;  // The source rows output row y is made from.
+
+  // Output rows [first, last) of `out`, from source rows that start with row `source_first` at `source`.
+  void Make(int first, int last, const uint8_t* source, int source_first, ptrdiff_t stride, uint8_t* out, ptrdiff_t out_stride) const;
+
+ private:
+  int source_height_ = 0;
+  double top_ = 0.0;
+  double step_y_ = 0.0;
+  int width_ = 0;
+  std::vector<Span> columns_;
+  std::vector<float> column_norm_;
+};
+
+// All of it at once.
 Image ResampleArea(const PixelView& source, double left, double top, double right, double bottom, int width, int height);
 inline Image ResampleArea(const Image& source, double left, double top, double right, double bottom, int width, int height) {
   return ResampleArea(source.view(), left, top, right, bottom, width, height);

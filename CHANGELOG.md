@@ -23,6 +23,11 @@ Built programs are kept per version in the local `release/` folder, created by `
 - The selector's shadow is cut into caps and a stretching middle, so it follows any width without being stretched.
 - The selector's labels are drawn after the first frame of a shot, which they never delay.
 
+### Performance
+
+- A scrolling screenshot takes about a third less memory for the same area, and hardly grows as the capture gets longer. Rows held until the capture finishes are kept packed instead of as plain pixels, the screens at the two ends share the readings they were taken from instead of copying them, the first screen is kept packed, and less is kept for each pixel of the view. The image comes out exactly as before.
+- The work of each reading is shared with worker threads that exist only while recording, instead of resting on one core: comparing readings, lining them up, telling the view apart pixel by pixel, making rows, drawing the thumbnail, and packing the image. Rows held near the ends are drawn for the thumbnail again only when something they are drawn from has changed. Sampling keeps its pace while the content moves.
+
 ## 0.1.2
 
 ### Added

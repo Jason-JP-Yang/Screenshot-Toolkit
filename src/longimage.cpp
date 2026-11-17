@@ -10,53 +10,112 @@ namespace sstk {
 
 namespace {
 
-constexpr int kStripRows = 128;      // Rows packed together: more pack tighter, fewer unpack faster.
-constexpr int kResampleRows = 32;    // Rows of a reduction made from one read.
+constexpr int kResampleRows = 32;  // Rows of a reduction made from one read.
+
+// A compressor and a decompressor for each thread that packs, and room to pack in.
+struct Codec {
+  ~Codec() {
+    if (packer != nullptr) CloseCompressor(packer);
+    if (unpacker != nullptr) CloseDecompressor(unpacker);
+  }
+  COMPRESSOR_HANDLE Packer() {
+    COMPRESSOR_HANDLE handle = nullptr;
+    if (packer == nullptr && CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &handle)) packer = handle;
+    return packer;
+  }
+  DECOMPRESSOR_HANDLE Unpacker() {
+    DECOMPRESSOR_HANDLE handle = nullptr;
+    if (unpacker == nullptr && CreateDecompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &handle)) unpacker = handle;
+    return unpacker;
+  }
+
+  COMPRESSOR_HANDLE packer = nullptr;
+  DECOMPRESSOR_HANDLE unpacker = nullptr;
+  std::vector<uint8_t> room;
+};
+
+Codec& ThreadCodec() {
+  thread_local Codec codec;
+  return codec;
+}
 
 }  // namespace
 
+// A leading byte says whether the rest is compressed or as it was.
+std::vector<uint8_t> PackBytes(const uint8_t* data, size_t size) {
+  Codec& codec = ThreadCodec();
+  codec.room.resize(size);
+  std::vector<uint8_t> packed;
+  SIZE_T written = 0;
+  const COMPRESSOR_HANDLE packer = codec.Packer();
+  if (packer != nullptr && size > 0 && Compress(packer, data, size, codec.room.data(), size, &written) && written < size) {
+    packed.reserve(written + 1);
+    packed.push_back(1);
+    packed.insert(packed.end(), codec.room.data(), codec.room.data() + written);
+  } else {
+    packed.reserve(size + 1);
+    packed.push_back(0);
+    packed.insert(packed.end(), data, data + size);
+  }
+  return packed;
+}
+
+bool UnpackBytes(const std::vector<uint8_t>& packed, uint8_t* out, size_t size) {
+  if (packed.empty()) return false;
+  if (packed[0] == 0) {
+    if (packed.size() - 1 != size) return false;
+    std::memcpy(out, packed.data() + 1, size);
+    return true;
+  }
+  const DECOMPRESSOR_HANDLE unpacker = ThreadCodec().Unpacker();
+  SIZE_T written = 0;
+  return unpacker != nullptr && Decompress(unpacker, packed.data() + 1, packed.size() - 1, out, size, &written) && written == size;
+}
+
 LongImage::~LongImage() {
-  if (packer_ != nullptr) CloseCompressor(static_cast<COMPRESSOR_HANDLE>(packer_));
   if (unpacker_ != nullptr) CloseDecompressor(static_cast<DECOMPRESSOR_HANDLE>(unpacker_));
 }
 
 void LongImage::Add(int first, int count, const uint32_t* pixels) {
-  if (packer_ == nullptr) {
-    COMPRESSOR_HANDLE handle = nullptr;
-    if (CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &handle)) packer_ = handle;
-  }
-  const size_t row_bytes = static_cast<size_t>(width_) * 3;
   for (int done = 0; done < count; done += kStripRows) {
-    const int rows = std::min(kStripRows, count - done);
-    const size_t size = row_bytes * rows;
-    scratch_.resize(size * 2);
-    uint8_t* plain = scratch_.data();
-    // Most rows of a screen are much like the row above, so each is kept as what it differs by.
-    for (int y = 0; y < rows; ++y) {
-      const uint32_t* source = pixels + static_cast<size_t>(done + y) * width_;
-      const uint32_t* above = y > 0 ? source - width_ : nullptr;
-      uint8_t* out = plain + row_bytes * y;
-      for (int x = 0; x < width_; ++x, out += 3) {
-        const uint32_t pixel = source[x];
-        const uint32_t over = above != nullptr ? above[x] : 0;
-        out[0] = static_cast<uint8_t>(pixel - over);
-        out[1] = static_cast<uint8_t>((pixel >> 8) - (over >> 8));
-        out[2] = static_cast<uint8_t>((pixel >> 16) - (over >> 16));
-      }
-    }
-    Strip strip;
-    strip.first = first + done;
-    strip.count = rows;
-    SIZE_T written = 0;
-    if (packer_ != nullptr && Compress(static_cast<COMPRESSOR_HANDLE>(packer_), plain, size, plain + size, size, &written) && written < size) {
-      strip.packed = true;
-      strip.bytes.assign(plain + size, plain + size + written);
-    } else {
-      strip.bytes.assign(plain, plain + size);
-    }
-    strips_.push_back(std::move(strip));
+    strips_.push_back(Pack(first + done, std::min(kStripRows, count - done), pixels + static_cast<size_t>(done) * width_));
   }
 }
+
+LongImage::Strip LongImage::Pack(int first, int count, const uint32_t* pixels) const {
+  Codec& codec = ThreadCodec();
+  const size_t row_bytes = static_cast<size_t>(width_) * 3;
+  const size_t size = row_bytes * count;
+  codec.room.resize(size * 2);
+  uint8_t* plain = codec.room.data();
+  // Most rows of a screen are much like the row above, so each is kept as what it differs by.
+  for (int y = 0; y < count; ++y) {
+    const uint32_t* source = pixels + static_cast<size_t>(y) * width_;
+    const uint32_t* above = y > 0 ? source - width_ : nullptr;
+    uint8_t* out = plain + row_bytes * y;
+    for (int x = 0; x < width_; ++x, out += 3) {
+      const uint32_t pixel = source[x];
+      const uint32_t over = above != nullptr ? above[x] : 0;
+      out[0] = static_cast<uint8_t>(pixel - over);
+      out[1] = static_cast<uint8_t>((pixel >> 8) - (over >> 8));
+      out[2] = static_cast<uint8_t>((pixel >> 16) - (over >> 16));
+    }
+  }
+  Strip strip;
+  strip.first = first;
+  strip.count = count;
+  SIZE_T written = 0;
+  const COMPRESSOR_HANDLE packer = codec.Packer();
+  if (packer != nullptr && Compress(packer, plain, size, plain + size, size, &written) && written < size) {
+    strip.packed = true;
+    strip.bytes.assign(plain + size, plain + size + written);
+  } else {
+    strip.bytes.assign(plain, plain + size);
+  }
+  return strip;
+}
+
+void LongImage::Append(Strip strip) { strips_.push_back(std::move(strip)); }
 
 void LongImage::Seal(int top, int bottom, int left, int right) {
   left_ = std::clamp(left, 0, width_ - 1);
@@ -75,9 +134,6 @@ void LongImage::Seal(int top, int bottom, int left, int right) {
   for (size_t i = 0; i < strips_.size(); ++i) {
     if (used[i] == 0) strips_[i].bytes = std::vector<uint8_t>{};
   }
-  scratch_ = std::vector<uint8_t>{};
-  if (packer_ != nullptr) CloseCompressor(static_cast<COMPRESSOR_HANDLE>(packer_));
-  packer_ = nullptr;
 }
 
 size_t LongImage::packed_bytes() const {

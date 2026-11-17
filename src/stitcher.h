@@ -17,11 +17,17 @@
 // a picture, every row is held, so that all of them show the one picture as finally known.
 // A scroll bar at the side runs down the whole image as its plain track, with the arrows at its two ends as the screen
 // showed them there; its thumb, which only says where the view was, is left out.
+//
+// Readings are shared, not copied: the screens at the ends are the readings they were until something changes them in
+// place. Held rows are kept packed. The loops over the view are shared with the workers, each part taking rows of its
+// own, or columns where a pixel's past readings tie it to others in its column only.
 #pragma once
 
 #include "tracker.h"
+#include "workers.h"
 
 #include <climits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -46,6 +52,44 @@ class RowPlane {
   int origin_ = 0;
 };
 
+// Rows of 32-bit pixels held until the capture finishes, packed a block at a time once rows stop coming to the block,
+// so that holding them takes a small part of their pixels. Rows are numbered from -origin on.
+class RowStore {
+ public:
+  void Reset(int width, int rows, int origin, Workers* workers);
+  void Put(int row, const uint32_t* pixels);  // Replaces what was there.
+  void Erase(int first, int last);
+  void Pack();  // Packs the blocks no row came to since it last ran, and the full ones.
+  void Clear() { blocks_ = std::vector<Block>{}; }
+
+  // Reads held rows back, on one thread each, while none are put or erased. Rows read stay valid until the next read.
+  class Reader {
+   public:
+    explicit Reader(const RowStore& store) : store_(store) {}
+    const uint32_t* Row(int row);
+
+   private:
+    const RowStore& store_;
+    int block_ = -1;
+    std::vector<uint32_t> plain_;
+  };
+
+ private:
+  static constexpr int kRows = 32;
+
+  struct Block {
+    uint32_t held = 0;   // A bit for each of its rows held.
+    bool fresh = false;  // Whether a row came to it since Pack last ran.
+    std::vector<uint32_t> plain;
+    std::vector<uint8_t> packed;
+  };
+
+  int width_ = 0;
+  int origin_ = 0;
+  Workers* workers_ = nullptr;
+  std::vector<Block> blocks_;
+};
+
 class Stitcher {
  public:
   enum class Step {
@@ -55,18 +99,29 @@ class Stitcher {
     kLost,   // The reading cannot be placed.
   };
 
+  // Makes rows of the image when asked, on any thread, for as long as the call that hands it on lasts.
+  class RowMaker {
+   public:
+    virtual ~RowMaker() = default;
+    virtual void Make(int first, int count, uint32_t* out) const = 0;  // Rows [first, first + count), as opaque pixels.
+  };
+
   // Takes rows, numbered as content rows: row 0 is the first row of the view when the capture started. They come in
   // any order, and rows that come again replace the ones before. Rows not final are only for showing meanwhile.
   class Sink {
    public:
     virtual ~Sink() = default;
-    virtual void Rows(int first, int count, std::vector<uint32_t> pixels, bool final) = 0;
+    virtual void Rows(int first, int count, const RowMaker& rows, bool final) = 0;
+    // What is shown between Record and Stop can be shown again, just as it was, with Replay.
+    virtual void Record(int slot) = 0;
+    virtual void Stop() = 0;
+    virtual void Replay(int slot) = 0;
   };
 
-  // The first reading must stay as it is until another is kept. `pointer` is in the reading's own pixels.
-  bool Start(const PixelView& first, float scale, int limit_rows, Sink* sink);
-  Step Feed(const PixelView& frame, POINT pointer);
-  bool kept() const { return kept_; }  // Whether the reading just fed must stay as it is until another is kept.
+  // Readings are kept for as long as they are needed. `pointer` is in the reading's own pixels.
+  bool Start(const std::shared_ptr<const Frame>& first, float scale, int limit_rows, Sink* sink, Workers* workers);
+  Step Feed(const std::shared_ptr<const Frame>& reading, POINT pointer);
+  bool kept() const { return kept_; }  // Whether the reading just fed is the one the next is lined up with.
 
   // Makes every row still to be made, and hands all of them on as final.
   void Finish();
@@ -83,30 +138,66 @@ class Stitcher {
   void Preview();
 
  private:
-  // The screen with the view at one end of the capture.
+  // The screen with the view at one end of the capture: a reading as it was, until something changes it in place.
   struct End {
-    std::vector<uint32_t> pixels;
+    std::shared_ptr<const Frame> frame;
+    std::vector<uint32_t> own;
+    const uint32_t* pixels = nullptr;
     int place = 0;
-    int serial = -1;  // Which reading it is.
+    int serial = -1;       // Which reading it is.
+    uint64_t version = 0;  // Changes whenever its pixels do,
+    uint64_t held = 0;     // and whenever the rows held in its view do.
   };
 
+  // What an end's view was last shown from. While all of it stays as it was, the view is shown again as it was.
+  struct Shown {
+    bool valid = false;
+    int place = 0;
+    int other_place = INT_MIN;  // Where the other end's view reaches into this one,
+    uint64_t other_version = 0;
+    uint64_t version = 0;
+    uint64_t held = 0;
+    uint64_t fixed = 0;
+    uint32_t page = 0;
+    size_t strips = 0;
+    int edge = 0;
+    int bar = 0;
+    bool bar_ready = false;
+    int cap_top = 0;
+    int cap_bottom = 0;
+    std::vector<uint32_t> track;
+    bool operator==(const Shown&) const = default;
+  };
+
+  // Rows handed on together.
+  struct Run {
+    int first = 0;
+    int count = 0;
+    bool final = false;
+  };
+
+  int Parts(int rows) const;
   void Band(POINT pointer, int* first, int* last) const;
-  bool Accept(const PixelView& frame, int shift, bool sharp);
-  void Stay();
+  bool Accept(const std::shared_ptr<const Frame>& reading, int shift, bool sharp);
+  void Stay(const std::shared_ptr<const Frame>& reading);
   void Settle();
+  bool Changes() const;
   void Rested();
   bool Calm() const;
   bool Scrolled(int shift) const;
   bool Anchored() const;
   bool Lively(size_t index) const;
   void Sort(const PixelView& ref, const PixelView& now, int shift, int place);
+  void SortColumns(const PixelView& ref, const PixelView& now, int shift, int place, int left, int right);
   void Blur(const PixelView& ref, const PixelView& now);
-  void Capture(End& end, const PixelView& frame, int place);
+  void Capture(End& end, const std::shared_ptr<const Frame>& frame, int place);
+  uint32_t* Writable(End& end);
   void Freeze(const PixelView& ref, int place, int first, int last);
   void Make(int first, int last);
   bool Deferring() const;
   void Segment(bool final, const PixelView& now);
   void Background(bool ends);
+  std::vector<uint32_t> StartPixels() const;
   void Strips();
   const End* Showing(int row) const;
   int TileRow(int row) const;
@@ -116,13 +207,15 @@ class Stitcher {
   void Page();
   void Blend(int row, uint32_t* out) const;
   void Render(int row, uint32_t* line) const;
-  bool Consensus(int row, uint32_t* out) const;
-  void Send(int first, std::vector<uint32_t>& block, int rows, bool final);
+  void PaintHeld(int first, int count, uint32_t* out) const;
   void Show(int first, int last, bool held);
+  void ShowEnd(bool top);
+  Shown Showable(bool top) const;
   void Paint(int row, uint32_t* line) const;
   void Dump() const;
   void Flush(int old_min, int old_max);
   void Drop(int first, int last);
+  void Touched(int first, int last);
   void FindBar();
   void Tracks();
   int Cap(bool top) const;
@@ -139,26 +232,26 @@ class Stitcher {
   float scale_ = 1.0f;
   int limit_rows_ = 0;
   Sink* sink_ = nullptr;
+  Workers* workers_ = nullptr;
 
   Tracker tracker_;
+  std::shared_ptr<const Frame> ref_;  // The reading the tracker lines the next up with.
   int band_first_ = INT_MAX;
   int band_last_ = -1;
 
   // Per pixel of the view, as of the last reading placed.
   std::vector<uint8_t> mask_;   // What it is.
-  std::vector<uint8_t> how_;    // Whether it stayed, and whether it followed.
   // Per pixel of the view, over the capture.
+  std::vector<uint8_t> marks_;   // The end what is fixed in front of the content there belongs at, if anything is, and
+                                 // whether it changed in place just now, what held still there came, went or changed,
+                                 // and content came in front of what held still there once or again.
   std::vector<uint8_t> still_;   // Readings it held still in though something else scrolled to it.
   std::vector<uint8_t> moved_;   // Readings it showed content scrolling through it.
-  std::vector<uint8_t> covers_;  // Times content came in front of what held still there.
-  std::vector<uint8_t> flips_;   // Times what held still there came, went or changed.
-  std::vector<uint8_t> fresh_;   // Whether it just changed in place, to count as that once what came holds still.
   std::vector<uint16_t> odd_;    // Readings it changed by itself in.
   std::vector<uint32_t> wall_;   // What it mostly showed while holding still: the layer that holds still.
-  std::vector<uint8_t> fixed_;   // The end what is fixed in front of the content there belongs at, if anything is.
   std::vector<uint32_t> back_;   // The background behind the content, gaps filled, where there is one,
   bool back_final_ = false;      // as finally known.
-  std::vector<uint32_t> start_;  // The reading the capture began with, taken at rest.
+  std::vector<std::vector<uint8_t>> start_;  // The reading the capture began with, taken at rest, packed a few rows at a time.
 
   std::vector<uint32_t> column_true_;  // Per column: pixels seen to scroll, and pixels that changed by themselves.
   std::vector<uint32_t> column_odd_;
@@ -183,8 +276,11 @@ class Stitcher {
   int max_step_ = 0;         // The farthest a sharp reading moved.
   int next_segment_ = 2;     // After how many scrolls the view is told apart next.
   int segments_ = 0;
+  uint64_t fixed_version_ = 0;  // Changes whenever the view is told apart.
   int revision_ = 0;         // Changes whenever what the rows near the ends are painted from does,
   int shown_ = -1;           // and as it was when they were last shown.
+  Shown shown_top_;
+  Shown shown_bottom_;
   int top_band_ = 0;         // Rows at the top and bottom of the view that never show content.
   int bottom_band_ = 0;
 
@@ -192,7 +288,7 @@ class Stitcher {
   RowPlane votes_;   // Per pixel of a content row in view: what most of the clear places it passed showed.
   RowPlane backs_;   // Per pixel of a content row in view: how often it showed the background through it.
   RowPlane sights_;  // Per pixel of a content row in view: the row of the view it was first seen to scroll in, plus one.
-  RowPlane made_;    // Rows made and held: near the ends, and over a picture all of them, until the picture is known.
+  RowStore made_;    // Rows made and held: near the ends, and over a picture all of them, until the picture is known.
   std::vector<uint8_t> held_;    // Per content row: whether it is made and held.
   std::vector<uint32_t> tones_;  // Per content row made: its one color, if it has just one.
   int row_base_ = 0;

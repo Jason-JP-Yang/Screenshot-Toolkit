@@ -4,6 +4,7 @@
 #include "image.h"
 
 #include <emmintrin.h>
+#include <intrin.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -42,5 +43,59 @@ inline int Near4(const uint32_t* a, const uint32_t* b, __m128i slack) {
   const __m128i apart = _mm_or_si128(_mm_subs_epu8(x, y), _mm_subs_epu8(y, x));
   return _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(_mm_subs_epu8(apart, slack), _mm_setzero_si128())));
 }
+
+// Rows of one bit per pixel.
+inline bool Bit(const uint64_t* bits, int x) { return ((bits[x >> 6] >> (x & 63)) & 1u) != 0; }
+
+// Calls each(x) for every bit set among `words` words, in order.
+template <typename Each>
+inline void ForBits(const uint64_t* bits, int words, Each&& each) {
+  for (int word = 0; word < words; ++word) {
+    for (uint64_t left = bits[word]; left != 0; left &= left - 1) {
+      unsigned long at = 0;
+      _BitScanForward64(&at, left);
+      each(word * 64 + static_cast<int>(at));
+    }
+  }
+}
+
+// A reading of the screen, shared by whoever needs it as it was. Nothing changes it once read: whoever would takes a
+// copy instead.
+class Frame {
+ public:
+  Frame(int width, int height) {
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    bitmap_ = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bitmap_ == nullptr) return;
+    bits_ = static_cast<uint32_t*>(bits);
+    width_ = width;
+    height_ = height;
+  }
+  ~Frame() {
+    if (bitmap_ != nullptr) DeleteObject(bitmap_);
+  }
+  Frame(const Frame&) = delete;
+  Frame& operator=(const Frame&) = delete;
+
+  explicit operator bool() const { return bits_ != nullptr; }
+  HBITMAP bitmap() const { return bitmap_; }
+  int width() const { return width_; }
+  int height() const { return height_; }
+  uint32_t* pixels() const { return bits_; }  // Rows one after another, with no gaps.
+  PixelView view() const { return PixelView{reinterpret_cast<const uint8_t*>(bits_), width_, height_, width_ * 4}; }
+
+ private:
+  HBITMAP bitmap_ = nullptr;
+  uint32_t* bits_ = nullptr;
+  int width_ = 0;
+  int height_ = 0;
+};
 
 }  // namespace sstk

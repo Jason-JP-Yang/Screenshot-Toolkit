@@ -213,52 +213,51 @@ Image CopyRect(const Image& source, int left, int top, int width, int height) {
   return result;
 }
 
-Image ResampleArea(const PixelView& source, double left, double top, double right, double bottom, int width, int height) {
-  Image result = Image::Allocate(width, height);
-  if (!result) return result;
+namespace {
 
-  left = std::clamp(left, 0.0, static_cast<double>(source.width));
-  right = std::clamp(right, left, static_cast<double>(source.width));
-  top = std::clamp(top, 0.0, static_cast<double>(source.height));
-  bottom = std::clamp(bottom, top, static_cast<double>(source.height));
-
-  struct Span {
-    int first;
-    int last;
-    float first_weight;
-    float last_weight;
-  };
-
-  auto make_span = [](double start, double end, int limit) {
-    Span span{};
-    span.first = std::clamp(static_cast<int>(std::floor(start)), 0, limit - 1);
-    span.last = std::clamp(static_cast<int>(std::ceil(end)) - 1, span.first, limit - 1);
-    if (span.first == span.last) {
-      span.first_weight = static_cast<float>(std::max(end - start, 1e-4));
-      span.last_weight = 0.0f;
-    } else {
-      span.first_weight = static_cast<float>(span.first + 1 - start);
-      span.last_weight = static_cast<float>(end - span.last);
-    }
-    return span;
-  };
-
-  const double step_x = (right - left) / width;
-  const double step_y = (bottom - top) / height;
-  std::vector<Span> columns(width);
-  std::vector<float> column_norm(width);
-  for (int x = 0; x < width; ++x) {
-    columns[x] = make_span(left + x * step_x, left + (x + 1) * step_x, source.width);
-    const Span& span = columns[x];
-    column_norm[x] = span.first == span.last ? span.first_weight
-                                             : span.first_weight + span.last_weight + (span.last - span.first - 1);
+Resampler::Span MakeSpan(double start, double end, int limit) {
+  Resampler::Span span{};
+  span.first = std::clamp(static_cast<int>(std::floor(start)), 0, limit - 1);
+  span.last = std::clamp(static_cast<int>(std::ceil(end)) - 1, span.first, limit - 1);
+  if (span.first == span.last) {
+    span.first_weight = static_cast<float>(std::max(end - start, 1e-4));
+    span.last_weight = 0.0f;
+  } else {
+    span.first_weight = static_cast<float>(span.first + 1 - start);
+    span.last_weight = static_cast<float>(end - span.last);
   }
+  return span;
+}
 
-  std::vector<float> accumulator(static_cast<size_t>(width) * 4);
+}  // namespace
+
+Resampler::Resampler(int source_width, int source_height, double left, double top, double right, double bottom, int width, int height)
+    : source_height_(source_height), width_(width) {
+  left = std::clamp(left, 0.0, static_cast<double>(source_width));
+  right = std::clamp(right, left, static_cast<double>(source_width));
+  top = std::clamp(top, 0.0, static_cast<double>(source_height));
+  bottom = std::clamp(bottom, top, static_cast<double>(source_height));
+  top_ = top;
+  step_y_ = (bottom - top) / height;
+  const double step_x = (right - left) / width;
+  columns_.resize(static_cast<size_t>(width));
+  column_norm_.resize(static_cast<size_t>(width));
+  for (int x = 0; x < width; ++x) {
+    columns_[x] = MakeSpan(left + x * step_x, left + (x + 1) * step_x, source_width);
+    const Span& span = columns_[x];
+    column_norm_[x] = span.first == span.last ? span.first_weight
+                                              : span.first_weight + span.last_weight + (span.last - span.first - 1);
+  }
+}
+
+Resampler::Span Resampler::Row(int y) const { return MakeSpan(top_ + y * step_y_, top_ + (y + 1) * step_y_, source_height_); }
+
+void Resampler::Make(int first, int last, const uint8_t* source, int source_first, ptrdiff_t stride, uint8_t* out, ptrdiff_t out_stride) const {
+  std::vector<float> accumulator(static_cast<size_t>(width_) * 4);
   const __m128i zero = _mm_setzero_si128();
 
-  for (int y = 0; y < height; ++y) {
-    const Span rows = make_span(top + y * step_y, top + (y + 1) * step_y, source.height);
+  for (int y = first; y < last; ++y) {
+    const Span rows = Row(y);
     std::fill(accumulator.begin(), accumulator.end(), 0.0f);
     float row_norm = 0.0f;
 
@@ -269,10 +268,10 @@ Image ResampleArea(const PixelView& source, double left, double top, double righ
       if (row_weight <= 0.0f) continue;
       row_norm += row_weight;
 
-      const uint32_t* pixels = reinterpret_cast<const uint32_t*>(source.data + static_cast<ptrdiff_t>(sy) * source.stride);
+      const uint32_t* pixels = reinterpret_cast<const uint32_t*>(source + static_cast<ptrdiff_t>(sy - source_first) * stride);
       float* acc = accumulator.data();
-      for (int x = 0; x < width; ++x, acc += 4) {
-        const Span& span = columns[x];
+      for (int x = 0; x < width_; ++x, acc += 4) {
+        const Span& span = columns_[x];
         __m128 sum = _mm_setzero_ps();
         for (int sx = span.first; sx <= span.last; ++sx) {
           float weight = 1.0f;
@@ -287,16 +286,23 @@ Image ResampleArea(const PixelView& source, double left, double top, double righ
       }
     }
 
-    uint8_t* out = result.data() + static_cast<ptrdiff_t>(y) * result.stride();
+    uint8_t* line = out + static_cast<ptrdiff_t>(y) * out_stride;
     const float* acc = accumulator.data();
-    for (int x = 0; x < width; ++x, acc += 4, out += 4) {
-      const float norm = 1.0f / (column_norm[x] * row_norm);
-      out[0] = ToByte(acc[0] * norm);
-      out[1] = ToByte(acc[1] * norm);
-      out[2] = ToByte(acc[2] * norm);
-      out[3] = 255;
+    for (int x = 0; x < width_; ++x, acc += 4, line += 4) {
+      const float norm = 1.0f / (column_norm_[x] * row_norm);
+      line[0] = ToByte(acc[0] * norm);
+      line[1] = ToByte(acc[1] * norm);
+      line[2] = ToByte(acc[2] * norm);
+      line[3] = 255;
     }
   }
+}
+
+Image ResampleArea(const PixelView& source, double left, double top, double right, double bottom, int width, int height) {
+  Image result = Image::Allocate(width, height);
+  if (!result) return result;
+  const Resampler sampler(source.width, source.height, left, top, right, bottom, width, height);
+  sampler.Make(0, height, source.data, 0, source.stride, result.data(), result.stride());
   return result;
 }
 

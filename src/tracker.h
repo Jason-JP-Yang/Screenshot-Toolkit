@@ -3,9 +3,11 @@
 // "nothing moved", and whatever moved counts, whatever its shape. Pieces of changed rows are looked up among the earlier
 // reading's rows and each one found proposes a shift; a shift counts only when it explains nearly everything that
 // changed, or all of it outside what changes by itself, clearly better than any other.
+// The loops are shared with the workers, each part looking at rows of its own.
 #pragma once
 
 #include "pixels.h"
+#include "workers.h"
 
 #include <climits>
 #include <vector>
@@ -25,7 +27,7 @@ class Tracker {
     double Score() const { return static_cast<double>(explained) * Share(); }
   };
 
-  void Reset(int width, int height);
+  void Reset(int width, int height, Workers* workers);
 
   // The reading to line up with. Its pixels must stay as they are until another takes its place.
   void SetRef(const PixelView& ref);
@@ -51,16 +53,14 @@ class Tracker {
 
   const PixelView& ref() const { return ref_; }
   const PixelView& now() const { return now_; }
-  const uint8_t* Changed(int y) const { return changed_.data() + static_cast<size_t>(y) * width_; }
+  const uint64_t* Changed(int y) const { return changed_.data() + static_cast<size_t>(y) * words_; }  // A bit a pixel.
+  int words() const { return words_; }
   uint32_t ChangedInRow(int y) const { return changed_in_row_[static_cast<size_t>(y)]; }
   uint32_t changed_count() const { return changed_count_; }
   int changed_rows() const { return changed_rows_; }
   int changed_width() const { return std::max(changed_right_ - changed_left_, 0); }
   bool Hovered(int y) const { return y >= band_first_ && y <= band_last_; }
   uint64_t key() const { return key_; }  // The reading taken in, as one number.
-  int segments() const { return segments_; }
-  const uint32_t* NowHash(int y) const { return hash_[now_slot_].data() + static_cast<size_t>(y) * segments_; }
-  const uint32_t* RefHash(int y) const { return hash_[1 - now_slot_].data() + static_cast<size_t>(y) * segments_; }
 
   static constexpr int kSegment = 32;     // Pixels of a row hashed as one piece.
   static constexpr int kMinOverlap = 48;  // Rows two readings must share to be lined up.
@@ -68,16 +68,20 @@ class Tracker {
   static uint64_t Key(uint32_t hash, int segment) { return static_cast<uint64_t>(hash) << 32 | static_cast<uint64_t>(segment) << 16; }
 
  private:
+  int Parts(int rows) const;
   void HashRows(const PixelView& view, std::vector<uint32_t>& hashes);
   void Compare();
+  void Index(const std::vector<uint32_t>& hashes, int first_segment, int last_segment);
   int Vote();
   void Sweep();
   Match Verify(int shift, bool tally);
   bool Firm();
 
+  Workers* workers_ = nullptr;
   int width_ = 0;
   int height_ = 0;
   int segments_ = 0;
+  int words_ = 0;
   PixelView ref_{};
   PixelView now_{};
   RECT window_{};
@@ -87,7 +91,7 @@ class Tracker {
   std::vector<uint32_t> hash_[2];
   int now_slot_ = 0;
   uint64_t key_ = 0;
-  std::vector<uint8_t> changed_;
+  std::vector<uint64_t> changed_;
   std::vector<uint32_t> changed_in_row_;
   uint32_t changed_count_ = 0;
   int changed_rows_ = 0;
@@ -108,7 +112,6 @@ class Tracker {
   std::vector<uint32_t> block_compared_;
   std::vector<uint32_t> block_explained_;
   std::vector<uint16_t> block_lines_;
-  std::vector<uint16_t> line_explained_;
 };
 
 }  // namespace sstk

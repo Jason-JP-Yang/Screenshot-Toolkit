@@ -1,6 +1,7 @@
 // A scrolling screenshot in progress. Its own thread reads the app's window, finds what really moves when it is scrolled,
-// and builds the long image from what it sees of that (see stitcher.h), sending the thumbnail as it grows. The rows
-// are packed on a second thread as they are made (see longimage.h), so the image is never held as a bitmap.
+// and builds the long image from what it sees of that (see stitcher.h), sending the thumbnail as it grows. The heavy
+// loops are shared with worker threads that live as long as the screenshot (see workers.h), and the rows are packed as
+// they are made (see longimage.h), so the image is never held as a bitmap.
 // Whatever the window shows right above and below the scrolled area, across the same columns, goes on the two ends of
 // the image as it is, and takes no part in the stitching.
 //

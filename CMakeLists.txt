@@ -32,6 +32,7 @@ add_executable(ScreenshotToolkit WIN32
   src/stitcher.cpp
   src/store.cpp
   src/tracker.cpp
+  src/workers.cpp
   res/app.rc
 )
 
