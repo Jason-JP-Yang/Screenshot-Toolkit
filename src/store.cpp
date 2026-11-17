@@ -202,6 +202,8 @@ void Store::ReleaseCodec() {
 void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long) {
   {
     std::lock_guard lock(mutex_);
+    if (shot->discarded) return;
+    shot->awaiting_long = false;
     shot->region = region;
     shot->region_in_long = in_long;
     ++shot->requested_version;
@@ -219,7 +221,34 @@ void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool i
 
 void Store::SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image) {
   std::lock_guard lock(mutex_);
-  shot->long_image = std::move(image);
+  if (!shot->discarded) shot->long_image = std::move(image);
+}
+
+void Store::Expect(const std::shared_ptr<Shot>& shot) {
+  std::lock_guard lock(mutex_);
+  if (!shot->discarded) shot->awaiting_long = true;
+}
+
+void Store::Settle(const std::shared_ptr<Shot>& shot) {
+  {
+    std::lock_guard lock(mutex_);
+    shot->awaiting_long = false;
+  }
+  saved_.notify_all();
+  wake_.notify_all();
+}
+
+void Store::OpenWhenSaved(const std::shared_ptr<Shot>& shot) {
+  {
+    std::lock_guard lock(mutex_);
+    if (shot->discarded) return;
+    pending_opens_.push_back(shot);
+  }
+  wake_.notify_all();
+}
+
+bool Store::OpenReady() const {
+  return std::any_of(pending_opens_.begin(), pending_opens_.end(), [](const std::shared_ptr<Shot>& shot) { return shot->discarded || Saved(*shot); });
 }
 
 HGLOBAL Store::RenderLongClipboard() {
@@ -250,6 +279,8 @@ bool Store::Discard(const std::shared_ptr<Shot>& shot) {
     }
     // Nobody should keep waiting for a save that is no longer coming.
     shot->saved_version = shot->requested_version;
+    shot->awaiting_long = false;
+    shot->discarded = true;
     pending_discards_.push_back(shot);
   }
   saved_.notify_all();
@@ -259,13 +290,13 @@ bool Store::Discard(const std::shared_ptr<Shot>& shot) {
 
 std::wstring Store::WaitUntilSaved(const std::shared_ptr<Shot>& shot) {
   std::unique_lock lock(mutex_);
-  saved_.wait(lock, [&] { return shot->saved_version >= shot->requested_version || stopping_; });
+  saved_.wait(lock, [&] { return Saved(*shot) || stopping_; });
   return shot->path;
 }
 
 bool Store::IsIdle() {
   std::lock_guard lock(mutex_);
-  return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr && pending_discards_.empty();
+  return !busy_ && pending_saves_.empty() && pending_clipboard_ == nullptr && pending_discards_.empty() && pending_opens_.empty();
 }
 
 std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& shot) {
@@ -487,7 +518,7 @@ void Store::WorkerMain() {
     }
     wake_.wait(lock, [&] {
       return stopping_ || warmup_requested_ || codec_release_requested_ || pending_restore_ != nullptr ||
-             pending_clipboard_ != nullptr || !pending_discards_.empty() || !pending_saves_.empty();
+             pending_clipboard_ != nullptr || !pending_discards_.empty() || !pending_saves_.empty() || OpenReady();
     });
     busy_ = true;
 
@@ -521,6 +552,27 @@ void Store::WorkerMain() {
       shot->frame = std::move(frame);
       pending_restore_ = nullptr;
       saved_.notify_all();
+      continue;
+    }
+
+    // Someone is waiting for the viewer, so files ready to open go next.
+    if (OpenReady()) {
+      std::vector<std::wstring> paths;
+      for (auto it = pending_opens_.begin(); it != pending_opens_.end();) {
+        const Shot& shot = **it;
+        if (!shot.discarded && !Saved(shot)) {
+          ++it;
+          continue;
+        }
+        if (!shot.discarded && !shot.path.empty()) paths.push_back(shot.path);
+        it = pending_opens_.erase(it);
+      }
+      lock.unlock();
+      for (const std::wstring& path : paths) {
+        auto* message = new std::wstring(path);
+        if (!PostMessageW(controller_, kMsgOpenShot, 0, reinterpret_cast<LPARAM>(message))) delete message;
+      }
+      lock.lock();
       continue;
     }
 

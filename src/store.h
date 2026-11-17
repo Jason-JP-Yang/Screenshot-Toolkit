@@ -27,6 +27,8 @@ struct Shot {
   std::wstring path;
   RECT region{};
   bool region_in_long = false;  // Whether the region lies in the scrolling screenshot rather than in the frame.
+  bool awaiting_long = false;   // A scrolling screenshot of it is on its way, and whoever waits for the file waits for it.
+  bool discarded = false;       // Deleted: nothing more is saved for it.
   uint64_t requested_version = 0;
   uint64_t saved_version = 0;
   uint64_t id = 0;  // Set before the shot is shared, and never changed.
@@ -46,6 +48,14 @@ class Store {
 
   // Gives the shot its scrolling screenshot.
   void SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image);
+
+  // A scrolling screenshot of the shot is being taken: waiting for its file waits for that, until the next Submit or
+  // Settle says what the file is.
+  void Expect(const std::shared_ptr<Shot>& shot);
+  void Settle(const std::shared_ptr<Shot>& shot);
+
+  // Opens the shot's file in the viewer once it is on disk, without anyone waiting: posts kMsgOpenShot then.
+  void OpenWhenSaved(const std::shared_ptr<Shot>& shot);
 
   // A scrolling screenshot goes on the clipboard as a promise, since its bitmap is far larger than everything else
   // this program holds. This makes the bitmap when something asks for it, and the other forgets the promise.
@@ -76,6 +86,8 @@ class Store {
   uint64_t latest_clipboard_sequence() const { return clipboard_sequence_.load(std::memory_order_relaxed); }
 
  private:
+  static bool Saved(const Shot& shot) { return !shot.awaiting_long && shot.saved_version >= shot.requested_version; }
+  bool OpenReady() const;
   void WorkerMain();
   std::shared_ptr<const Image> FrameForWork(const std::shared_ptr<Shot>& shot);
   void PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence);
@@ -93,6 +105,7 @@ class Store {
   std::shared_ptr<Shot> pending_clipboard_;
   std::shared_ptr<Shot> pending_restore_;
   std::vector<std::shared_ptr<Shot>> pending_discards_;
+  std::vector<std::shared_ptr<Shot>> pending_opens_;
   const Shot* clipboard_shot_ = nullptr;  // Compared only, never read: the shot may be long gone.
   RECT pending_clipboard_region_{};
   bool pending_clipboard_in_long_ = false;

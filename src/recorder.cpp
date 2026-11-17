@@ -610,6 +610,8 @@ void Session::End(bool early) {
   }
   Trace("scroll: finished %s with outcome %d, %d rows grown", early ? "early" : "normally", static_cast<int>(update->outcome), grown);
   Post(std::move(update));
+  // Pictures for tracing are written once nobody waits for the outcome.
+  if (locked_ && Tracing()) stitcher_.Dump();
 }
 
 }  // namespace
@@ -645,6 +647,11 @@ void ScrollRecorder::Finish() {
 }
 
 void ScrollRecorder::Main(ScrollRequest request) {
+  Run(std::move(request));
+  done_.store(true, std::memory_order_release);
+}
+
+void ScrollRecorder::Run(ScrollRequest request) {
   Session session(std::move(request));
   std::vector<POINT> wheels;
   double last_sample = -1.0;

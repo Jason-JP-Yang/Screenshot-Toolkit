@@ -137,6 +137,9 @@ class Stitcher {
   // Hands on, as not final, the rows near the ends and in view as they would be made now.
   void Preview();
 
+  // Writes what was found of the view as pictures, for tracing, once finished.
+  void Dump() const;
+
  private:
   // The screen with the view at one end of the capture: a reading as it was, until something changes it in place.
   struct End {
@@ -212,7 +215,6 @@ class Stitcher {
   void ShowEnd(bool top);
   Shown Showable(bool top) const;
   void Paint(int row, uint32_t* line) const;
-  void Dump() const;
   void Flush(int old_min, int old_max);
   void Drop(int first, int last);
   void Touched(int first, int last);

@@ -80,7 +80,7 @@ class Capsule {
   void MakePiece(Piece& piece, const Image& image, float y);
   void PlacePiece(Piece& piece, float ink_x);
   void RemovePiece(Piece& piece);
-  float TextTop(const TextLine& line) const;
+  float TextTop(const TextLine& line, float center = -1.0f) const;  // Centers the capitals on `center`, or the middle.
   void BuildRecording();
   float SegmentWidth(int index) const;
   void Arrange(const TimeBase& now, bool immediate);

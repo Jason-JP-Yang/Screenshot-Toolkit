@@ -167,6 +167,7 @@ void FileDragThread::Run(const std::shared_ptr<Shot>& shot, uint64_t id) {
     const BOOL attached = AttachThreadInput(self, ui_thread_, TRUE);
 
     auto* source = new DropSource(controller_, id, cancelled_through_);
+    started_.store(id, std::memory_order_relaxed);
     DWORD effect = DROPEFFECT_NONE;
     const HRESULT result = DoDragDrop(data.Get(), source, DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
     outcome->effect = result == DRAGDROP_S_DROP ? effect : DROPEFFECT_NONE;

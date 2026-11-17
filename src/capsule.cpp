@@ -17,6 +17,17 @@ constexpr double kTwoPi = 6.283185307179586;
 
 uint32_t Argb(uint32_t rgb, float alpha) { return static_cast<uint32_t>(alpha * 255.0f + 0.5f) << 24 | rgb; }
 
+// A color `share` of the way from one to the other.
+uint32_t Toward(uint32_t from, uint32_t to, float share) {
+  uint32_t out = 0;
+  for (int shift = 0; shift < 24; shift += 8) {
+    const float a = static_cast<float>((from >> shift) & 0xFF);
+    const float b = static_cast<float>((to >> shift) & 0xFF);
+    out |= static_cast<uint32_t>(std::lround(a + (b - a) * share)) << shift;
+  }
+  return out;
+}
+
 // Lays one image over another, both premultiplied.
 void Blend(Image& canvas, const Image& part, int at_x, int at_y) {
   for (int y = 0; y < part.height(); ++y) {
@@ -64,35 +75,41 @@ TextLine Compose(const std::vector<Part>& parts, float baseline, float cap_heigh
   return line;
 }
 
-// "Win" and "Enter" as two keycaps, then text, or text, the keycaps, and more text.
-TextLine ChordLine(const wchar_t* before, const wchar_t* after, uint32_t color, float scale) {
-  const int font = static_cast<int>(std::lround(config::kCapsuleFontSize * scale));
+// The scroll chord's two keycaps, "Win" and "Enter".
+std::vector<Image> ChordKeys(uint32_t color, float scale) {
   const int key_height = static_cast<int>(std::lround(config::kKeycapHeight * scale));
-  const Image win = RenderKeycap(Keycap::kWindows, key_height, scale, color);
-  const Image enter = RenderKeycap(Keycap::kEnter, key_height, scale, color);
-  const TextLine tail = RenderText(after, font, color);
-  const float text_gap = config::kKeycapTextGap * scale;
-  std::vector<Part> parts;
-  TextLine head;
-  if (before != nullptr) {
-    head = RenderText(before, font, color);
-    parts.push_back(Part{&head.image, false, 0.0f});
-  }
-  parts.push_back(Part{&win, true, text_gap});
-  parts.push_back(Part{&enter, true, config::kKeycapGap * scale});
-  parts.push_back(Part{&tail.image, false, text_gap});
+  std::vector<Image> keys;
+  keys.push_back(RenderKeycap(Keycap::kWindows, key_height, scale, color));
+  keys.push_back(RenderKeycap(Keycap::kEnter, key_height, scale, color));
+  return keys;
+}
+
+// The keycaps, then text.
+TextLine ChordLine(const wchar_t* after, uint32_t color, float scale) {
+  const std::vector<Image> keys = ChordKeys(color, scale);
+  const TextLine tail = RenderText(after, static_cast<int>(std::lround(config::kCapsuleFontSize * scale)), color);
+  const std::vector<Part> parts{Part{&keys[0], true, 0.0f}, Part{&keys[1], true, config::kKeycapGap * scale},
+                                Part{&tail.image, false, config::kKeycapTextGap * scale}};
   return Compose(parts, tail.baseline, tail.cap_height);
 }
 
-// The scroll option has none: it says how to start a scrolling screenshot instead.
+// A name, and after it the keycaps that start it, quieter, as a shortcut beside a menu item.
+TextLine ShortcutLine(const wchar_t* name, uint32_t color, uint32_t paper, float scale) {
+  const TextLine head = RenderText(name, static_cast<int>(std::lround(config::kCapsuleFontSize * scale)), color);
+  const std::vector<Image> keys = ChordKeys(Toward(color, paper, 1.0f - config::kShortcutInk), scale);
+  const std::vector<Part> parts{Part{&head.image, false, 0.0f}, Part{&keys[0], true, config::kShortcutGap * scale},
+                                Part{&keys[1], true, config::kKeycapGap * scale}};
+  return Compose(parts, head.baseline, head.cap_height);
+}
+
 const wchar_t* LabelFor(RegionKind kind) {
   switch (kind) {
     case RegionKind::kFull: return config::kLabelFullscreen;
     case RegionKind::kApp:
     case RegionKind::kZone: return config::kLabelWindow;
     case RegionKind::kNoTaskbar: return config::kLabelNoTaskbar;
-    case RegionKind::kLong: return config::kLabelScrolling;
-    case RegionKind::kScroll: break;
+    case RegionKind::kLong:
+    case RegionKind::kScroll: return config::kLabelScrolling;
   }
   return nullptr;
 }
@@ -235,9 +252,9 @@ Capsule::~Capsule() = default;
 
 float Capsule::frost_width() const { return std::round(config::kFrostWidth * scale_); }
 
-float Capsule::TextTop(const TextLine& line) const {
+float Capsule::TextTop(const TextLine& line, float center) const {
   // The capitals sit centered, whatever the descenders do.
-  return std::round(height_ * 0.5f - (line.baseline - line.cap_height * 0.5f));
+  return std::round((center < 0.0f ? height_ * 0.5f : center) - (line.baseline - line.cap_height * 0.5f));
 }
 
 std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, const TaskbarInsets& insets) {
@@ -268,8 +285,9 @@ std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, con
   const Image light = RenderGlyph(spec, cell_w, cell_h, scale_, config::kGlyphOnGlass, config::kGlyphOnGlassAlpha);
   const Image dark = RenderGlyph(spec, cell_w, cell_h, scale_, config::kGlyphOnPorcelain, 1.0f);
   const int font = static_cast<int>(std::lround(config::kCapsuleFontSize * scale_));
+  // The scroll option's name carries the chord that starts it.
   const TextLine label = region.kind == RegionKind::kScroll
-                             ? ChordLine(config::kScrollHintBefore, config::kScrollHintAfter, config::kGlyphOnPorcelain, scale_)
+                             ? ShortcutLine(LabelFor(region.kind), config::kGlyphOnPorcelain, config::kPorcelain, scale_)
                              : RenderText(LabelFor(region.kind), font, config::kGlyphOnPorcelain);
 
   // Laid out by what is visibly drawn: the label ends as far from the pill's edge as the glyph starts from the other.
@@ -294,7 +312,8 @@ std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, con
   segment->label->SetContent(compositor_.CreateSurface(label.image, false).Get());
   segment->label_effect = compositor_.CreateEffectGroup();
   segment->label->SetEffect(segment->label_effect.Get());
-  segment->label->SetOffsetY(TextTop(label));
+  // The capitals are centered on the glyph as drawn, which may sit half a pixel off the middle.
+  segment->label->SetOffsetY(TextTop(label, pad_ + static_cast<float>(ink.top + ink.bottom) * 0.5f));
   dark_layer_->AddVisual(segment->label.Get(), FALSE, nullptr);
 
   segment->x.Bind(segment->light.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetX));
@@ -345,7 +364,7 @@ void Capsule::BuildRecording() {
   recording_text_ = std::round(center + dot_ * 0.5f + config::kStatusGap * scale_);
   const TextLine waiting = RenderText(config::kRecordingWaiting, font, config::kStatusInk);
   const TextLine capturing = RenderText(config::kRecordingActive, font, config::kStatusInk);
-  const TextLine finish = ChordLine(nullptr, config::kRecordingFinish, config::kStatusInk, scale_);
+  const TextLine finish = ChordLine(config::kRecordingFinish, config::kStatusInk, scale_);
   MakePiece(waiting_, waiting.image, TextTop(waiting));
   PlacePiece(waiting_, recording_text_);
   MakePiece(capturing_, capturing.image, TextTop(capturing));

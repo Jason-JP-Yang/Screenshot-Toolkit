@@ -68,6 +68,7 @@ bool CancelDrag(int) {
 }
 
 bool ScrollChord(int) {
+  Trace("hook: scroll chord");
   PostMessageW(g_controller, kMsgScrollChord, 0, 0);
   if (config::kScrollChord.modifiers.win) MaskWinKeyRelease();
   return true;
@@ -103,7 +104,11 @@ bool IsSelecting() {
 bool IsScrolling() { return Mode() == HookMode::kScrolling; }
 
 bool IsScrollChord() {
-  return (Mode() == HookMode::kScrollReady || Mode() == HookMode::kScrolling) && AreHeld(config::kScrollChord.modifiers);
+  if (Mode() != HookMode::kScrollReady && Mode() != HookMode::kScrolling) return false;
+  if (AreHeld(config::kScrollChord.modifiers)) return true;
+  config::Modifiers shifted = config::kScrollChord.modifiers;
+  shifted.shift = true;
+  return config::kScrollChordTakesShift && AreHeld(shifted);
 }
 
 bool IsDragging() { return Mode() == HookMode::kDrag; }

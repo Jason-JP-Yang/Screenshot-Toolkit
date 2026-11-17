@@ -37,6 +37,9 @@ class FileDragThread {
   // Calls off the latest drag, waking the loop so that it lets go of the pointer now.
   void Cancel();
 
+  // Whether the loop has the drag already. Until then it waits for the file to be saved.
+  bool Started(uint64_t id) const { return started_.load(std::memory_order_relaxed) == id; }
+
  private:
   void Main();
   void Run(const std::shared_ptr<Shot>& shot, uint64_t id);
@@ -52,6 +55,7 @@ class FileDragThread {
   uint64_t latest_id_ = 0;
   bool stopping_ = false;
   std::atomic<uint64_t> cancelled_through_{0};
+  std::atomic<uint64_t> started_{0};
 };
 
 }  // namespace sstk

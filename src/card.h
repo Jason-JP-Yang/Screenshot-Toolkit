@@ -20,6 +20,7 @@
 #include "store.h"
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -79,6 +80,8 @@ class Card {
   void DrawLong(const ScrollUpdate& update);
   void KeepLong(const ScrollUpdate& update);
   void DropLong(const TimeBase& now);
+  // Before the image is done, makes the thumbnail lifted with the card the part on show as drawn so far.
+  void FreezeView();
   float long_height() const;  // Of the scrolling screenshot's view, or 0 without one.
   RECT long_rect() const { return RECT{0, 0, long_size_.cx, long_size_.cy}; }
 
@@ -142,7 +145,13 @@ class Card {
     int max_rows = 0;
     ComPtr<IDCompositionVirtualSurface> surface;
     Image pixels;  // The finished view in memory, kept for the moment the card is lifted.
+    bool done = false;  // Whether the image is done, and `pixels` shows it.
+    // Until then, every thumbnail row drawn so far, in memory as well, so that the card can be lifted at any moment.
+    std::deque<std::vector<uint32_t>> drawn;
+    int drawn_top = 0;
   };
+
+  void KeepDrawn(const ScrollPiece& piece);
 
   int CrispIndex(int index) const;  // The scroll option borrows the app window's thumbnail.
   bool ShowsLong(int index) const;

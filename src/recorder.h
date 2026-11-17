@@ -13,6 +13,7 @@
 #include "longimage.h"
 #include "platform.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -77,9 +78,14 @@ class ScrollRecorder {
   // Ends the capture the normal way.
   void Finish();
 
+  // Whether its thread has ended, so that letting it go waits for nothing. It may still be tracing after the last update.
+  bool done() const { return done_.load(std::memory_order_acquire); }
+
  private:
   void Main(ScrollRequest request);
+  void Run(ScrollRequest request);
 
+  std::atomic<bool> done_{false};
   std::mutex mutex_;
   std::vector<POINT> wheels_;
   bool finish_ = false;

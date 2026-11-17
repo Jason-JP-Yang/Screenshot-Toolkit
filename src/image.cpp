@@ -355,18 +355,20 @@ Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, ui
   const float corner = 2.8f * scale;
 
   if (glyph.scroll) {
-    // A page with an arrow running down it, at the weight of the screens beside it.
-    const float page_w = std::round(11.0f * scale);
-    const float page_h = std::round(14.0f * scale);
+    // One page that keeps going: solid, taller than the screens beside it, with two chevrons down cut out of it.
+    const float page_w = std::round(12.0f * scale);
+    const float page_h = std::round(19.0f * scale);
     const float cx = std::round((width - page_w) * 0.5f) + page_w * 0.5f;
     const float cy = std::round((height - page_h) * 0.5f) + page_h * 0.5f;
     return RenderShape(width, height, color, [&](float px, float py) {
+      const float page = Coverage(RoundedBoxDistance(px, py, cx, cy, page_w * 0.5f, page_h * 0.5f, 2.6f * scale));
       const float ux = (px - cx) / scale;
       const float uy = (py - cy) / scale;
-      const float arrow = std::min({SegmentDistance(ux, uy, 0.0f, -3.6f, 0.0f, 3.0f), SegmentDistance(ux, uy, -2.5f, 0.6f, 0.0f, 3.1f),
-                                    SegmentDistance(ux, uy, 2.5f, 0.6f, 0.0f, 3.1f)});
-      const float page = Outline(px, py, cx, cy, page_w * 0.5f, page_h * 0.5f, corner, stroke);
-      return std::max(page, Coverage((arrow - 0.58f) * scale)) * color_alpha;
+      const auto chevron = [&](float y) {
+        return std::min(SegmentDistance(ux, uy, -3.0f, y - 1.5f, 0.0f, y + 1.5f), SegmentDistance(ux, uy, 0.0f, y + 1.5f, 3.0f, y - 1.5f));
+      };
+      const float cut = Coverage((std::min(chevron(-2.0f), chevron(2.2f)) - 0.9f) * scale);
+      return page * (1.0f - cut) * color_alpha;
     });
   }
 
@@ -574,13 +576,12 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
   TEXTMETRICW metrics{};
   GetTextMetricsW(dc, &metrics);
   line.baseline = static_cast<float>(metrics.tmAscent) / kOversample;
+  // The capitals' height is read off the outline of an H, since the font's own cap height is often not filled in.
   line.cap_height = font_pixels * 0.7f;
-  if (const UINT size = GetOutlineTextMetricsW(dc, 0, nullptr); size >= sizeof(OUTLINETEXTMETRICW)) {
-    std::vector<uint8_t> buffer(size);
-    auto* outline = reinterpret_cast<OUTLINETEXTMETRICW*>(buffer.data());
-    if (GetOutlineTextMetricsW(dc, size, outline) != 0 && outline->otmsCapEmHeight > 0) {
-      line.cap_height = static_cast<float>(outline->otmsCapEmHeight) / kOversample;
-    }
+  GLYPHMETRICS capital{};
+  const MAT2 identity{{0, 1}, {0, 0}, {0, 0}, {0, 1}};
+  if (GetGlyphOutlineW(dc, L'H', GGO_METRICS, &capital, 0, nullptr, &identity) != GDI_ERROR && capital.gmptGlyphOrigin.y > 0) {
+    line.cap_height = static_cast<float>(capital.gmptGlyphOrigin.y) / kOversample;
   }
   const int length = lstrlenW(text);
   SIZE extent{};

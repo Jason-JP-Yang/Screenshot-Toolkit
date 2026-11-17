@@ -29,6 +29,7 @@ enum Message : UINT {
   kMsgScrollChord,             // wParam: 1 when a capture chord sent it, 0 for the scroll chord.
   kMsgScrollWheel,             // lParam: where the wheel turned, in virtual screen coordinates, as two signed halves.
   kMsgScrollUpdate,            // lParam: ScrollUpdate*, ownership moves to the receiver
+  kMsgOpenShot,                // lParam: std::wstring*, the saved file to open, ownership moves to the receiver
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

@@ -1924,7 +1924,6 @@ void Stitcher::Finish() {
         top_band_, bottom_band_, textured_ ? 1 : 0, bar_, edge_, elements_);
   Trace("stitch: content came in front of what holds still again and again at %llu pixels, %llu unlike its commonest color",
         static_cast<unsigned long long>(texture_seen_), static_cast<unsigned long long>(texture_apart_));
-  if (Tracing()) Dump();
   // Everything held is final now, with each end painted on as the screen showed it there, and the picture behind.
   std::vector<Run> runs;
   for (int row = min_position_; row < max_position_ + height_; ++row) {

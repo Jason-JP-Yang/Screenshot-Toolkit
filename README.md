@@ -8,7 +8,7 @@ There is no window, tray icon, editor, or settings page, by design.
 
 - **Capture:** press PrintScreen or Win+Shift+S. Press as fast as you like: each shot stacks into a deck and leaves on its own 3-second timer.
 - **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. The selected option shows its name beside its icon, and the capsule springs to its new width as the selection moves. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
-- **Take a scrolling screenshot:** when the top app has content out of view, the capsule also offers a page icon. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
+- **Take a scrolling screenshot:** when the top app has content out of view, the capsule also offers a solid page icon with two chevrons down. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
 - **Switch regions without the mouse:** while a thumbnail with options is on screen, Win+Shift+Left and Win+Shift+Right step through them, as do Win+Shift with side buttons 4 and 5. The steps wrap around. With nothing to switch, those keys keep their Windows meaning.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
@@ -31,7 +31,7 @@ Each screenshot looks in the background for content in the top app window that r
 
 Each of these must also be what the screen really shows at its place: a page under a dialog or an overlay, behind a fullscreen video, or covered by another window does not count. A window that reports none of this, such as a game or a video, gets no icon, and neither does a short page, a dialog that fits, or text cut off by a box that does not scroll. Scroll bars play no part in this.
 
-Selected, the icon shows how to start: press it again, or press Win+Enter. While recording:
+Selected, the icon shows its name with the Win and Enter keycaps beside it: press it again, or press Win+Enter. Win+Shift+Enter works as well, so Enter can follow Win+Shift+Left or Right without letting go of Shift. While recording:
 
 - Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, with the pointer settling it when several things could be. An area the app reports is kept whole, as wide as the app lays it out however its content is arranged, less a scroll bar at its edge. Otherwise the display's own divisions bound it, such as a sidebar beside it.
 - The image is built pixel by pixel. Content enters it where readings agree it followed the scroll. What was only seen under something, such as a see-through bar, is taken from wherever it was seen clear of it.
@@ -41,6 +41,8 @@ Selected, the icon shows how to start: press it again, or press Win+Enter. While
 - Fast scrolling, frames blurred in motion, and see-through windows are all followed. What was first seen blurred is retaken when the content rests.
 - Scrolling up past the start adds content above it as well. Each end of the image shows what the screen showed there.
 - The thumbnail follows along, growing up to about half the screen and then showing the part you are on.
+
+A press on the thumbnail finishes it too, and the thumbnail answers at once: drag it into an app, swipe it away, or click to open it, while the image is finished and saved in the background. A drop or the viewer gets the scrolling screenshot as soon as it is on disk, and a swiped thumbnail's screenshot is saved all the same.
 
 It finishes normally on PrintScreen, Win+Shift+S, Win+Enter, a click on the capsule, or 5 seconds without scrolling. It ends early when the window moves or closes, when a wheel turns outside the window, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it.
 

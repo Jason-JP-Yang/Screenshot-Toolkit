@@ -68,6 +68,14 @@ void TrimMemory(App& app) {
   Trace("trimmed, commit %.1f MB", memory.PrivateUsage / 1048576.0);
 }
 
+// Handed to the shell, so that the viewer does not inherit this process's UI Access right.
+void OpenInViewer(const std::wstring& path) {
+  EnsureOleInitialized();
+  AllowSetForegroundWindow(ASFW_ANY);
+  const std::wstring quoted = L"\"" + path + L"\"";
+  ShellExecuteW(nullptr, L"open", L"explorer.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
 void DropPendingClipboard(App& app) {
   if (app.pending_clipboard != nullptr) {
     GlobalFree(app.pending_clipboard);
@@ -190,6 +198,9 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
       return 0;
     case kMsgScrollUpdate:
       app->overlay->OnScrollUpdate(std::unique_ptr<ScrollUpdate>(reinterpret_cast<ScrollUpdate*>(lparam)));
+      return 0;
+    case kMsgOpenShot:
+      OpenInViewer(*std::unique_ptr<std::wstring>(reinterpret_cast<std::wstring*>(lparam)));
       return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {

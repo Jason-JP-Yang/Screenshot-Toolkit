@@ -29,6 +29,7 @@ inline constexpr float kGlyphOnGlassAlpha = 0.74f;
 inline constexpr uint32_t kGlyphOnPorcelain = 0x16171A;
 inline constexpr uint32_t kHoverVeilColor = 0xFFFFFF;
 inline constexpr float kHoverVeilAlpha = 0.10f;
+inline constexpr float kShortcutInk = 0.46f;  // The keycaps beside an option's name, as a share of the name's ink.
 
 // The outcome of a scrolling screenshot, filling the selector for a moment, and the ink on it.
 inline constexpr uint32_t kScrollSucceeded = 0x1C7C43;

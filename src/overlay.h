@@ -63,7 +63,7 @@ class Overlay {
   void StartScroll(Deck& deck);
   void FinishScroll();
   void CancelScroll();
-  bool scrolling() const { return recorder_ != nullptr; }
+  Card* HeldCard(const std::shared_ptr<Shot>& shot) const;  // The card of the shot, if it is in the air.
 
   HWND controller_;
   Compositor& compositor_;
@@ -83,6 +83,7 @@ class Overlay {
   uint64_t next_shot_id_ = 1;
   std::unique_ptr<ScrollDetector> detector_;
   std::unique_ptr<ScrollRecorder> recorder_;  // The scrolling screenshot in progress, if any.
+  std::vector<std::unique_ptr<ScrollRecorder>> retired_;  // Finished, their threads winding down.
   Deck* scroll_deck_ = nullptr;
   uint64_t scroll_session_ = 0;
 };

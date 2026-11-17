@@ -56,6 +56,7 @@ class Deck {
   bool BeginScroll(ScrollRequest& request);
   void ScrollUpdated(const ScrollUpdate& update);
   void EndScroll(const ScrollUpdate& update);
+  void CancelScroll();
 
   LRESULT HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
@@ -100,6 +101,8 @@ class Deck {
   void ExcludeWhileScrolling(bool exclude);
   int LongMaxRows() const;
   bool Holds(const Card* card) const;
+  Card* Find(const std::shared_ptr<Shot>& shot) const;
+  void HideSink();
   POINT StagePoint(LPARAM lparam) const;
   Card* front() const { return cards_.empty() ? nullptr : cards_.back().get(); }
 
@@ -153,9 +156,15 @@ class Deck {
   bool bin_showing_ = false;
   bool bin_over_ = false;
 
-  Card* scroll_card_ = nullptr;  // Recording or showing its outcome.
+  // The shot a scrolling screenshot is recording, finishing, or showing the outcome of. Its card may have left the deck
+  // meanwhile, lifted, swiped away, or opened, and the screenshot is kept all the same.
+  std::shared_ptr<Shot> scroll_shot_;
   double outcome_until_ = 0.0;
-  bool open_when_finished_ = false;  // A click on the thumbnail while the scrolling screenshot was still finishing.
+
+  // What the input sink was last shaped around, so that an unchanged shape is not set again.
+  bool sink_set_ = false;
+  RECT sink_card_{};
+  RECT sink_capsule_{};
 
   bool hovering_ = false;
   bool tracking_leave_ = false;
@@ -340,22 +349,33 @@ void Deck::Layout(const SpringSpec& front_spec, const TimeBase& now, double dela
   UpdateSink();
 }
 
+void Deck::HideSink() {
+  ShowWindow(sink_, SW_HIDE);
+  sink_set_ = false;
+}
+
 void Deck::UpdateSink() {
   if (dragging_) return;
   Card* top = front();
   if (top == nullptr) {
-    ShowWindow(sink_, SW_HIDE);
+    HideSink();
     return;
   }
 
   // A scrolling screenshot's thumbnail takes presses as any other does, and passes the wheel on to the app beneath it.
   RECT card{static_cast<LONG>(front_rect_.left), static_cast<LONG>(front_rect_.top),
             static_cast<LONG>(front_rect_.right), static_cast<LONG>(front_rect_.bottom)};
+  const RECT shown_capsule = capsule_->visible() ? capsule_->Bounds() : RECT{};
+  // A growing scrolling screenshot lays the deck out many times a second, mostly in the same shape.
+  if (sink_set_ && EqualRect(&card, &sink_card_) && EqualRect(&shown_capsule, &sink_capsule_)) return;
+  sink_set_ = true;
+  sink_card_ = card;
+  sink_capsule_ = shown_capsule;
   RECT bounding = card;
   HRGN shape = CreateRectRgnIndirect(&bounding);
 
   if (capsule_->visible()) {
-    const RECT capsule = capsule_->Bounds();
+    const RECT capsule = shown_capsule;
     // The gap between the capsule and the card stays interactive, so crossing it keeps hover alive.
     RECT bridge{std::max(card.left, capsule.left), capsule.bottom, std::min(card.right, capsule.right), card.top};
     HRGN extra = CreateRectRgnIndirect(&capsule);
@@ -402,7 +422,7 @@ uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   // A scrolling screenshot's card gives way to the new one.
   if (outcome_until_ != 0.0) {
     EndOutcome(now);
-  } else if (scroll_card_ != nullptr) {
+  } else if (scroll_shot_ != nullptr) {
     owner_.FinishScroll();
   }
 
@@ -535,7 +555,9 @@ bool Deck::BeginScroll(ScrollRequest& request) {
 
   const TimeBase now = compositor_.Now();
   top->busy = true;
-  scroll_card_ = top;
+  scroll_shot_ = top->shot();
+  // Whoever wants the file from now on, to drop it somewhere or to open it, gets the scrolling screenshot.
+  store_.Expect(scroll_shot_);
   capsule_->ShowRecording(false, now);
   ExcludeWhileScrolling(true);
   UpdateSink();
@@ -544,7 +566,7 @@ bool Deck::BeginScroll(ScrollRequest& request) {
 }
 
 void Deck::ScrollUpdated(const ScrollUpdate& update) {
-  Card* card = scroll_card_;
+  Card* card = Find(scroll_shot_);
   if (card == nullptr || card != front()) return;
   const TimeBase now = compositor_.Now();
   if (update.locked) {
@@ -559,22 +581,35 @@ void Deck::ScrollUpdated(const ScrollUpdate& update) {
 
 void Deck::EndScroll(const ScrollUpdate& update) {
   ExcludeWhileScrolling(false);
-  Card* card = scroll_card_;
-  if (card == nullptr || !Holds(card)) {
-    scroll_card_ = nullptr;
+  const std::shared_ptr<Shot> shot = scroll_shot_;
+  if (shot == nullptr) return;
+  const TimeBase now = compositor_.Now();
+  const bool kept = update.outcome != ScrollOutcome::kFailed && update.image != nullptr;
+  if (kept) store_.SetLongImage(shot, update.image);
+  Card* card = Find(shot);
+  // Lifted, the card still takes the image, and shows it should it come back.
+  Card* held = card == nullptr ? owner_.HeldCard(shot) : nullptr;
+  if (Card* taker = card != nullptr ? card : held; taker != nullptr) {
+    if (kept) {
+      taker->KeepLong(update);
+    } else {
+      taker->DropLong(now);
+    }
+    SubmitSelection(*taker);
+  } else if (kept) {
+    // The card left while the image was being made, swiped away or opened, and the image is kept all the same.
+    store_.Submit(shot, RECT{0, 0, update.image->width(), update.image->height()}, true);
+  } else {
+    store_.Settle(shot);
+  }
+  if (held != nullptr) held->busy = false;
+  if (card == nullptr) {
+    scroll_shot_ = nullptr;
+    compositor_.Commit();
     return;
   }
-  const TimeBase now = compositor_.Now();
-  if (update.outcome != ScrollOutcome::kFailed && update.image != nullptr) {
-    store_.SetLongImage(card->shot(), update.image);
-    card->KeepLong(update);
-  } else {
-    card->DropLong(now);
-  }
-  SubmitSelection(*card);
   // A press on the thumbnail finished it, and the thumbnail is already wanted, so there is no moment for the outcome.
-  const bool wanted = press_ != Press::kNone || open_when_finished_;
-  if (card == front() && !wanted) {
+  if (card == front() && press_ == Press::kNone && capsule_->visible()) {
     capsule_->ShowOutcome(update.outcome, now);
     outcome_until_ = now.seconds + config::kScrollResultSeconds;
     Layout(config::kMorph, now);
@@ -582,25 +617,33 @@ void Deck::EndScroll(const ScrollUpdate& update) {
     // Or a newer shot came to the front while this one was still recording.
     card->busy = false;
     card->expiry = now.seconds + config::kDwellSeconds;
-    scroll_card_ = nullptr;
+    scroll_shot_ = nullptr;
     if (card == front()) BindCapsuleToFront(now);
     Layout(card == front() ? config::kMorph : config::kReflow, now);
   }
   compositor_.Commit();
-  if (open_when_finished_) {
-    open_when_finished_ = false;
-    if (card == front()) OpenFront();
-  }
 }
 
 // The outcome has had its moment, and the card goes back to being an ordinary screenshot.
 void Deck::EndOutcome(const TimeBase& now) {
   outcome_until_ = 0.0;
-  if (scroll_card_ != nullptr && Holds(scroll_card_)) {
-    scroll_card_->busy = false;
-    scroll_card_->expiry = now.seconds + config::kDwellSeconds;
+  if (Card* card = Find(scroll_shot_); card != nullptr) {
+    card->busy = false;
+    card->expiry = now.seconds + config::kDwellSeconds;
   }
-  scroll_card_ = nullptr;
+  scroll_shot_ = nullptr;
+}
+
+// Called off with the screens it was on: whoever waits for the file gets it as it was.
+void Deck::CancelScroll() {
+  if (scroll_shot_ != nullptr) store_.Settle(scroll_shot_);
+  scroll_shot_ = nullptr;
+}
+
+Card* Deck::Find(const std::shared_ptr<Shot>& shot) const {
+  if (shot == nullptr) return nullptr;
+  const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& card) { return card->shot() == shot; });
+  return found != cards_.end() ? found->get() : nullptr;
 }
 
 // Screenshots may be set to show the overlay, but a scrolling screenshot must never stitch in its own thumbnail.
@@ -709,7 +752,7 @@ void Deck::SetDragActive(bool active, const TimeBase& now) {
     hovering_ = false;
     tracking_leave_ = false;
     capsule_->SetHover(-1, now);
-    ShowWindow(sink_, SW_HIDE);
+    HideSink();
     return;
   }
   last_tick_ = now.seconds;
@@ -747,6 +790,7 @@ void Deck::PlaceBin() {
 // During a drag the sink covers the bin's hot zone, so that the application behind it can't receive the drop.
 void Deck::ShowBinHole() {
   const RECT zone = bin_->HotZone();
+  sink_set_ = false;
   SetWindowRgn(sink_, nullptr, FALSE);
   SetWindowPos(sink_, HWND_TOPMOST, bounds_.left + zone.left, bounds_.top + zone.top, zone.right - zone.left,
                zone.bottom - zone.top, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
@@ -773,7 +817,7 @@ void Deck::HideBin() {
   bin_->Hide();
   bin_showing_ = false;
   bin_over_ = false;
-  ShowWindow(sink_, SW_HIDE);
+  HideSink();
 }
 
 void Deck::GulpBin() {
@@ -806,13 +850,12 @@ bool Deck::IsIdle() const {
 void Deck::Rest() {
   if (!shown_) return;
   shown_ = false;
-  scroll_card_ = nullptr;
   outcome_until_ = 0.0;
   capsule_->Clear();
   if (bin_) bin_->Reset();
   bin_running_ = false;
   compositor_.Commit();
-  ShowWindow(sink_, SW_HIDE);
+  HideSink();
   ShowWindow(window_, SW_HIDE);
   hovering_ = false;
   tracking_leave_ = false;
@@ -852,9 +895,7 @@ void Deck::OnMouseMove(POINT point) {
   hovering_ = true;
   const TimeBase now = compositor_.Now();
 
-  // The press that finished a scrolling screenshot goes on from where it is once there is a finished thumbnail to act on.
-  if (press_ != Press::kNone && front() != nullptr && front()->busy) return;
-
+  // A press that finished a scrolling screenshot acts on the thumbnail at once, while the image is still being made.
   if (press_ == Press::kCard) {
     const int dx = point.x - press_point_.x;
     const int dy = point.y - press_point_.y;
@@ -951,11 +992,7 @@ void Deck::OnButtonUp(POINT point) {
 
   switch (press) {
     case Press::kCard:
-      if (front() != nullptr && front()->busy) {
-        open_when_finished_ = true;
-      } else {
-        OpenFront();
-      }
+      OpenFront();
       break;
     case Press::kSwipe: {
       Card* top = front();
@@ -987,25 +1024,24 @@ void Deck::OnMouseLeave() {
   compositor_.Commit();
 }
 
+// The thumbnail goes at once, and the viewer opens the file once it is saved, as a scrolling screenshot may not be yet.
 void Deck::OpenFront() {
   Card* top = front();
   if (top == nullptr) return;
-  const std::wstring path = store_.WaitUntilSaved(top->shot());
+  const std::shared_ptr<Shot> shot = top->shot();
   const TimeBase now = compositor_.Now();
   Dismiss(cards_.size() - 1, now, 0.0f);
   compositor_.Commit();
-  if (path.empty()) return;
-  EnsureOleInitialized();
   // The click makes this process eligible to pass the foreground on, which the viewer needs to come to the front.
   AllowSetForegroundWindow(ASFW_ANY);
-  // Handed to the shell, so that the viewer does not inherit this process's UI Access right.
-  const std::wstring quoted = L"\"" + path + L"\"";
-  ShellExecuteW(nullptr, L"open", L"explorer.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL);
+  store_.OpenWhenSaved(shot);
 }
 
 void Deck::LiftFront() {
   press_ = Press::kNone;
-  if (front() == nullptr || front()->thumbnail() == nullptr || owner_.scrolling()) {
+  // A scrolling screenshot still being made is lifted as drawn so far.
+  if (Card* top = front(); top != nullptr) top->FreezeView();
+  if (front() == nullptr || front()->thumbnail() == nullptr) {
     if (GetCapture() == sink_) ReleaseCapture();
     return;
   }
@@ -1033,6 +1069,8 @@ class DragSession {
 
   uint64_t id() const { return id_; }
   const std::shared_ptr<Shot>& shot() const { return shot_; }
+  Card* card() const { return card_.get(); }
+  bool over_bin() const { return over_bin_; }
   void SetAccepts(bool accepts) { accepts_ = accepts; }
 
   // Returns whether the screenshot left the deck for good.
@@ -1512,11 +1550,15 @@ void Overlay::OnScrollUpdate(std::unique_ptr<ScrollUpdate> update) {
     deck->ScrollUpdated(*update);
     return;
   }
-  // Its thread has already ended, so this only joins it.
-  recorder_.reset();
+  // Its thread may still be writing traces, so it is let go without waiting.
+  retired_.push_back(std::move(recorder_));
   scroll_deck_ = nullptr;
   deck->EndScroll(*update);
   SyncHookMode();
+}
+
+Card* Overlay::HeldCard(const std::shared_ptr<Shot>& shot) const {
+  return session_ && session_->shot() == shot ? session_->card() : nullptr;
 }
 
 void Overlay::StartScroll(Deck& deck) {
@@ -1539,6 +1581,7 @@ void Overlay::FinishScroll() {
 // Calls a scrolling screenshot off with nothing to show for it, as when the screens change under it along with the decks.
 void Overlay::CancelScroll() {
   recorder_.reset();
+  if (scroll_deck_ != nullptr) scroll_deck_->CancelScroll();
   scroll_deck_ = nullptr;
 }
 
@@ -1571,6 +1614,17 @@ void Overlay::OnDragFrame() {
   last_frame_ = now.seconds;
 
   if (session_) session_->Frame(now);
+  // Let go over the bin while the file is still being saved, the card has nothing to hand over, and goes in at once.
+  if (session_ && session_->over_bin() && file_drag_ && !file_drag_->Started(session_->id())) {
+    const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+    if ((GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) == 0) {
+      file_drag_->Cancel();
+      FileDragOutcome outcome;
+      outcome.id = session_->id();
+      GetCursorPos(&outcome.release);
+      EndDrag(outcome);
+    }
+  }
   finishing_.erase(std::remove_if(finishing_.begin(), finishing_.end(), [&](const auto& each) { return !each->Frame(now); }),
                    finishing_.end());
   bool bins_moving = false;
@@ -1614,7 +1668,9 @@ void Overlay::EndDrag(const FileDragOutcome& outcome) {
 }
 
 void Overlay::OnTick() {
-  bool any_active = session_ != nullptr || !finishing_.empty() || pacer_.running();
+  // A finished recorder's thread may still be writing traces, and is let go once it has ended.
+  retired_.erase(std::remove_if(retired_.begin(), retired_.end(), [](const auto& recorder) { return recorder->done(); }), retired_.end());
+  bool any_active = session_ != nullptr || !finishing_.empty() || pacer_.running() || recorder_ != nullptr || !retired_.empty();
   const TimeBase now = compositor_.Now();
   for (auto& deck : decks_) {
     if (!deck->IsIdle()) {

@@ -437,9 +437,40 @@ bool Card::BeginLong(const ScrollUpdate& update, int max_rows, const TimeBase& n
 void Card::DrawLong(const ScrollUpdate& update) {
   if (!long_.surface) return;
   for (const ScrollPiece& piece : update.pieces) {
-    if (piece.rows) compositor_.Upload(long_.surface.Get(), POINT{0, piece.at}, piece.rows);
+    if (!piece.rows) continue;
+    compositor_.Upload(long_.surface.Get(), POINT{0, piece.at}, piece.rows);
+    if (!long_.done) KeepDrawn(piece);
   }
   SetLongView(update.content_top, update.content_bottom, update.view_bottom);
+}
+
+void Card::KeepDrawn(const ScrollPiece& piece) {
+  const Image& rows = piece.rows;
+  if (rows.width() != long_.view_width) return;
+  if (long_.drawn.empty()) long_.drawn_top = piece.at;
+  for (; piece.at < long_.drawn_top; --long_.drawn_top) long_.drawn.emplace_front();
+  while (long_.drawn_top + static_cast<int>(long_.drawn.size()) < piece.at + rows.height()) long_.drawn.emplace_back();
+  for (int y = 0; y < rows.height(); ++y) {
+    const auto* source = reinterpret_cast<const uint32_t*>(rows.data() + static_cast<ptrdiff_t>(y) * rows.stride());
+    long_.drawn[static_cast<size_t>(piece.at + y - long_.drawn_top)].assign(source, source + rows.width());
+  }
+}
+
+void Card::FreezeView() {
+  if (!ShowsLong(selected_) || long_.done) return;
+  Image view = Image::Allocate(long_.view_width, std::max(long_.view_bottom - long_.view_top, 1));
+  if (!view) return;
+  for (int y = 0; y < view.height(); ++y) {
+    auto* out = reinterpret_cast<uint32_t*>(view.data() + static_cast<ptrdiff_t>(y) * view.stride());
+    const int at = long_.view_top + y - long_.drawn_top;
+    const bool known = at >= 0 && at < static_cast<int>(long_.drawn.size()) && long_.drawn[static_cast<size_t>(at)].size() == static_cast<size_t>(view.width());
+    if (known) {
+      std::copy(long_.drawn[static_cast<size_t>(at)].begin(), long_.drawn[static_cast<size_t>(at)].end(), out);
+    } else {
+      std::fill(out, out + view.width(), 0xFF000000u);
+    }
+  }
+  long_.pixels = std::move(view);
 }
 
 void Card::KeepLong(const ScrollUpdate& update) {
@@ -458,6 +489,8 @@ void Card::KeepLong(const ScrollUpdate& update) {
   const double top = (long_.view_top - kLongOrigin) * stretch - skipped;
   const double bottom = (long_.view_bottom - kLongOrigin) * stretch - skipped;
   long_.pixels = update.image->Resample(top, bottom, long_.view_width, long_.view_bottom - long_.view_top);
+  long_.done = true;
+  long_.drawn = std::deque<std::vector<uint32_t>>{};
 }
 
 void Card::DropLong(const TimeBase& now) {
