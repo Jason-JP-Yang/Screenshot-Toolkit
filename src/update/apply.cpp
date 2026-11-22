@@ -77,6 +77,7 @@ int RunApplyUpdate() {
   }
   if (replaced) {
     RecordUninstallEntry();
+    AllowThroughFolderProtection(true);
     WriteUpdateState(UpdateState::kUpdated, SSTK_VERSION_WIDE);
   } else {
     WriteUpdateState(UpdateState::kFailed, SSTK_VERSION_WIDE, L"Couldn't replace the installed program.");

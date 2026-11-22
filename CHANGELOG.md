@@ -23,6 +23,10 @@ Built programs are kept per version in the local `release/` folder, created by `
 - With no arguments the program opens its window. The program itself now runs with `--run`.
 - `--install` and `--uninstall` open the window, and take `--quiet` to run without it.
 
+### Fixed
+
+- With Microsoft Defender's Controlled folder access turned on, screenshots couldn't be saved to Pictures, and Defender reported the program as blocked. Installing and every update now add the installed program to the apps allowed through it, and uninstalling takes it off the list.
+
 ## 0.2.0
 
 ### Added

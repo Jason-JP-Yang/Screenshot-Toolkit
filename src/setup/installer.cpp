@@ -12,6 +12,7 @@
 #include <shlobj.h>
 #include <taskschd.h>
 #include <tlhelp32.h>
+#include <wbemidl.h>
 
 #include <cwchar>
 
@@ -253,6 +254,37 @@ void RemoveLegacyTasks() {
   root->DeleteFolder(Bstr(kLegacyTaskFolder), 0);
 }
 
+// Defender's list of programs allowed through Controlled folder access, changed through the same WMI method that
+// Add-MpPreference and Remove-MpPreference call.
+bool ChangeFolderProtection(const wchar_t* method, const std::wstring& program) {
+  ComPtr<IWbemLocator> locator;
+  if (FAILED(CoCreateInstance(__uuidof(WbemLocator), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&locator)))) return false;
+  ComPtr<IWbemServices> services;
+  if (FAILED(locator->ConnectServer(Bstr(L"ROOT\\Microsoft\\Windows\\Defender"), nullptr, nullptr, nullptr, 0, nullptr, nullptr, &services))) {
+    return false;
+  }
+  CoSetProxyBlanket(services.Get(), RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
+                    nullptr, EOAC_NONE);
+  const Bstr type(L"MSFT_MpPreference");
+  ComPtr<IWbemClassObject> definition;
+  ComPtr<IWbemClassObject> signature;
+  ComPtr<IWbemClassObject> parameters;
+  if (FAILED(services->GetObject(type, 0, nullptr, &definition, nullptr)) || FAILED(definition->GetMethod(method, 0, &signature, nullptr)) ||
+      signature == nullptr || FAILED(signature->SpawnInstance(0, &parameters))) {
+    return false;
+  }
+  VARIANT list;
+  VariantInit(&list);
+  list.vt = VT_ARRAY | VT_BSTR;
+  list.parray = SafeArrayCreateVector(VT_BSTR, 0, 1);
+  if (list.parray == nullptr) return false;
+  LONG index = 0;
+  SafeArrayPutElement(list.parray, &index, Bstr(program.c_str()));
+  const HRESULT put = parameters->Put(L"ControlledFolderAccessAllowedApplications", 0, &list, 0);
+  VariantClear(&list);
+  return SUCCEEDED(put) && SUCCEEDED(services->ExecMethod(type, Bstr(method), 0, nullptr, parameters.Get(), nullptr, nullptr));
+}
+
 int RegisterAndStartService(const std::wstring& target) {
   SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
   if (manager == nullptr) return kFailService;
@@ -381,6 +413,7 @@ int Install(HWND window) {
   if (!WriteSettings()) return kFailSettings;
   step(3);
   if (!WriteUninstallEntry(target) || !CreateStartShortcut(target)) return kFailRegister;
+  AllowThroughFolderProtection(true);
   RemoveLegacyTasks();
   step(4);
   return RegisterAndStartService(target);
@@ -394,6 +427,7 @@ int Uninstall(HWND window) {
   StopEverything();
   step(1);
   if (!RemoveService()) return kFailRemoveService;
+  AllowThroughFolderProtection(false);
   RemoveUninstallEntry();
   RemoveProductKey();
   RemoveStartShortcut();
@@ -508,6 +542,15 @@ void EndProcessesRunning(const std::wstring& image) {
 }
 
 bool RecordUninstallEntry() { return WriteUninstallEntry(InstalledExecutablePath()); }
+
+void AllowThroughFolderProtection(bool allow) {
+  const std::wstring program = InstalledExecutablePath();
+  if (program.empty()) return;
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  const bool changed = ChangeFolderProtection(allow ? L"Add" : L"Remove", program);
+  Trace("controlled folder access %s: %s", allow ? "allow" : "remove", changed ? "done" : "not changed");
+  if (SUCCEEDED(com)) CoUninitialize();
+}
 
 bool HandOffToTemporaryCopy(const wchar_t* arguments) {
   if (!IsInstalledCopy()) return false;

@@ -2,7 +2,8 @@
 // one to the setup window; messages may go from a higher integrity level to a lower one.
 //
 // Installing copies the program to Program Files, writes %ProgramData%\Screenshot Toolkit\settings.ini if there is
-// none, adds the entry in Settings > Apps and a Start menu shortcut for everyone, and registers and starts the service.
+// none, adds the entry in Settings > Apps and a Start menu shortcut for everyone, lets the program through Defender's
+// Controlled folder access so it can save to Pictures, and registers and starts the service.
 // Uninstalling removes all of that, and anything earlier versions left, apart from the screenshots themselves.
 #pragma once
 
@@ -39,6 +40,11 @@ void EndProcessesRunning(const std::wstring& image);
 
 // Writes the entry in Settings > Apps for the installed file, with this build's version.
 bool RecordUninstallEntry();
+
+// Adds the installed file to the programs Microsoft Defender's Controlled folder access lets write to protected
+// folders such as Pictures, or takes it off that list. Needs administrator rights or SYSTEM. Where Defender is not
+// the antivirus, nothing changes.
+void AllowThroughFolderProtection(bool allow);
 
 // The uninstall and About windows must not hold the installed file, which they may see removed or replaced. When this
 // is the installed copy, a copy in %TEMP% takes over with `arguments` and this returns true.

@@ -74,7 +74,8 @@ To update by hand, run a newer copy the same way; it replaces the installed one.
 2. Copies the program to `Program Files\Screenshot Toolkit`.
 3. Writes `%ProgramData%\Screenshot Toolkit\settings.ini`, unless one is already there.
 4. Adds Screenshot Toolkit to **Settings › Apps** and to the Start menu for everyone on the PC. It doesn't add a desktop icon.
-5. Registers and starts the **Screenshot Toolkit** service. From then on the service starts the program whenever someone signs in, and starts it again within a second if it is ended or crashes.
+5. Allows the program through Microsoft Defender's **Controlled folder access**, so it can still save to Pictures when that protection is on. Updates renew this, and uninstalling removes it.
+6. Registers and starts the **Screenshot Toolkit** service. From then on the service starts the program whenever someone signs in, and starts it again within a second if it is ended or crashes.
 
 There are no options to choose. Installing, updating, and uninstalling never touch your screenshots.
 </details>
