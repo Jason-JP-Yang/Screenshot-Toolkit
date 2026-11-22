@@ -7,8 +7,8 @@ There is no window, tray icon, editor, or settings page, by design.
 ## Using it
 
 - **Capture:** press PrintScreen or Win+Shift+S. Press as fast as you like: each shot stacks into a deck and leaves on its own 3-second timer.
-- **Pick a region:** the capsule above the thumbnail offers the whole screen, the top app, each window of a Snap layout, and the screen without the taskbar. The selected option shows its name beside its icon, and the capsule springs to its new width as the selection moves. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
-- **Take a scrolling screenshot:** when the top app has content out of view, the capsule also offers a solid page icon with two chevrons down. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
+- **Pick a region:** the capsule above the thumbnail offers the whole screen, the screen without the taskbar, the top app, and each window of a Snap layout, in that order. The selected option shows its name beside its icon, and the capsule springs to its new width as the selection moves. A selection updates the thumbnail, the saved file, and the clipboard at once, and restarts the timer.
+- **Take a scrolling screenshot:** when the top app has content out of view, the capsule also offers, last, the area that scrolls with a chevron pointing down cut out of it. Select it, then press it again or press Win+Enter. The capsule turns into a breathing recording dot, and you scroll any scrollable area of that app as usual: the first scroll picks the area, and the thumbnail grows downward as new content is stitched on, keeping its width. See [Scrolling screenshots](#scrolling-screenshots).
 - **Switch regions without the mouse:** while a thumbnail with options is on screen, Win+Shift+Left and Win+Shift+Right step through them, as do Win+Shift with side buttons 4 and 5. The steps wrap around. With nothing to switch, those keys keep their Windows meaning.
 - **Hover** over the thumbnail to keep it on screen.
 - **Click** the thumbnail to open the image.
@@ -23,15 +23,15 @@ With several monitors, the one under the cursor is captured. Options covering an
 
 ## Scrolling screenshots
 
-Each screenshot looks in the background for content in the top app window that really lies out of view. Nothing is scrolled or clicked to find out, so no window on screen reacts. Only what the app itself reports counts, read from UI Automation's raw view, and the page icon appears at the end of the capsule only if one of these holds:
+Each screenshot looks in the background for content in the top app window that really lies out of view. Nothing is scrolled or clicked to find out, so no window on screen reacts. Only what the app itself reports counts, read from UI Automation's raw view, and the scrolling option appears at the end of the capsule only if one of these holds:
 
 - Something reports that it shows only part of its content. This covers native lists and documents, and in browsers and the apps built on them every plain box that scrolls.
 - Items stacked in a container run on past the edge it clips them at, or a list reports more items than it has rendered, as lists that draw only the visible part do.
 - A text document that says which part of it shows, as terminals and editors do, has text out of view.
 
-Each of these must also be what the screen really shows at its place: a page under a dialog or an overlay, behind a fullscreen video, or covered by another window does not count. A window that reports none of this, such as a game or a video, gets no icon, and neither does a short page, a dialog that fits, or text cut off by a box that does not scroll. Scroll bars play no part in this.
+Each of these must also be what the screen really shows at its place: a page under a dialog or an overlay, behind a fullscreen video, or covered by another window does not count. A window that reports none of this, such as a game or a video, gets no scrolling option, and neither does a short page, a dialog that fits, or text cut off by a box that does not scroll. Scroll bars play no part in this.
 
-Selected, the icon shows its name with the Win and Enter keycaps beside it: press it again, or press Win+Enter. Win+Shift+Enter works as well, so Enter can follow Win+Shift+Left or Right without letting go of Shift. While recording:
+Its icon is the area it scrolls, drawn like the other options, with a chevron pointing down cut out of it. Selected, it shows its name with the Win and Enter keycaps beside it: press it again, or press Win+Enter. Win+Shift+Enter works as well, so Enter can follow Win+Shift+Left or Right without letting go of Shift. While recording:
 
 - Scroll any way you like: the wheel, the touchpad, the scroll bar, or the keyboard. What moves decides which area is captured, with the pointer settling it when several things could be. An area the app reports is kept whole, as wide as the app lays it out however its content is arranged, less a scroll bar at its edge. Otherwise the display's own divisions bound it, such as a sidebar beside it.
 - The image is built pixel by pixel. Content enters it where readings agree it followed the scroll. What was only seen under something, such as a see-through bar, is taken from wherever it was seen clear of it.
