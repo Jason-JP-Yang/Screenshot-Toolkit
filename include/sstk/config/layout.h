@@ -12,6 +12,11 @@ inline constexpr float kCardBorder = 2.0f;
 inline constexpr float kDeckPeek = 9.0f;
 inline constexpr float kDeckShrinkPerLevel = 0.055f;
 inline constexpr int kDeckVisibleBehind = 2;
+// Plane a region switch passes over with no picture there, beside a window or scrolling screenshot reaching past the
+// screen, shows the pictures around it carried over and blurred: this many cells along its longer side, blurred
+// across this many.
+inline constexpr int kBackfillCells = 64;
+inline constexpr int kBackfillBlur = 2;
 
 // Region selector.
 inline constexpr float kCapsuleGap = 10.0f;

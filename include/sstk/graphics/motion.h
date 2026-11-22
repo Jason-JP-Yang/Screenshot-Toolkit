@@ -53,17 +53,10 @@ class AnimFloat {
   // Eases from where it is up to a peak, then falls back to zero on a spring, with no corner at either end.
   void Pulse(IDCompositionDevice* device, const TimeBase& now, float peak, double rise, const SpringSpec& fall);
 
-  // Goes straight from where it is to each of up to three stops in turn, the last being the target. One spring carries
-  // a progress from 0 to 1, starting at `progress_velocity`, and stop i is reached at progress `at[i]`: values moved
-  // with the same stops, shares, and spring keep in step. The spring must not overshoot, so that no stretch is left.
-  void Through(IDCompositionDevice* device, const TimeBase& now, const float* stops, const float* at, int count, const SpringSpec& spec,
-               float progress_velocity);
-
   // Hands sinks without a bias an animation built elsewhere, which runs until the next Snap or To.
   void Play(IDCompositionDevice* device, IDCompositionAnimation* animation);
 
   float ValueAt(double time) const;
-  float VelocityAt(double time) const;
   float target() const { return target_; }
   double end_time() const { return end_time_; }
 
@@ -75,9 +68,6 @@ class AnimFloat {
   };
 
   void Sample(double time, float* value, float* velocity) const;
-  int Leg(double progress) const;
-  double Along(int leg, double progress) const;
-  double Slope(int leg) const;
   // The delay is spent easing from `lead` to `start`, and the spring takes over from there.
   void Start(IDCompositionDevice* device, const TimeBase& now, float lead, float start, float velocity, float target,
              const SpringSpec& spec, double delay);
@@ -95,10 +85,6 @@ class AnimFloat {
   double start_time_ = 0.0;
   double end_time_ = 0.0;
   SpringSpec spec_{1.0f, 1.0f};
-  // Along stops, the spring carries progress, and these say where it goes. None while it springs straight to its target.
-  std::array<float, 4> path_{};
-  std::array<float, 4> path_at_{};
-  int path_count_ = 0;
 };
 
 // Builds an AnimFloat::Setter for a DirectComposition property with overloaded float/animation setters.

@@ -89,6 +89,9 @@ inline Image ResampleArea(const Image& source, double left, double top, double r
   return ResampleArea(source.view(), left, top, right, bottom, width, height);
 }
 
+// Clear pixels take the nearest that are not, along rows and then down columns, and the whole is then blurred.
+void Smear(Image& image, int radius);
+
 // Tinted, heavily blurred copy of a screen rectangle, used as frosted glass.
 Image RenderFrost(const Image& frame, const RECT& rect, int downscale, uint32_t tint_bgr, float tint_alpha);
 

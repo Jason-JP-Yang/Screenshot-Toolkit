@@ -1,8 +1,6 @@
 #include "sstk/graphics/motion.h"
 
-#include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace sstk {
 
@@ -59,34 +57,10 @@ bool SpringValue::Settled(float tolerance) const {
 
 void AnimFloat::Bind(void* object, Setter setter, float bias) { sinks_[sink_count_++] = Sink{object, setter, bias}; }
 
-int AnimFloat::Leg(double progress) const {
-  int leg = 0;
-  while (leg + 2 < path_count_ && progress >= path_at_[static_cast<size_t>(leg) + 1]) ++leg;
-  return leg;
-}
-
-double AnimFloat::Slope(int leg) const {
-  const size_t i = static_cast<size_t>(leg);
-  return (path_[i + 1] - path_[i]) / std::max(static_cast<double>(path_at_[i + 1] - path_at_[i]), 1e-6);
-}
-
-double AnimFloat::Along(int leg, double progress) const {
-  const size_t i = static_cast<size_t>(leg);
-  return path_[i] + Slope(leg) * (progress - path_at_[i]);
-}
-
 void AnimFloat::Sample(double time, float* value, float* velocity) const {
   if (time >= end_time_) {
     *value = target_;
     *velocity = 0.0f;
-    return;
-  }
-  if (path_count_ > 0) {
-    const SpringState state = Evaluate(spec_, -1.0, initial_velocity_, std::max(time - start_time_, 0.0));
-    const double progress = 1.0 + state.value;
-    const int leg = Leg(progress);
-    *value = static_cast<float>(Along(leg, progress));
-    *velocity = static_cast<float>(Slope(leg) * state.velocity);
     return;
   }
   if (time < start_time_) {
@@ -106,16 +80,8 @@ float AnimFloat::ValueAt(double time) const {
   return value;
 }
 
-float AnimFloat::VelocityAt(double time) const {
-  float value;
-  float velocity;
-  Sample(time, &value, &velocity);
-  return velocity;
-}
-
 void AnimFloat::Snap(float value) {
   target_ = value;
-  path_count_ = 0;
   displacement_ = 0.0f;
   initial_velocity_ = 0.0f;
   start_time_ = end_time_ = 0.0;
@@ -165,82 +131,8 @@ void AnimFloat::Pulse(IDCompositionDevice* device, const TimeBase& now, float pe
   Start(device, now, ValueAt(now.seconds), peak, 0.0f, 0.0f, fall, rise);
 }
 
-void AnimFloat::Through(IDCompositionDevice* device, const TimeBase& now, const float* stops, const float* at, int count, const SpringSpec& spec,
-                        float progress_velocity) {
-  float value;
-  float velocity;
-  Sample(now.seconds, &value, &velocity);
-  count = std::clamp(count, 1, static_cast<int>(path_.size()) - 1);
-  path_[0] = value;
-  path_at_[0] = 0.0f;
-  for (int i = 0; i < count; ++i) {
-    path_[static_cast<size_t>(i) + 1] = stops[i];
-    path_at_[static_cast<size_t>(i) + 1] = at[i];
-  }
-  path_count_ = count + 1;
-  target_ = stops[count - 1];
-  displacement_ = -1.0f;
-  initial_velocity_ = progress_velocity;
-  spec_ = spec;
-  start_time_ = now.seconds;
-  const double duration = SpringSettleTime(spec);
-  end_time_ = start_time_ + duration;
-  device_ = device;
-  animated_ = true;
-
-  const auto progress_at = [&](double time) {
-    if (time >= duration) return SpringState{1.0, 0.0};
-    const SpringState state = Evaluate(spec, -1.0, progress_velocity, time);
-    return SpringState{1.0 + state.value, state.velocity};
-  };
-  // The schedule packs segments into the fast early part of the curve, and breaks where each stop is passed, so that
-  // no segment turns a corner.
-  std::vector<double> times;
-  for (int k = 0; k <= kSegments; ++k) times.push_back(duration * std::pow(static_cast<double>(k) / kSegments, 1.5));
-  for (int i = 1; i < count; ++i) {
-    double low = 0.0;
-    double high = duration;
-    for (int step = 0; step < 48; ++step) {
-      const double middle = (low + high) * 0.5;
-      (progress_at(middle).value < path_at_[static_cast<size_t>(i)] ? low : high) = middle;
-    }
-    times.push_back(high);
-  }
-  std::sort(times.begin(), times.end());
-
-  for (int s = 0; s < sink_count_; ++s) {
-    const Sink& sink = sinks_[s];
-    ComPtr<IDCompositionAnimation> animation;
-    if (FAILED(device->CreateAnimation(&animation))) {
-      sink.setter(sink.object, target_ + sink.bias, nullptr);
-      continue;
-    }
-    animation->SetAbsoluteBeginTime(now.ticks);
-    for (size_t k = 0; k + 1 < times.size(); ++k) {
-      const double t0 = times[k];
-      const double t1 = times[k + 1];
-      const double h = t1 - t0;
-      if (h < 1e-6) continue;
-      const SpringState p0 = progress_at(t0);
-      const SpringState p1 = progress_at(t1);
-      const int leg = Leg(progress_at((t0 + t1) * 0.5).value);
-      const double slope = Slope(leg);
-      const double v0 = Along(leg, p0.value);
-      const double v1 = Along(leg, p1.value);
-      const double d0 = slope * p0.velocity;
-      const double d1 = slope * p1.velocity;
-      const double c2 = (3.0 * (v1 - v0) / h - 2.0 * d0 - d1) / h;
-      const double c3 = (2.0 * (v0 - v1) / h + d0 + d1) / (h * h);
-      animation->AddCubic(t0, static_cast<float>(v0 + sink.bias), static_cast<float>(d0), static_cast<float>(c2), static_cast<float>(c3));
-    }
-    animation->End(duration, target_ + sink.bias);
-    sink.setter(sink.object, 0.0f, animation.Get());
-  }
-}
-
 void AnimFloat::Start(IDCompositionDevice* device, const TimeBase& now, float lead, float start, float velocity, float target,
                       const SpringSpec& spec, double delay) {
-  path_count_ = 0;
   target_ = target;
   displacement_ = start - target;
   initial_velocity_ = velocity;

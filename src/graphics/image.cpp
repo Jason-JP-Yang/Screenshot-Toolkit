@@ -315,6 +315,44 @@ Image ResampleArea(const PixelView& source, double left, double top, double righ
   return result;
 }
 
+namespace {
+
+// The clear pixels of a line take the color of the nearest that is not, marked as taken rather than had.
+void CarryAlong(uint8_t* start, int count, ptrdiff_t step) {
+  const auto at = [&](int i) { return reinterpret_cast<uint32_t*>(start + static_cast<ptrdiff_t>(i) * step); };
+  std::vector<int> before(static_cast<size_t>(count), -1);
+  int last = -1;
+  for (int i = 0; i < count; ++i) {
+    if ((*at(i) >> 24) != 0) last = i;
+    before[static_cast<size_t>(i)] = last;
+  }
+  int next = -1;
+  for (int i = count - 1; i >= 0; --i) {
+    if ((*at(i) >> 24) != 0) {
+      next = i;
+      continue;
+    }
+    const int previous = before[static_cast<size_t>(i)];
+    const int pick = previous < 0 ? next : next < 0 ? previous : (i - previous <= next - i ? previous : next);
+    if (pick >= 0) *at(i) = (*at(pick) & 0xFFFFFFu) | 0x01000000u;
+  }
+}
+
+}  // namespace
+
+void Smear(Image& image, int radius) {
+  const int width = image.width();
+  const int height = image.height();
+  if (width <= 0 || height <= 0) return;
+  for (int y = 0; y < height; ++y) CarryAlong(image.data() + static_cast<ptrdiff_t>(y) * image.stride(), width, 4);
+  for (int x = 0; x < width; ++x) CarryAlong(image.data() + static_cast<ptrdiff_t>(x) * 4, height, image.stride());
+  auto* pixels = reinterpret_cast<uint32_t*>(image.data());
+  for (int i = 0; i < width * height; ++i) pixels[i] |= 0xFF000000u;
+  if (radius <= 0) return;
+  BoxBlur(image, radius);
+  BoxBlur(image, radius);
+}
+
 Image RenderFrost(const Image& frame, const RECT& rect, int downscale, uint32_t tint_bgr, float tint_alpha) {
   const int width = std::max<int>((rect.right - rect.left) / downscale, 1);
   const int height = std::max<int>((rect.bottom - rect.top) / downscale, 1);

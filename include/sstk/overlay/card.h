@@ -14,9 +14,9 @@
 // So is a window read by itself, which lies where the window does and may reach past the screen.
 //
 // Past the screen only such a picture has anything to show, so it is drawn there twice: once to fade in and out with
-// the others, and once beneath the screen's own copy at full strength. A view moving out past the screen then never
-// finds blank plane, and a region switch that needs to go there first comes back within the screen, crosses it, and
-// only then goes out into the picture it is heading for, revealing what lies past the screen rather than fading it in.
+// the others, and once beneath the screen's own copy at full strength, so that what lies past the screen slides in
+// with the view instead of fading in. A region switch is still one straight move; where it passes over plane that no
+// picture covers, beside such a picture, the pictures around that plane are carried over it, blurred.
 #pragma once
 
 #include "sstk/capture/capture.h"
@@ -191,7 +191,8 @@ class Card {
   RectF Screen() const;            // The plane the screen's own pictures cover.
   RectF Valid(int index) const;    // Where the picture an option shows has something to show.
   bool OwnPicture(int index) const;
-  bool MoveThrough(const RectF& rect, const RectF& source, const SpringSpec& spec, const TimeBase& now);
+  RectF ViewAt(double time) const;  // The part of the plane the card shows.
+  void Backfill(const RectF& span, double until);
   void ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec);
   void BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip);
   IDCompositionDevice* device() const { return compositor_.device(); }
@@ -222,7 +223,10 @@ class Card {
   ComPtr<IDCompositionVisual> plane_;
   ComPtr<IDCompositionVisual> plane_scaled_;
   ComPtr<IDCompositionScaleTransform> plane_scale_;
-  ComPtr<IDCompositionVisual> rims_;  // Beneath everything else on the plane.
+  ComPtr<IDCompositionVisual> rims_;  // Beneath everything else on the plane, but for the backfill.
+  ComPtr<IDCompositionVisual> backfill_;
+  double backfill_until_ = 0.0;
+  RectF shown_valid_{};  // Where the picture last moved to has something to show.
   ComPtr<IDCompositionVisual> full_visual_;
   ComPtr<IDCompositionSurface> full_surface_;
   ComPtr<IDCompositionVisual> base_visual_;

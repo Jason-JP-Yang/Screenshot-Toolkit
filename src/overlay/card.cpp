@@ -19,6 +19,17 @@ bool NearlyEqual(const RECT& a, const RECT& b) {
          std::abs(a.right - b.right) <= config::kSameRectTolerance && std::abs(a.bottom - b.bottom) <= config::kSameRectTolerance;
 }
 
+bool Inside(const RectF& inner, const RectF& outer) {
+  constexpr float kSlack = 1.0f;
+  return inner.left >= outer.left - kSlack && inner.top >= outer.top - kSlack && inner.right <= outer.right + kSlack && inner.bottom <= outer.bottom + kSlack;
+}
+
+uint32_t PixelAt(const Image& image, float u, float v) {
+  const int x = std::clamp(static_cast<int>(u * image.width()), 0, image.width() - 1);
+  const int y = std::clamp(static_cast<int>(v * image.height()), 0, image.height() - 1);
+  return reinterpret_cast<const uint32_t*>(image.data() + static_cast<ptrdiff_t>(y) * image.stride())[x];
+}
+
 }  // namespace
 
 CardShadow BuildCardShadow(Compositor& compositor, float scale) {
@@ -101,6 +112,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
   plane_scaled_->AddVisual(full_visual_.Get(), FALSE, nullptr);
   rims_ = compositor_.CreateVisual();
   plane_scaled_->AddVisual(rims_.Get(), TRUE, nullptr);
+  shown_valid_ = Screen();
 
   auto* clip = frame_clip_.Get();
   auto* inner = inner_clip_.Get();
@@ -336,20 +348,35 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
   const float px = rect.left - source.left * sx;
   const float py = rect.top - source.top * sy;
 
+  // Every point of the plane moves in a straight line, all on the same spring. On the way the view may cross plane
+  // past the screen that neither the picture it leaves nor the one it heads for covers.
+  const RectF from = ViewAt(now.seconds);
+  const RectF span{std::min(from.left, source.left), std::min(from.top, source.top), std::max(from.right, source.right),
+                   std::max(from.bottom, source.bottom)};
+  const bool uncovered = depth == 0 && delay <= 0.0 && !in_flight && !Inside(span, Screen()) && !Inside(span, Valid(selected_)) &&
+                         !Inside(span, shown_valid_);
+
   IDCompositionDevice* dc = device();
+  left_.To(dc, now, rect.left, spec, delay);
+  top_.To(dc, now, rect.top, spec, delay);
+  right_.To(dc, now, rect.right, spec, delay);
+  bottom_.To(dc, now, rect.bottom, spec, delay);
   radius_.To(dc, now, config::kCardRadius * scale_, spec, delay);
-  if (depth != 0 || delay > 0.0 || in_flight || !MoveThrough(rect, source, spec, now)) {
-    left_.To(dc, now, rect.left, spec, delay);
-    top_.To(dc, now, rect.top, spec, delay);
-    right_.To(dc, now, rect.right, spec, delay);
-    bottom_.To(dc, now, rect.bottom, spec, delay);
-    plane_x_.To(dc, now, px, spec, delay);
-    plane_y_.To(dc, now, py, spec, delay);
-    plane_sx_.To(dc, now, sx, spec, delay);
-    plane_sy_.To(dc, now, sy, spec, delay);
-    shadow_edge_w_.To(dc, now, std::max(width - shadow_reach_ * 2.0f, 0.0f), spec, delay);
-    shadow_edge_h_.To(dc, now, std::max(height - shadow_reach_ * 2.0f, 0.0f), spec, delay);
+  plane_x_.To(dc, now, px, spec, delay);
+  plane_y_.To(dc, now, py, spec, delay);
+  plane_sx_.To(dc, now, sx, spec, delay);
+  plane_sy_.To(dc, now, sy, spec, delay);
+  shadow_edge_w_.To(dc, now, std::max(width - shadow_reach_ * 2.0f, 0.0f), spec, delay);
+  shadow_edge_h_.To(dc, now, std::max(height - shadow_reach_ * 2.0f, 0.0f), spec, delay);
+
+  // Pictures being left keep what they show past the screen while the view is still out there.
+  const double end = std::max({left_.end_time(), top_.end_time(), right_.end_time(), bottom_.end_time(), plane_x_.end_time(), plane_y_.end_time()});
+  for (auto& layer : crisp_layers_) {
+    if (layer->rim && layer->retire_at != 0.0) layer->retire_at = std::max(layer->retire_at, end);
   }
+  if (uncovered) Backfill(span, end);
+  if (backfill_) backfill_until_ = std::max(backfill_until_, end);
+  shown_valid_ = Valid(selected_);
 
   const bool shown = depth <= config::kDeckVisibleBehind;
   const double decoration_delay = in_flight ? config::kFlightDecorationDelay : 0.0;
@@ -384,117 +411,86 @@ RectF Card::Valid(int index) const {
   return RectF{static_cast<float>(rect.left), static_cast<float>(rect.top), static_cast<float>(rect.right), static_cast<float>(rect.bottom)};
 }
 
-namespace {
-
-bool Inside(const RectF& inner, const RectF& outer) {
-  constexpr float kSlack = 1.0f;
-  return inner.left >= outer.left - kSlack && inner.top >= outer.top - kSlack && inner.right <= outer.right + kSlack && inner.bottom <= outer.bottom + kSlack;
+RectF Card::ViewAt(double time) const {
+  const float scale_x = plane_sx_.ValueAt(time);
+  const float scale_y = plane_sy_.ValueAt(time);
+  if (scale_x <= 1e-6f || scale_y <= 1e-6f) return SourceRect();
+  const float offset_x = plane_x_.ValueAt(time);
+  const float offset_y = plane_y_.ValueAt(time);
+  return RectF{(left_.ValueAt(time) - offset_x) / scale_x, (top_.ValueAt(time) - offset_y) / scale_y, (right_.ValueAt(time) - offset_x) / scale_x,
+               (bottom_.ValueAt(time) - offset_y) / scale_y};
 }
 
-RectF Meet(const RectF& a, const RectF& b) {
-  return RectF{std::max(a.left, b.left), std::max(a.top, b.top), std::min(a.right, b.right), std::min(a.bottom, b.bottom)};
-}
-
-float Travel(const RectF& a, const RectF& b) {
-  return std::fabs(a.left - b.left) + std::fabs(a.top - b.top) + std::fabs(a.right - b.right) + std::fabs(a.bottom - b.bottom);
-}
-
-}  // namespace
-
-// A view reaching past the screen, now or once there, goes there only within a picture that has something to show
-// there: it first comes back within the screen, then crosses it, and only then goes out into where it is heading. Each
-// stretch keeps every edge between its ends, so the view never leaves the picture it is in. Returns false where it can
-// go straight there.
-bool Card::MoveThrough(const RectF& rect, const RectF& source, const SpringSpec& spec, const TimeBase& now) {
-  const double t = now.seconds;
-  const float scale_x = plane_sx_.ValueAt(t);
-  const float scale_y = plane_sy_.ValueAt(t);
-  if (scale_x <= 1e-6f || scale_y <= 1e-6f) return false;
-  const RectF card{left_.ValueAt(t), top_.ValueAt(t), right_.ValueAt(t), bottom_.ValueAt(t)};
-  const float offset_x = plane_x_.ValueAt(t);
-  const float offset_y = plane_y_.ValueAt(t);
-  const RectF from{(card.left - offset_x) / scale_x, (card.top - offset_y) / scale_y, (card.right - offset_x) / scale_x, (card.bottom - offset_y) / scale_y};
-  const RectF screen = Screen();
-  if (Inside(from, Valid(selected_)) || (Inside(from, screen) && Inside(source, screen))) return false;
-
-  std::array<RectF, 3> views{};
-  std::array<RectF, 3> cards{};
-  std::array<float, 3> at{};
-  int count = 0;
-  float total = 0.0f;
-  RectF last = from;
-  const auto add = [&](const RectF& view, bool final) {
-    const float travel = Travel(last, view);
-    if (!final && travel < 1.0f) return;
-    views[static_cast<size_t>(count)] = view;
-    at[static_cast<size_t>(count)] = total + travel;
-    total += travel;
-    last = view;
-    ++count;
-  };
-  if (!Inside(from, screen)) add(Meet(from, screen), false);
-  if (!Inside(source, screen)) add(Meet(source, screen), false);
-  add(source, true);
-  if (count < 2 || total < 1.0f) return false;
-  for (int i = 0; i < count; ++i) {
-    const RectF& view = views[static_cast<size_t>(i)];
-    if (view.width() < 1.0f || view.height() < 1.0f) return false;
-    at[static_cast<size_t>(i)] /= total;
-    if (i + 1 == count) {
-      at[static_cast<size_t>(i)] = 1.0f;
-      cards[static_cast<size_t>(i)] = rect;
-      continue;
+// What every picture shows around the plane a move passes over, carried across the parts none of them covers and
+// blurred, beneath everything else until the move is over. The screen's own picture lies over the others, as the
+// plane draws it.
+void Card::Backfill(const RectF& span, double until) {
+  const float step = std::max(std::max(span.width(), span.height()) / static_cast<float>(config::kBackfillCells), 1.0f);
+  const RectF box{span.left - step * 2.0f, span.top - step * 2.0f, span.right + step * 2.0f, span.bottom + step * 2.0f};
+  const int columns = std::max(static_cast<int>(std::ceil(box.width() / step)), 1);
+  const int rows = std::max(static_cast<int>(std::ceil(box.height() / step)), 1);
+  Image cells = Image::Allocate(columns, rows);
+  if (!cells) return;
+  const auto paint = [&](const RectF& rect, auto&& sample) {
+    for (int y = 0; y < rows; ++y) {
+      const float plane_y = box.top + (static_cast<float>(y) + 0.5f) * step;
+      if (plane_y < rect.top || plane_y >= rect.bottom) continue;
+      auto* out = reinterpret_cast<uint32_t*>(cells.data() + static_cast<ptrdiff_t>(y) * cells.stride());
+      for (int x = 0; x < columns; ++x) {
+        const float plane_x = box.left + (static_cast<float>(x) + 0.5f) * step;
+        if (plane_x < rect.left || plane_x >= rect.right) continue;
+        uint32_t pixel = 0;
+        if (sample(plane_x, plane_y, &pixel)) out[x] = pixel | 0xFF000000u;
+      }
     }
-    // On the way the card takes each view's own shape, kept where the deck keeps its front card.
-    const SIZE size = ThumbnailSize(RECT{static_cast<LONG>(std::lround(view.left)), static_cast<LONG>(std::lround(view.top)),
-                                         static_cast<LONG>(std::lround(view.right)), static_cast<LONG>(std::lround(view.bottom))}, scale_);
-    cards[static_cast<size_t>(i)] = RectF{rect.left, rect.bottom - static_cast<float>(size.cy), rect.left + static_cast<float>(size.cx), rect.bottom};
-    if (i > 0 && at[static_cast<size_t>(i)] <= at[static_cast<size_t>(i) - 1] + 1e-3f) return false;
-  }
-
-  // The progress the card already has along the first stretch, so that a change of mind mid-flight carries on smoothly.
-  const float first = std::max(at[0], 1e-3f);
-  const RectF& first_card = cards[0];
-  const float first_px = first_card.left - views[0].left * (first_card.width() / views[0].width());
-  const float first_py = first_card.top - views[0].top * (first_card.height() / views[0].height());
-  const float pace[6] = {(first_card.left - card.left) / first, (first_card.top - card.top) / first, (first_card.right - card.right) / first,
-                         (first_card.bottom - card.bottom) / first, (first_px - offset_x) / first, (first_py - offset_y) / first};
-  const float moving[6] = {left_.VelocityAt(t), top_.VelocityAt(t), right_.VelocityAt(t), bottom_.VelocityAt(t), plane_x_.VelocityAt(t), plane_y_.VelocityAt(t)};
-  float along = 0.0f;
-  float length = 0.0f;
-  for (int i = 0; i < 6; ++i) {
-    along += pace[i] * moving[i];
-    length += pace[i] * pace[i];
-  }
-  // A path keeps to its stretches only on a spring that never overshoots.
-  const SpringSpec path{spec.response, std::max(spec.damping, 1.0f)};
-  const float omega = 6.2831853f / path.response;
-  const float progress_velocity = length > 1e-6f ? std::clamp(along / length, 0.0f, omega) : 0.0f;
-
-  IDCompositionDevice* dc = device();
-  float stops[3];
-  const auto go = [&](AnimFloat& value, auto&& stop) {
-    for (int i = 0; i < count; ++i) stops[i] = stop(cards[static_cast<size_t>(i)], views[static_cast<size_t>(i)]);
-    value.Through(dc, now, stops, at.data(), count, path, progress_velocity);
   };
-  go(left_, [](const RectF& c, const RectF&) { return c.left; });
-  go(top_, [](const RectF& c, const RectF&) { return c.top; });
-  go(right_, [](const RectF& c, const RectF&) { return c.right; });
-  go(bottom_, [](const RectF& c, const RectF&) { return c.bottom; });
-  go(plane_sx_, [](const RectF& c, const RectF& v) { return c.width() / v.width(); });
-  go(plane_sy_, [](const RectF& c, const RectF& v) { return c.height() / v.height(); });
-  go(plane_x_, [](const RectF& c, const RectF& v) { return c.left - v.left * (c.width() / v.width()); });
-  go(plane_y_, [](const RectF& c, const RectF& v) { return c.top - v.top * (c.height() / v.height()); });
-  const float reach = shadow_reach_ * 2.0f;
-  go(shadow_edge_w_, [reach](const RectF& c, const RectF&) { return std::max(c.width() - reach, 0.0f); });
-  go(shadow_edge_h_, [reach](const RectF& c, const RectF&) { return std::max(c.height() - reach, 0.0f); });
 
-  // Pictures being left keep what they show past the screen until the view is back within it.
-  const double end = left_.end_time();
-  for (auto& layer : crisp_layers_) {
-    if (layer->rim && layer->retire_at != 0.0) layer->retire_at = std::max(layer->retire_at, end);
+  if (long_.surface) {
+    // Thumbnail rows as recorder.h numbers them, from the finished view or from every row drawn so far.
+    paint(Valid(static_cast<int>(regions_.size()) - 1), [&](float plane_x, float plane_y, uint32_t* pixel) {
+      const int column = static_cast<int>((plane_x - static_cast<float>(long_.surface_left)) * long_.scale);
+      const int row = kLongOrigin + static_cast<int>(std::floor((plane_y - static_cast<float>(long_.area.top)) * long_.scale));
+      if (column < 0 || column >= long_.view_width) return false;
+      if (long_.done) {
+        if (!long_.pixels || row < long_.view_top || row >= long_.view_top + long_.pixels.height() || column >= long_.pixels.width()) return false;
+        *pixel = reinterpret_cast<const uint32_t*>(long_.pixels.data() + static_cast<ptrdiff_t>(row - long_.view_top) * long_.pixels.stride())[column];
+        return true;
+      }
+      const int at = row - long_.drawn_top;
+      if (at < 0 || at >= static_cast<int>(long_.drawn.size())) return false;
+      const std::vector<uint32_t>& line = long_.drawn[static_cast<size_t>(at)];
+      if (static_cast<size_t>(column) >= line.size()) return false;
+      *pixel = line[static_cast<size_t>(column)];
+      return true;
+    });
   }
-  return true;
+  for (size_t i = 0; i < regions_.size(); ++i) {
+    const Image& thumbnail = crisp_pixels_[i];
+    if (!sources_[i] || !thumbnail || regions_[i].kind == RegionKind::kScroll) continue;
+    const RECT& at = regions_[i].rect;
+    const RectF rect{static_cast<float>(at.left), static_cast<float>(at.top), static_cast<float>(at.right), static_cast<float>(at.bottom)};
+    paint(rect, [&](float plane_x, float plane_y, uint32_t* pixel) {
+      *pixel = PixelAt(thumbnail, (plane_x - rect.left) / rect.width(), (plane_y - rect.top) / rect.height());
+      return true;
+    });
+  }
+  if (const Image& whole = crisp_pixels_.front(); whole) {
+    const RectF screen = Screen();
+    paint(screen, [&](float plane_x, float plane_y, uint32_t* pixel) {
+      *pixel = PixelAt(whole, (plane_x - screen.left) / screen.width(), (plane_y - screen.top) / screen.height());
+      return true;
+    });
+  }
+  Smear(cells, config::kBackfillBlur);
+  ComPtr<IDCompositionSurface> surface = compositor_.CreateSurface(cells, true);
+  if (!surface) return;
+  if (!backfill_) {
+    backfill_ = compositor_.CreateVisual();
+    plane_scaled_->AddVisual(backfill_.Get(), TRUE, nullptr);
+  }
+  backfill_->SetContent(surface.Get());
+  backfill_->SetTransform(D2D_MATRIX_3X2_F{step, 0.0f, 0.0f, step, box.left, box.top});
+  backfill_until_ = until;
 }
 
 void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec) {
@@ -783,6 +779,10 @@ void Card::Tick(double now, Store& store) {
   }
   // The thumbnails exist from here on, and later crops can come from the archive.
   if (!crisp_surfaces_.empty() && shot_->frame) store.ReleaseFrame(shot_);
+  if (backfill_ && now >= backfill_until_) {
+    plane_scaled_->RemoveVisual(backfill_.Get());
+    backfill_.Reset();
+  }
   for (auto it = crisp_layers_.begin(); it != crisp_layers_.end();) {
     if ((*it)->retire_at != 0.0 && now >= (*it)->retire_at) {
       plane_scaled_->RemoveVisual((*it)->visual.Get());
