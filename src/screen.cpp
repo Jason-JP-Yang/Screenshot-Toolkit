@@ -270,6 +270,10 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
     without_taskbar.bottom -= info.insets.bottom;
     add_region(RegionKind::kNoTaskbar, without_taskbar);
   }
+  // Whole-screen options lead and windows follow, as does the scrolling option once offered.
+  const auto rank = [](RegionKind kind) { return kind == RegionKind::kFull ? 0 : kind == RegionKind::kNoTaskbar ? 1 : 2; };
+  std::stable_sort(info.regions.begin(), info.regions.end(),
+                   [&](const Region& a, const Region& b) { return rank(a.kind) < rank(b.kind); });
   return info;
 }
 

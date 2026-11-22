@@ -279,7 +279,7 @@ std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, con
   const float mh = static_cast<float>(monitor_.cy);
   const bool scroll = region.kind == RegionKind::kScroll || region.kind == RegionKind::kLong;
   const GlyphSpec spec{mw / mh, rect.left / mw, rect.top / mh, rect.right / mw, rect.bottom / mh,
-                       without_taskbar ? taskbar_edge : GlyphGap::kNone, scroll};
+                       without_taskbar && !scroll ? taskbar_edge : GlyphGap::kNone, scroll};
   const int cell_w = static_cast<int>(cell_);
   const int cell_h = static_cast<int>(segment_height_);
   const Image light = RenderGlyph(spec, cell_w, cell_h, scale_, config::kGlyphOnGlass, config::kGlyphOnGlassAlpha);

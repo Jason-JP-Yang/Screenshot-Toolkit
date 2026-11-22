@@ -60,6 +60,14 @@ float SegmentDistance(float px, float py, float ax, float ay, float bx, float by
   return std::sqrt(dx * dx + dy * dy);
 }
 
+// Grows [low, high] about its middle to at least `least`, within [floor, ceiling], on whole pixels.
+void Widen(float& low, float& high, float least, float floor, float ceiling) {
+  least = std::min(least, ceiling - floor);
+  if (high - low >= least) return;
+  low = std::clamp(std::round((low + high - least) * 0.5f), floor, ceiling - least);
+  high = low + least;
+}
+
 // Writes one premultiplied pixel of a 0xRRGGBB color at some coverage.
 void WriteCoverage(uint8_t* out, uint32_t color, float coverage) {
   out[0] = ToByte((color & 0xFF) * coverage);
@@ -354,24 +362,6 @@ Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, ui
   const float stroke = 1.1f * scale;
   const float corner = 2.8f * scale;
 
-  if (glyph.scroll) {
-    // One page that keeps going: solid, taller than the screens beside it, with two chevrons down cut out of it.
-    const float page_w = std::round(12.0f * scale);
-    const float page_h = std::round(19.0f * scale);
-    const float cx = std::round((width - page_w) * 0.5f) + page_w * 0.5f;
-    const float cy = std::round((height - page_h) * 0.5f) + page_h * 0.5f;
-    return RenderShape(width, height, color, [&](float px, float py) {
-      const float page = Coverage(RoundedBoxDistance(px, py, cx, cy, page_w * 0.5f, page_h * 0.5f, 2.6f * scale));
-      const float ux = (px - cx) / scale;
-      const float uy = (py - cy) / scale;
-      const auto chevron = [&](float y) {
-        return std::min(SegmentDistance(ux, uy, -3.0f, y - 1.5f, 0.0f, y + 1.5f), SegmentDistance(ux, uy, 0.0f, y + 1.5f, 3.0f, y - 1.5f));
-      };
-      const float cut = Coverage((std::min(chevron(-2.0f), chevron(2.2f)) - 0.9f) * scale);
-      return page * (1.0f - cut) * color_alpha;
-    });
-  }
-
   float screen_w = 20.0f * scale;
   float screen_h = screen_w / glyph.screen_aspect;
   if (screen_h > 15.0f * scale) {
@@ -405,6 +395,11 @@ Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, ui
     case GlyphGap::kBottom: fill_b = std::round(inner_y + inner_h) - taskbar_gap; break;
     case GlyphGap::kNone: break;
   }
+  // A small window grows to hold the scroll chevron.
+  if (glyph.scroll) {
+    Widen(fill_l, fill_r, std::round(10.0f * scale), std::round(inner_x), std::round(inner_x + inner_w));
+    Widen(fill_t, fill_b, std::round(7.0f * scale), std::round(inner_y), std::round(inner_y + inner_h));
+  }
   if (fill_r - fill_l < minimum_fill) fill_r = fill_l + minimum_fill;
   if (fill_b - fill_t < minimum_fill) fill_b = fill_t + minimum_fill;
   const float fill_cx = (fill_l + fill_r) * 0.5f;
@@ -412,9 +407,17 @@ Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, ui
   const float fill_hw = (fill_r - fill_l) * 0.5f;
   const float fill_hh = (fill_b - fill_t) * 0.5f;
   const float fill_corner = 1.0f * scale;
+  // The chevron's units shrink to fit a short screen.
+  const float unit = std::min({scale, (fill_r - fill_l) / 10.0f, (fill_b - fill_t) / 6.6f});
   return RenderShape(width, height, color, [&](float px, float py) {
     const float outline = Outline(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner, stroke);
-    const float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
+    float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
+    if (glyph.scroll && fill > 0.0f) {
+      const float ux = (px - fill_cx) / unit;
+      const float uy = (py - fill_cy) / unit;
+      const float chevron = std::min(SegmentDistance(ux, uy, -3.0f, -1.6f, 0.0f, 1.6f), SegmentDistance(ux, uy, 0.0f, 1.6f, 3.0f, -1.6f));
+      fill *= 1.0f - Coverage((chevron - 0.85f) * unit);
+    }
     return std::max(outline, fill) * color_alpha;
   });
 }

@@ -108,7 +108,7 @@ struct GlyphSpec {
   float screen_aspect;  // Width over height of the monitor.
   float left, top, right, bottom;  // Region in normalized monitor coordinates.
   GlyphGap gap;
-  bool scroll = false;  // A page with an arrow down, for scrolling screenshots, instead of a mini screen.
+  bool scroll = false;  // A chevron pointing down cut out of the region, for scrolling screenshots.
 };
 
 // One option's glyph, centered on a cell. Color is 0xRRGGBB.
