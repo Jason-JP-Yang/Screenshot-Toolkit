@@ -4,4 +4,5 @@
 *.ps1 text eol=crlf
 *.rc text eol=crlf
 *.png binary
+*.gif binary
 *.ico binary
