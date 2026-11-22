@@ -73,7 +73,19 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       KIND: ${{ matrix.kind }}
       REF: ${{ matrix.ref }}
+      # ccache keeps compiled objects between runs, keyed by their sources, so unchanged files are not compiled again.
+      CCACHE_DIR: ${{ github.workspace }}\ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 400M
     steps:
+      - name: Restore the compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: ccache-${{ github.run_id }}-${{ strategy.job-index }}
+          restore-keys: ccache-
+
       - name: Check out what is built
         uses: actions/checkout@v4
         with:
@@ -94,9 +106,12 @@ jobs:
         shell: pwsh
         working-directory: source
         run: |
-          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          $tools = @('ninja', 'ccache') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+          if ($tools) { choco install @tools --no-progress -y }
+          ccache --zero-stats | Out-Null
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build
+          ccache --show-stats
 
       - name: Name the build
         id: name
