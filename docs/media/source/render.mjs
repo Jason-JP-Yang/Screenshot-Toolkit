@@ -103,6 +103,17 @@ function encode(job, dir) {
     graph = `[0]format=rgb24[a];[1]format=rgb24[b];[a][b]xfade=transition=fade:duration=${fade}:offset=${(job.duration - fade).toFixed(3)}[v]`;
   }
   const out = path.resolve(here, job.out);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  if (out.endsWith('.mp4')) {
+    // H.264 with a silent stereo track, which Instagram and most players expect.
+    const audio = inputs.filter((a) => a === '-i').length;
+    ffmpeg([...inputs, '-f', 'lavfi', '-t', String(job.duration), '-i', 'anullsrc=r=48000:cl=stereo', '-filter_complex',
+      `${graph};[v]scale=${job.outWidth}:-2:flags=lanczos:out_color_matrix=bt709:out_range=tv,format=yuv420p[o]`,
+      '-map', '[o]', '-map', `${audio}:a`, '-c:v', 'libx264', '-preset', 'slow', '-crf', '15', '-profile:v', 'high', '-r', String(job.fps),
+      '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-c:a', 'aac', '-b:a', '128k', '-shortest', '-movflags', '+faststart', out]);
+    console.log(`  -> ${job.out} ${(fs.statSync(out).size / 1048576).toFixed(2)} MB`);
+    return;
+  }
   const scale = `${job.outFps ? `fps=${job.outFps},` : ''}scale=${job.outWidth}:-1:flags=lanczos`;
   ffmpeg([...inputs, '-filter_complex',
     `${graph};[v]${scale},split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=${job.stats ?? 'full'}[p];[s1][p]paletteuse=dither=${job.dither ?? 'none'}:diff_mode=rectangle`,

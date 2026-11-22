@@ -892,10 +892,10 @@ function pathAt(path, t) {
   return { x: prev.x, y: prev.y, hidden: prev.hidden };
 }
 
-function reset() {
+function reset(name) {
   clock.now = 0; clock.springs = []; clock.events = [];
   stage = new Stage(document.getElementById('root'));
-  scene = SCENES[new URLSearchParams(location.search).get('scene') || 'capture']();
+  scene = SCENES[name || new URLSearchParams(location.search).get('scene') || 'capture']();
   clock.events = scene.events.slice().sort((a, b) => a.t - b.t);
   stage.pointer = pathAt(scene.path, 0);
   stage.lastPointer = { ...stage.pointer };

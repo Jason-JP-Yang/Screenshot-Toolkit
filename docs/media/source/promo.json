@@ -1,0 +1,10 @@
+[
+  { "name": "story", "kind": "still", "page": "promo.html", "query": "format=story&mode=still&deck=2&named=1&scroll=520", "width": 540, "height": 960, "dpr": 2, "time": 2.5,
+    "out": "../../../promo/story.png" },
+  { "name": "post", "kind": "still", "page": "promo.html", "query": "format=post&mode=still&deck=2&named=1&scroll=520", "width": 540, "height": 675, "dpr": 2, "time": 2.5,
+    "out": "../../../promo/post.png" },
+  { "name": "story-video", "page": "promo.html", "query": "format=story&mode=video", "width": 540, "height": 960, "dpr": 2, "fps": 30, "duration": 34.0,
+    "outWidth": 1080, "out": "../../../promo/story.mp4" },
+  { "name": "post-video", "page": "promo.html", "query": "format=post&mode=video", "width": 540, "height": 675, "dpr": 2, "fps": 30, "duration": 34.0, "loopFade": 0.6,
+    "outWidth": 1080, "out": "../../../promo/post.mp4" }
+]

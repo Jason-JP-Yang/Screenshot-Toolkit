@@ -1,0 +1,205 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="stage.css">
+<style>
+  :root { --bg: #2342ff; --tile: #1532dd; --ink: #fff; --soft: #d3daff; --shade: rgba(6, 12, 92, .42); }
+  html, body { background: var(--bg); }
+  .p { position: relative; width: 540px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; padding: 0 28px; }
+  .p > * { position: relative; flex: none; }
+  /* Instagram covers the top of a story with the account name and the bottom with the reply field. */
+  .p.story { height: 960px; padding-top: 134px; padding-bottom: 128px; }
+  .p.post { height: 675px; padding-top: 26px; padding-bottom: 26px; }
+  .p.still .listen { display: none; }
+
+  .p-logo { margin-left: -3px; height: 48px; filter: drop-shadow(0 6px 14px var(--shade)); }
+  .p-hero h1 { margin-top: 14px; font: 400 52px/1 var(--serif-head); color: var(--ink); letter-spacing: -.5px; }
+  .p-hero h1 i { font-style: italic; }
+  .p-hero p { margin-top: 11px; font: 15.5px/1.5 var(--ui); color: var(--soft); max-width: 450px; }
+  .p-keys { margin-top: 14px; display: flex; align-items: center; gap: 6px; font: 13px var(--ui); color: var(--soft); }
+  .p-keys .k { height: 28px; min-width: 30px; padding: 0 9px; border-radius: 7px; display: grid; place-items: center; font: 600 12.5px var(--ui-display); color: var(--ink); background: var(--tile); }
+  .p-keys .or { margin: 0 6px; }
+
+  .p-shot { margin-top: 20px; flex: 1; min-height: 0; border-radius: 16px; overflow: hidden; background: var(--tile); isolation: isolate;
+    box-shadow: 0 26px 56px var(--shade); }
+  .p-view { position: absolute; inset: 0; }
+  #root { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .p-hud { position: absolute; left: 50%; top: 12px; width: 0; height: 0; transform: scale(.58); transform-origin: 0 0; z-index: 3; }
+  .p-hud .hud { left: 0; top: 0; }
+  .p-result { position: absolute; inset: 0; opacity: 0; background: var(--tile); }
+  .p-doc { position: absolute; left: 50%; top: 0; width: 300px; border-radius: 8px; overflow: hidden; box-shadow: 0 18px 40px var(--shade); }
+  .p-doc .in { position: relative; width: 628px; overflow: hidden; transform-origin: 0 0; }
+
+  .p-head { margin-top: 20px; height: 30px; }
+  .p-head span { position: absolute; left: 0; top: 0; font: 400 24px/30px var(--serif-head); color: var(--ink); white-space: nowrap; letter-spacing: -.2px; }
+  .p.video .p-shot { margin-top: 12px; }
+
+  .p-feats { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  .p-f { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 5px 12px; border-radius: 12px; background: var(--tile);
+    font: 600 13.5px/1.2 var(--ui-display); color: var(--ink); text-wrap: balance; }
+
+  .p-link { margin-top: 10px; height: 62px; }
+</style>
+</head>
+<body>
+<div class="p" id="p">
+  <header class="p-hero">
+    <div class="p-logo"></div>
+    <h1>Screenshot <i>Toolkit</i></h1>
+    <p>Press PrintScreen and keep working. The screenshot is saved, copied, and waiting in the corner.</p>
+    <div class="p-keys"><span class="k">PrtSc</span><span class="or">or</span><span class="k kwin"></span><span class="plus">+</span><span class="k">Shift</span><span class="plus">+</span><span class="k">S</span></div>
+  </header>
+  <div class="p-head"><span></span><span></span></div>
+  <div class="p-shot" id="shot">
+    <div class="p-view" id="view"><div id="root"></div><div class="p-hud" id="hud"></div></div>
+    <div class="p-result" id="result"><div class="p-doc" id="doc"><div class="in"></div></div></div>
+  </div>
+  <div class="p-feats"></div>
+  <div class="p-link"></div>
+</div>
+<script src="brand.js"></script>
+<script src="photos.js"></script>
+<script src="desktop.js"></script>
+<script src="engine.js"></script>
+<script src="scenes.js"></script>
+<script>
+  // Instagram layouts: the README hero on top, then the highlights (still) or the three demos (video).
+  const q = new URLSearchParams(location.search);
+  const FORMAT = q.get('format') || 'story', MODE = q.get('mode') || 'still';
+  const P = document.getElementById('p');
+  P.classList.add(FORMAT, MODE);
+  P.querySelector('.p-logo').innerHTML = logoSvg(48);
+  P.querySelector('.kwin').innerHTML = winKeySvg('#fff');
+  if (FORMAT !== 'story') P.querySelector('.p-link').remove();
+  P.querySelector(MODE === 'still' ? '.p-head' : '.p-feats').remove();
+
+  const shot = document.getElementById('shot'), root = document.getElementById('root');
+  const INK = '#fff', TILE = '#1532dd';
+  const icon = (body) => `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="${INK}"stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+  const FEATURES = [
+    [icon(`<path d="M16.5 3.5c-6.6 0-11 4.1-11 10.3V15h1.2C13 15 16.5 10.4 16.5 3.5z"/><path d="M3.5 16.5L11.2 8.8"/>`), 'Ultra-light, 0.2 MB at rest'],
+    [icon(`<path d="M3 7.5V5.2A2.2 2.2 0 0 1 5.2 3h2.3M12.5 3h2.3A2.2 2.2 0 0 1 17 5.2v2.3M17 12.5v2.3a2.2 2.2 0 0 1-2.2 2.2h-2.3"/><rect x="3" y="10.5" width="7.6" height="6.5" rx="1.7" fill="${INK}" stroke="none"/>`), 'No setup, works out of the box'],
+    [icon(`<rect x="3" y="8.5" width="14" height="9" rx="2"/><path d="M5 5.6h10M7.2 2.8h5.6"/>`), 'Shot after shot, as fast as you press'],
+    [icon(`<rect x="2.5" y="4" width="15" height="12" rx="2.2"/><rect x="5" y="6.5" width="5" height="7" rx=".9" fill="${INK}" stroke="none"/>`), 'Switch the region with one key'],
+    [icon(`<rect x="2.5" y="2.5" width="9.5" height="7.5" rx="1.7"/><path d="M9.6 8.4v9.2l2.5-2.4 1.7 3.7 1.7-.7-1.7-3.7h3.4z" fill="${INK}" stroke="${TILE}" stroke-width="1.1"/>`), 'Drag and drop anywhere'],
+    [icon(`<rect x="4.5" y="2.5" width="11" height="15" rx="2.2"/><path d="M7.4 8.8L10 11.4l2.6-2.6"/>`), 'Scrolling screenshots on 99% of pages'],
+    [icon(`<rect x="2.5" y="3" width="15" height="14" rx="2.2"/><path d="M2.5 7h15"/><rect x="10" y="11.8" width="5" height="2.8" rx="1.4" fill="${INK}" stroke="none"/>`), 'Unfazed by fixed elements and hover effects'],
+    [icon(`<path d="M15.9 8.3A6.1 6.1 0 0 0 4.7 6.2M4.1 11.7a6.1 6.1 0 0 0 11.2 2.1"/><path d="M4.3 2.9v3.5h3.5M15.7 17.1v-3.5h-3.5"/>`), 'Updates itself with new features'],
+  ];
+  const feats = P.querySelector('.p-feats');
+  if (feats) feats.innerHTML = FEATURES.map(([svg, text]) => `<div class="p-f">${svg}<span>${text}</span></div>`).join('');
+
+  function aim(x, y, w) {
+    const s = shot.clientWidth / w;
+    root.style.transform = `scale(${s}) translate(${-x}px, ${-y}px)`;
+  }
+
+  // A camera move is a list of frames on the desktop, eased from one to the next: the bottom edge and height, and how far
+  // across the room left on the right it sits (0 at the left edge, 1 at the right).
+  function camera(keys, t) {
+    let a = keys[0], b = keys[0], u = 0;
+    for (let i = 1; i < keys.length; i++) {
+      if (t >= keys[i].t) { a = b = keys[i]; continue; }
+      b = keys[i];
+      u = ease(clamp((t - a.t) / (b.t - a.t), 0, 1));
+      break;
+    }
+    const mix = (k) => a[k] + (b[k] - a[k]) * u;
+    const h = Math.exp(Math.log(a.h) + (Math.log(b.h) - Math.log(a.h)) * u);
+    const w = h * shot.clientWidth / shot.clientHeight;
+    aim(mix('x') * Math.max(W - w, 0), mix('b') - h, w);
+  }
+
+  if (MODE === 'still') {
+    window.frame = (t) => {
+      if (!stage || t < clock.now - 1e-6) reset('still');
+      advance(t);
+      stage.render();
+      const h = 640 * shot.clientHeight / shot.clientWidth;
+      aim(0, 630 - h / 2, 640);
+      return clock.now;
+    };
+  } else {
+    const FULL = { x: 0, b: 800, h: 800 };
+    const SEGS = [
+      { scene: 'capture', dur: 9.0, cams: [{ t: 0, ...FULL }, { t: 1.9, ...FULL }, { t: 2.6, x: 0, b: 748, h: 430 }, { t: 4.4, x: 0, b: 748, h: 430 },
+        { t: 5.05, ...FULL }, { t: 6.2, ...FULL }, { t: 7.2, ...FULL, x: 1 }] },
+      { scene: 'bin', dur: 8.6, cams: [{ t: 0, ...FULL }, { t: 2.2, ...FULL }, { t: 2.9, x: 0, b: 762, h: 520 }] },
+      { scene: 'scrolling', dur: 10.4, cams: [{ t: 0, ...FULL }, { t: 1.3, ...FULL }, { t: 1.9, x: 0, b: 748, h: 430 }, { t: 3.4, x: 0, b: 748, h: 430 },
+        { t: 4.0, x: 0, b: 756, h: 660 }, { t: 7.6, x: 0, b: 756, h: 660 }, { t: 8.3, x: 0, b: 744, h: 470 }] },
+      { scene: 'result', dur: 6.0 },
+    ];
+    let start = 0;
+    for (const [i, s] of SEGS.entries()) { s.start = start; s.index = i; start += s.dur; }
+    const TOTAL = start;
+    const HEADS = [[-1, 'Your work keeps going'], [2.2, 'Switch the region with one key'], [4.6, 'Drag and drop anywhere'],
+      [9.0, 'Shot after shot, as fast as you press'], [11.7, 'Bin it or swipe it away'], [17.6, 'Scrolling screenshots on 99% of pages'],
+      [28.0, 'Fixed backgrounds and sticky bars, handled']];
+    const heads = [...P.querySelectorAll('.p-head span')];
+    const view = document.getElementById('view'), hud = document.getElementById('hud'), result = document.getElementById('result'), doc = document.getElementById('doc');
+    const DOC_W = 300, DOC_SCALE = DOC_W / 628, ROWS = VIEW_H + 1480;
+    let live = null;
+
+    const dip = (seg, local) => {
+      let a = 1;
+      if (seg.index > 0) a = Math.min(a, local / 0.28);
+      if (seg.index < SEGS.length - 1) a = Math.min(a, (seg.dur - local) / 0.28);
+      return smooth(clamp(a, 0, 1));
+    };
+
+    function heading(t) {
+      let i = 0;
+      while (i + 1 < HEADS.length && HEADS[i + 1][0] <= t) i++;
+      const k = t - HEADS[i][0];
+      const enter = smooth(clamp((k - 0.16) / 0.4, 0, 1)), leave = 1 - smooth(clamp(k / 0.22, 0, 1));
+      const set = (span, text, alpha, dy) => {
+        if (span.textContent !== (text ?? '')) span.textContent = text ?? '';
+        span.style.opacity = alpha;
+        span.style.transform = `translateY(${dy}px)`;
+      };
+      set(heads[0], HEADS[i][1], enter, (1 - enter) * 8);
+      set(heads[1], i > 0 ? HEADS[i - 1][1] : '', i > 0 ? leave : 0, -(1 - leave) * 6);
+    }
+
+    window.frame = (t) => {
+      t = Math.min(t, TOTAL - 1e-6);
+      const seg = SEGS.find((s) => t < s.start + s.dur);
+      const local = t - seg.start;
+      const showing = seg.scene !== 'result';
+      if (showing) {
+        if (live !== seg || !stage || local < clock.now - 1e-6) {
+          reset(seg.scene);
+          live = seg;
+          hud.innerHTML = '';
+          hud.appendChild(stage.hud.root);
+          stage.hud.root.style.left = stage.hud.root.style.top = '0px';
+        }
+        advance(local);
+        stage.render();
+        camera(seg.cams, local);
+      } else {
+        const docH = ROWS * DOC_SCALE, from = 18, to = shot.clientHeight - 18 - docH;
+        const u = ease(clamp((local - 0.6) / 4.4, 0, 1));
+        doc.style.transform = `translate(-50%, ${from + (to - from) * u}px)`;
+      }
+      view.style.opacity = showing ? dip(seg, local) : 0;
+      result.style.opacity = showing ? 0 : dip(seg, local);
+      heading(t);
+      return t;
+    };
+
+    window.ready = window.ready.then(() => {
+      const long = buildLongPage();
+      long.setRows(ROWS);
+      const inner = doc.querySelector('.in');
+      inner.style.height = `${ROWS}px`;
+      inner.style.transform = `scale(${DOC_SCALE})`;
+      inner.appendChild(long.el);
+      doc.style.height = `${ROWS * DOC_SCALE}px`;
+      return new Promise((r) => setTimeout(() => r(true), 200));
+    });
+  }
+</script>
+</body>
+</html>
