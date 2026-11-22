@@ -210,7 +210,7 @@ Right after a shot, the program checks in the background whether the active wind
 
 The candidate also has to be what is actually visible at that spot. A page behind a dialog, behind a fullscreen video, or under another window doesn't count. Games, videos, short pages, and dialogs that already fit get no scrolling option. Scroll bars play no part in the decision.
 
-The option stays only while the window is as the shot found it. A click, a scroll, or a key press anywhere but on the region bar takes it away, and so does the window moving or changing size. Content changing by itself, such as a playing video, doesn't.
+The option stays while the window still shows what the shot did. After a click, a scroll, or a key press anywhere but on the thumbnail or its region bar, the window is compared with the shot a few times a second. Scrolling within reach of it, typing, or a part changing by itself, such as a playing video, keeps the option. Content replaced across nearly all of what scrolls, as when a link opens another page, takes it away, and so does the window moving or changing size.
 
 The window is read by itself while it is captured, so a notification passing over it stays out of the image, and an area reaching past the edge of the screen is captured whole.
 

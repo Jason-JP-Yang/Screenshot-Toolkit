@@ -62,10 +62,12 @@ class Deck {
   // The windows of a shot read by themselves. Returns whether the shot is here.
   bool AttachWindows(WindowShots& shots);
 
-  // Offers of scrolling screenshots stand only while their apps stay as they were shot.
+  // Offers of scrolling screenshots stand only while their apps still show what was shot: input reaching an app since
+  // has it checked on, and what the thumbnail and its selector take is no such input.
   bool WatchesInput() const;
-  void WithdrawScrolls(double before);
-  bool InCapsule(POINT screen) const;
+  void Disturb(double when);
+  void WithdrawShot(uint64_t shot);
+  bool Covers(POINT screen) const;
 
   // A press on the thumbnail, before it becomes a drag. Calling it off lets the thumbnail go back.
   bool pressing() const { return press_ != Press::kNone; }
@@ -542,33 +544,55 @@ bool Deck::AttachWindows(WindowShots& shots) {
 }
 
 bool Deck::WatchesInput() const {
-  return std::any_of(cards_.begin(), cards_.end(), [](const auto& card) { return card->scroll_open() && !card->busy; });
+  return std::any_of(cards_.begin(), cards_.end(), [](const auto& card) { return card->scroll_open() && !card->busy && !card->disturbed; });
 }
 
-void Deck::WithdrawScrolls(double before) {
-  bool changed = false;
+void Deck::Disturb(double when) {
   for (auto& card : cards_) {
-    if (card->taken() < before && card->WithdrawScroll() && card.get() == front()) changed = true;
+    if (!card->scroll_open() || card->busy || card->disturbed || card->taken() >= when) continue;
+    card->disturbed = true;
+    card->next_check = when + config::kScrollGuardSeconds * 0.5;
   }
-  if (!changed) return;
+}
+
+void Deck::WithdrawShot(uint64_t shot) {
+  const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& card) { return card->shot()->id == shot; });
+  if (found == cards_.end() || !(*found)->WithdrawScroll() || found->get() != front()) return;
   const TimeBase now = compositor_.Now();
   BindCapsuleToFront(now);
   UpdateSink();
   compositor_.Commit();
 }
 
+// An app window that moved or changed size is not as it was shot. One that input has reached is looked at again and
+// again, as what the input does may show only a moment later.
 void Deck::CheckScrollApps() {
+  const double now = NowSeconds();
   bool changed = false;
   for (auto& card : cards_) {
-    if (card->scroll_open() && !card->busy && card->AppChanged() && card->WithdrawScroll() && card.get() == front()) changed = true;
+    if (!card->scroll_open() || card->busy) continue;
+    if (card->AppChanged()) {
+      if (card->WithdrawScroll() && card.get() == front()) changed = true;
+      continue;
+    }
+    if (card->disturbed && now >= card->next_check) {
+      card->next_check = now + config::kScrollGuardSeconds;
+      owner_.GuardScroll(*card, bounds_);
+    }
   }
   if (!changed) return;
   BindCapsuleToFront(compositor_.Now());
   UpdateSink();
 }
 
-bool Deck::InCapsule(POINT screen) const {
-  return capsule_->visible() && capsule_->Contains(screen.x - bounds_.left, screen.y - bounds_.top);
+// The thumbnail and its selector, as the input sink last covered them.
+bool Deck::Covers(POINT screen) const {
+  if (!sink_set_) return false;
+  const POINT point{screen.x - bounds_.left, screen.y - bounds_.top};
+  if (PtInRect(&sink_card_, point)) return true;
+  if (IsRectEmpty(&sink_capsule_)) return false;
+  const RECT bridge{std::max(sink_card_.left, sink_capsule_.left), sink_capsule_.bottom, std::min(sink_card_.right, sink_capsule_.right), sink_card_.top};
+  return PtInRect(&sink_capsule_, point) || PtInRect(&bridge, point);
 }
 
 void Deck::CancelPress() {
@@ -1490,6 +1514,7 @@ Overlay::Overlay(HWND controller, Compositor& compositor, Store& store)
 Overlay::~Overlay() {
   CancelDrags();
   CancelScroll();
+  guard_.reset();
   detector_.reset();
   file_drag_.reset();
   decks_.clear();
@@ -1594,18 +1619,40 @@ void Overlay::OnWindowShots(std::unique_ptr<WindowShots> shots) {
 }
 
 void Overlay::OnPointerInput(double when, POINT point) {
-  // The selector is the one place a press leaves the shot's apps as they were.
+  // What the thumbnail and its selector take reaches no app.
   for (const auto& deck : decks_) {
-    if (deck->InCapsule(point)) return;
+    if (deck->Covers(point)) return;
   }
-  WithdrawScrolls(when);
+  Disturb(when);
 }
 
-void Overlay::OnKeyInput(double when) { WithdrawScrolls(when); }
+void Overlay::OnKeyInput(double when) { Disturb(when); }
 
-void Overlay::WithdrawScrolls(double before) {
-  for (auto& deck : decks_) deck->WithdrawScrolls(before);
+void Overlay::Disturb(double when) {
+  for (auto& deck : decks_) deck->Disturb(when);
   SyncHookMode();
+}
+
+void Overlay::OnScrollMismatch(uint64_t shot) {
+  for (auto& deck : decks_) deck->WithdrawShot(shot);
+  SyncHookMode();
+}
+
+void Overlay::GuardScroll(const Card& card, const RECT& monitor) {
+  if (!guard_) guard_ = std::make_unique<OfferGuard>(controller_, store_);
+  OfferGuard::Check check;
+  check.shot = card.shot()->id;
+  check.source = card.shot();
+  check.monitor = monitor;
+  check.view = card.app_rect();
+  OffsetRect(&check.view, monitor.left, monitor.top);
+  // The largest area the app reports is what scrolls, if it has said so by now. Otherwise the whole window does.
+  check.area = check.view;
+  if (const std::vector<RECT>& areas = card.scroll_hints().areas; !areas.empty()) {
+    check.area = areas.front();
+    OffsetRect(&check.area, monitor.left, monitor.top);
+  }
+  guard_->Request(std::move(check));
 }
 
 void Overlay::OnScrollAreas(std::unique_ptr<ScrollAreas> found) {

@@ -33,6 +33,7 @@ enum Message : UINT {
   kMsgWindowShots,             // lParam: WindowShots*, ownership moves to the receiver
   kMsgPointerInput,            // wParam: when, in microseconds of NowSeconds. lParam: where a button or wheel went, as two signed halves.
   kMsgKeyInput,                // wParam: when, in microseconds of NowSeconds.
+  kMsgScrollMismatch,          // wParam: the shot whose app no longer shows what the shot did.
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

@@ -276,6 +276,9 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
     case kMsgKeyInput:
       app->overlay->OnKeyInput(static_cast<double>(wparam) / 1e6);
       return 0;
+    case kMsgScrollMismatch:
+      app->overlay->OnScrollMismatch(static_cast<uint64_t>(wparam));
+      return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {
         app->overlay->OnTick();

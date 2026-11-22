@@ -8,7 +8,7 @@ Built programs are kept per version in the local `release/` folder, created by `
 
 - A window region, and the scrolling option before it starts, hold the window alone: it is read by itself a moment after the shot, through Windows Graphics Capture without its border, or where Windows would draw one, by the window rendering itself. A notification or the taskbar over it stays out, and a part past the edge of the screen is included. Rounded corners show what the screen showed there. The picture is packed as a long image is, and saved and copied as it is.
 - A scrolling screenshot reads the window by itself too, so a notification passing over it stays out, and an area reaching past the edge of the screen is captured whole. Where the window can't be read, the screen is, as before.
-- The scrolling option stands only while the app is as the shot found it. A click, a scroll, or a key press anywhere but on the region bar withdraws it for every shot taken before, and so does the app window moving or changing size. Content changing by itself does not.
+- The scrolling option stands only while the app still shows what the shot did. Once a click, a scroll, or a key press has reached anything but the thumbnail or its region bar, the app is compared with the shot four times a second, on a thread of its own: as it was, scrolled within reach, or changed in parts, as by typing or a playing video, it keeps the option. Replaced across nearly all of what scrolls, as by another page, it loses it, and so it does by moving or changing size.
 - Esc or a right-click while swiping or pressing a thumbnail calls it off, as during a drag, and the thumbnail goes back.
 
 ### Fixed

@@ -83,12 +83,13 @@ class Card {
   const ScrollHints& scroll_hints() const { return scroll_hints_; }
   HWND app() const { return app_; }
 
-  // A scrolling screenshot can be had only of the app as the shot saw it. Once anything may have changed that, the
-  // offer is withdrawn for good, and the option goes unless it is in use. Returns whether the options changed.
+  // A scrolling screenshot can be had only of the app as the shot saw it. Once it has left that behind, the offer is
+  // withdrawn for good, and the option goes unless it is in use. Returns whether the options changed.
   bool scroll_open() const { return app_ != nullptr && !scroll_closed_; }
   bool AppChanged() const;  // The app window has gone, moved, or changed size.
   bool WithdrawScroll();
   void CloseScroll() { scroll_closed_ = true; }
+  const RECT& app_rect() const { return app_rect_; }
 
   uint64_t capture() const { return capture_; }
   double taken() const { return taken_; }
@@ -142,6 +143,9 @@ class Card {
   double expiry = 0.0;
   bool floating = false;  // Its sprite is still flying home, so the card can be neither grabbed nor dismissed.
   bool busy = false;      // A scrolling screenshot is recording or showing its outcome, which holds the card in place.
+  // Input has reached the app since the shot, so what it shows is compared with the shot from time to time.
+  bool disturbed = false;
+  double next_check = 0.0;
 
  private:
   struct CrispLayer {

@@ -62,6 +62,7 @@ add_executable(ScreenshotToolkit WIN32
   src/overlay/dragdrop.cpp
   src/overlay/overlay.cpp
   src/overlay/sprite.cpp
+  src/scroll/guard.cpp
   src/scroll/longimage.cpp
   src/scroll/recorder.cpp
   src/scroll/scrollable.cpp

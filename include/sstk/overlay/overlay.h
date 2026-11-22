@@ -4,6 +4,7 @@
 #include "sstk/capture/capture.h"
 #include "sstk/capture/hook.h"
 #include "sstk/graphics/compositor.h"
+#include "sstk/scroll/guard.h"
 #include "sstk/scroll/recorder.h"
 #include "sstk/scroll/scrollable.h"
 #include "sstk/storage/store.h"
@@ -45,9 +46,10 @@ class Overlay {
   void OnScrollWheel(POINT point);
   void OnScrollUpdate(std::unique_ptr<ScrollUpdate> update);
 
-  // Input that reached the desktop: whatever was shot before it may no longer be as the shot saw it.
+  // Input that reached the desktop: whatever was shot before it may no longer be as the shot saw it, and is checked on.
   void OnPointerInput(double when, POINT point);
   void OnKeyInput(double when);
+  void OnScrollMismatch(uint64_t shot);
 
   // True when nothing is on screen, so memory can be returned.
   bool IsIdle() const;
@@ -69,7 +71,8 @@ class Overlay {
   void StartScroll(Deck& deck);
   void FinishScroll();
   void CancelScroll();
-  void WithdrawScrolls(double before);
+  void Disturb(double when);
+  void GuardScroll(const Card& card, const RECT& monitor);
   Card* HeldCard(const std::shared_ptr<Shot>& shot) const;  // The card of the shot, if it is in the air.
 
   HWND controller_;
@@ -90,6 +93,7 @@ class Overlay {
 
   uint64_t next_shot_id_ = 1;
   std::unique_ptr<ScrollDetector> detector_;
+  std::unique_ptr<OfferGuard> guard_;
   std::unique_ptr<ScrollRecorder> recorder_;  // The scrolling screenshot in progress, if any.
   std::vector<std::unique_ptr<ScrollRecorder>> retired_;  // Finished, their threads winding down.
   Deck* scroll_deck_ = nullptr;

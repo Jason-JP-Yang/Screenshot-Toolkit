@@ -74,6 +74,9 @@ class Store {
   // Returns the shot's raw pixels, restoring them if released. Blocks for the short time decoding takes.
   std::shared_ptr<const Image> AcquireFrame(const std::shared_ptr<Shot>& shot);
 
+  // The same without restoring them: a released frame is decoded on the calling thread, which is in a COM apartment.
+  std::shared_ptr<const Image> PeekFrame(const std::shared_ptr<Shot>& shot);
+
   // Unloads the codec on the worker thread. It costs a few milliseconds to reload for the next save,
   // which nobody waits on, and it is the largest thing left in memory between shots.
   void ReleaseCodec();

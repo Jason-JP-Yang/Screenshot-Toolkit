@@ -138,6 +138,31 @@ HGLOBAL BuildDib(const Image& frame, const RECT& region) {
   return memory;
 }
 
+std::shared_ptr<const Image> DecodePng(IWICImagingFactory* factory, const std::vector<uint8_t>& archive) {
+  ComPtr<IWICStream> stream;
+  if (FAILED(factory->CreateStream(&stream))) return nullptr;
+  if (FAILED(stream->InitializeFromMemory(const_cast<BYTE*>(archive.data()), static_cast<DWORD>(archive.size())))) {
+    return nullptr;
+  }
+  ComPtr<IWICBitmapDecoder> decoder;
+  if (FAILED(factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder))) {
+    return nullptr;
+  }
+  ComPtr<IWICBitmapFrameDecode> source;
+  if (FAILED(decoder->GetFrame(0, &source))) return nullptr;
+  ComPtr<IWICBitmapSource> converted;
+  if (FAILED(WICConvertBitmapSource(GUID_WICPixelFormat32bppBGR, source.Get(), &converted))) return nullptr;
+  UINT width = 0;
+  UINT height = 0;
+  if (FAILED(converted->GetSize(&width, &height))) return nullptr;
+  auto image = std::make_shared<Image>(Image::Allocate(static_cast<int>(width), static_cast<int>(height)));
+  if (!*image) return nullptr;
+  if (FAILED(converted->CopyPixels(nullptr, image->stride(), image->stride() * image->height(), image->data()))) {
+    return nullptr;
+  }
+  return image;
+}
+
 constexpr int kLongChunkRows = 128;  // Rows of a packed picture unpacked at a time.
 
 // The same for a packed picture, unpacked a few rows at a time.
@@ -467,28 +492,19 @@ std::shared_ptr<const Image> Store::DecodeArchive(const std::vector<uint8_t>& ar
                                                  IID_PPV_ARGS(&codec_factory_)))) {
     return nullptr;
   }
-  ComPtr<IWICStream> stream;
-  if (FAILED(codec_factory_->CreateStream(&stream))) return nullptr;
-  if (FAILED(stream->InitializeFromMemory(const_cast<BYTE*>(archive.data()), static_cast<DWORD>(archive.size())))) {
-    return nullptr;
+  return DecodePng(codec_factory_.Get(), archive);
+}
+
+std::shared_ptr<const Image> Store::PeekFrame(const std::shared_ptr<Shot>& shot) {
+  std::vector<uint8_t> archive;
+  {
+    std::lock_guard lock(mutex_);
+    if (shot->frame) return shot->frame;
+    archive = shot->archive;
   }
-  ComPtr<IWICBitmapDecoder> decoder;
-  if (FAILED(codec_factory_->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder))) {
-    return nullptr;
-  }
-  ComPtr<IWICBitmapFrameDecode> source;
-  if (FAILED(decoder->GetFrame(0, &source))) return nullptr;
-  ComPtr<IWICBitmapSource> converted;
-  if (FAILED(WICConvertBitmapSource(GUID_WICPixelFormat32bppBGR, source.Get(), &converted))) return nullptr;
-  UINT width = 0;
-  UINT height = 0;
-  if (FAILED(converted->GetSize(&width, &height))) return nullptr;
-  auto image = std::make_shared<Image>(Image::Allocate(static_cast<int>(width), static_cast<int>(height)));
-  if (!*image) return nullptr;
-  if (FAILED(converted->CopyPixels(nullptr, image->stride(), image->stride() * image->height(), image->data()))) {
-    return nullptr;
-  }
-  return image;
+  ComPtr<IWICImagingFactory> factory;
+  if (archive.empty() || FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) return nullptr;
+  return DecodePng(factory.Get(), archive);
 }
 
 bool Store::ReleaseFrame(const std::shared_ptr<Shot>& shot) {

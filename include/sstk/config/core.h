@@ -63,6 +63,7 @@ inline constexpr double kScrollMismatchWheelSeconds = 4.0;  // or this long with
 inline constexpr double kScrollWheelActiveSeconds = 0.5;    // as it counts as doing for this long after each notch.
 inline constexpr double kScrollResultSeconds = 1.5;    // How long the selector shows the outcome.
 inline constexpr double kScrollPartialShare = 0.10;    // An early end still keeps a capture grown by this share.
+inline constexpr double kScrollGuardSeconds = 0.25;    // How often an app touched since its shot is checked on.
 inline constexpr unsigned kScrollActiveMs = 25;        // Sampling while content moves,
 inline constexpr unsigned kScrollRestingMs = 90;       // and while it rests.
 inline constexpr unsigned kScrollCatchUpMs = 12;       // While it cannot be lined up.
