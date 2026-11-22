@@ -1,0 +1,14 @@
+[
+  { "name": "hero-dark", "kind": "still", "page": "banner.html", "query": "scene=still&deck=2&named=1&scroll=560&theme=dark", "width": 1280, "height": 560, "dpr": 2, "time": 2.5, "transparent": true, "out": "../hero-dark.png" },
+  { "name": "hero-light", "kind": "still", "page": "banner.html", "query": "scene=still&deck=2&named=1&scroll=560&theme=light", "width": 1280, "height": 560, "dpr": 2, "time": 2.5, "transparent": true, "out": "../hero-light.png" },
+  { "name": "setup-dark", "kind": "still", "page": "setup.html", "query": "theme=dark", "width": 920, "height": 500, "dpr": 2, "transparent": true, "out": "../setup-dark.png" },
+  { "name": "setup-light", "kind": "still", "page": "setup.html", "query": "theme=light", "width": 920, "height": 500, "dpr": 2, "transparent": true, "out": "../setup-light.png" },
+  { "name": "outcomes", "kind": "still", "page": "sheet.html", "width": 672, "height": 88, "dpr": 2, "transparent": true, "out": "../scroll-outcomes.png" },
+  { "name": "result", "kind": "still", "page": "result.html", "width": 354, "height": 1112, "dpr": 2, "transparent": true, "out": "../scroll-result.png" },
+  { "name": "capture", "page": "stage.html", "query": "scene=capture", "width": 1280, "height": 800, "dpr": 2, "fps": 30, "duration": 9.0, "loopFade": 0.5,
+    "outFps": 25, "outWidth": 1280, "out": "../demo-capture.gif" },
+  { "name": "scrolling", "page": "stage.html", "query": "scene=scrolling", "width": 1280, "height": 800, "dpr": 2, "fps": 30, "duration": 10.4, "loopFade": 0.5,
+    "clip": { "x": 0, "y": 0, "width": 700, "height": 800 }, "outFps": 20, "outWidth": 640, "out": "../demo-scrolling.gif" },
+  { "name": "bin", "page": "stage.html", "query": "scene=bin", "width": 1280, "height": 800, "dpr": 2, "fps": 30, "duration": 8.6, "loopFade": 0.4,
+    "clip": { "x": 0, "y": 280, "width": 960, "height": 520 }, "outFps": 25, "outWidth": 960, "out": "../demo-bin.gif" }
+]

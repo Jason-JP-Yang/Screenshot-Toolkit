@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="stage.css">
+<style>
+  html, body { background: transparent; }
+  .frame { position: absolute; left: 20px; top: 16px; width: 314px; overflow: hidden; border-radius: 10px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 10px 30px rgba(0, 0, 0, .18); }
+  .inner { position: relative; width: 628px; transform: scale(.5); transform-origin: 0 0; overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="frame" id="frame"><div class="inner" id="inner"></div></div>
+<script src="photos.js"></script>
+<script src="desktop.js"></script>
+<script>
+  // The scrolling screenshot the demo takes: the page from the top of the scrolled area to the last view, as the
+  // stitcher assembles it. The site bar appears once at the top, the floating player once at the bottom, and the
+  // fixed pattern runs on behind the page without seams.
+  window.ready = document.fonts.ready.then(() => {
+    makePhotos();
+    const rows = VIEW_H + 1480;
+    const long = buildLongPage();
+    long.setRows(rows);
+    const inner = document.getElementById('inner');
+    inner.style.height = `${rows}px`;
+    inner.appendChild(long.el);
+    document.getElementById('frame').style.height = `${rows / 2}px`;
+    return new Promise((r) => setTimeout(() => r(true), 300));
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="stage.css">
+<style>
+  html, body { background: transparent; }
+  .row { position: relative; display: flex; gap: 22px; padding: 24px 28px 30px; width: max-content; }
+  .slot { position: relative; height: 34px; }
+  /* What the frosted glass shows over a light page. */
+  .capsule .frost { backdrop-filter: none; background: #444446; }
+</style>
+</head>
+<body>
+<div class="row" id="row"></div>
+<script src="photos.js"></script>
+<script src="desktop.js"></script>
+<script src="engine.js"></script>
+<script src="scenes.js"></script>
+<script>
+  // The selector's three outcomes of a scrolling screenshot, each reached the way the program reaches it.
+  const settle = (seconds) => { for (let i = 0; i < seconds * 240; i++) { clock.now += 1 / 240; for (const s of clock.springs) s.step(1 / 240); } };
+  window.ready = document.fonts.ready.then(() => {
+    const row = document.getElementById('row');
+    const capsules = ['ok', 'partial', 'fail'].map((kind) => {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      row.appendChild(slot);
+      const capsule = new Capsule({ fx: slot });
+      capsule.moveTo(0, 0);
+      capsule.bind([...WINDOWS, R.scroll], 4);
+      return { capsule, kind, slot };
+    });
+    settle(1.2);
+    for (const { capsule } of capsules) capsule.showRecording(true);
+    settle(1);
+    for (const { capsule, kind } of capsules) capsule.showOutcome(kind);
+    settle(1.2);
+    for (const { capsule, slot } of capsules) { capsule.render(); slot.style.width = `${capsule.width.value}px`; }
+    return true;
+  });
+</script>
+</body>
+</html>

@@ -5,4 +5,5 @@
 *.rc text eol=crlf
 *.png binary
 *.gif binary
+*.jpg binary
 *.ico binary

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.png">
-    <img alt="Screenshot Toolkit: press PrintScreen, and the shot is saved, copied, and waiting in the corner." src="docs/media/hero-light.png" width="100%">
+    <img alt="Screenshot Toolkit. Press PrintScreen and keep working. The screenshot is saved, copied, and waiting in the corner." src="docs/media/hero-light.png" width="100%">
   </picture>
 </p>
 
@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="#install"><b>Install</b></a> &nbsp;·&nbsp;
-  <a href="#using-it"><b>Using it</b></a> &nbsp;·&nbsp;
+  <a href="#taking-screenshots"><b>Using it</b></a> &nbsp;·&nbsp;
   <a href="#scrolling-screenshots"><b>Scrolling screenshots</b></a> &nbsp;·&nbsp;
   <a href="#settings"><b>Settings</b></a> &nbsp;·&nbsp;
   <a href="#developer-guide"><b>Developer guide</b></a>
@@ -23,47 +23,48 @@
 
 <br>
 
-Screenshot Toolkit replaces the Windows Snipping Tool with something you barely notice. Press <kbd>PrtSc</kbd> and the whole screen is captured on the spot, without freezing it. A thumbnail lands in the bottom-left corner on a spring, the PNG is already in your Gallery, and the image is already on your clipboard. Pick a different region, drag it into a conversation, or just keep working: in three seconds it slides away on its own.
+Screenshot Toolkit is a screenshot tool for Windows that stays out of your way. Press <kbd>PrtSc</kbd> and the whole screen is captured at that instant. The screen doesn't freeze or dim, and there is no rectangle to draw. A thumbnail of the shot settles into the bottom-left corner, and by the time it lands, the PNG is saved and the image is on your clipboard.
 
-There is no tray icon, no editor, and no settings window. The program runs quietly in the background, and the only window it has is for installing, updating, and restarting it.
+You can leave it there and carry on. If you want only one window, change the region from the thumbnail. If the shot is meant for someone, drag the thumbnail into the conversation. After three seconds it slides away by itself.
 
 <p align="center">
-  <img src="docs/media/demo-capture.gif" alt="PrintScreen captures the screen; the thumbnail lands in the corner, Win+Shift+Right steps the selector to the browser window, and the thumbnail is dragged into a chat, where it arrives as an image." width="100%">
+  <img src="docs/media/demo-capture.gif" alt="PrintScreen captures the screen while a teammate keeps typing in the chat. Win+Shift+Right twice narrows the shot to the browser window, and the thumbnail is dragged into the chat, where it arrives as an image." width="100%">
 </p>
-<p align="center"><sub><kbd>PrtSc</kbd>, then <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>→</kbd> twice to keep only the browser window, then a drag into the conversation.</sub></p>
+<p align="center"><sub>A teammate asks for the article. <kbd>PrtSc</kbd>, then <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>→</kbd> twice to keep only the browser window, then a drag into the chat.</sub></p>
 
 <br>
 
 <table>
   <tr>
-    <td width="33%" valign="top"><b>Instant</b><br><sub>The capture happens on the key press. The thumbnail is on screen about 50 ms later, and saving and copying never hold it up.</sub></td>
-    <td width="33%" valign="top"><b>The right region, after the fact</b><br><sub>Whole screen, screen without taskbar, the top app, or any window of a Snap layout. Each choice is drawn from the shot's real geometry.</sub></td>
-    <td width="33%" valign="top"><b>Scrolling screenshots</b><br><sub>Scroll the way you normally would. The long image is built pixel by pixel, with fixed headers shown once and nothing ghosted.</sub></td>
+    <td width="33%" valign="top"><b>Your work keeps going</b><br><sub>The capture is taken the moment the key goes down, and nothing on screen stops or waits for you. Scroll, type, or switch windows straight away.</sub></td>
+    <td width="33%" valign="top"><b>As many as you like</b><br><sub>Every press is its own screenshot. They stack up in the corner, each saved separately and each leaving on its own timer.</sub></td>
+    <td width="33%" valign="top"><b>Choose the region afterwards</b><br><sub>Whole screen, screen without the taskbar, the active window, or either side of a Snap layout. One key press moves between them.</sub></td>
   </tr>
   <tr>
-    <td valign="top"><b>Gestures, not dialogs</b><br><sub>Drag the thumbnail into any app, swipe it away, click to open it, or drop it on the rubbish bin to delete it.</sub></td>
-    <td valign="top"><b>Above everything</b><br><sub>Thumbnails stay above Start and Task View, and the hotkeys work over administrator windows.</sub></td>
-    <td valign="top"><b>Light when idle</b><br><sub>About 0.2 MB of working set between screenshots, no timers on the UI thread, and silent updates from this repository.</sub></td>
+    <td valign="top"><b>Scrolling screenshots that hold up</b><br><sub>Sticky headers and floating buttons appear once. Fixed backgrounds are rebuilt behind the page instead of being smeared down it.</sub></td>
+    <td valign="top"><b>Drag it where it's needed</b><br><sub>Drop the thumbnail into a chat, an email, or a folder. Swipe it away, or drop it on the rubbish bin to delete it.</sub></td>
+    <td valign="top"><b>Light on the system</b><br><sub>No tray icon and no settings window. Between screenshots it holds about 0.2 MB of memory, and it keeps itself up to date.</sub></td>
   </tr>
 </table>
 
 ## Install
 
-1. Download `ScreenshotToolkit-<version>.exe` from the [releases page](https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases). The newest build is at the top. Every build is a pre-release while the project is in beta.
-2. Open it and choose **Quick Install**. Windows asks for administrator approval once.
+1. Download `ScreenshotToolkit-<version>.exe` from the [releases page](https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases). The newest build is at the top. All builds are marked as pre-releases while the project is in beta.
+2. Run it and choose **Quick Install**. Windows asks for administrator approval once.
 3. Press <kbd>PrtSc</kbd>.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/setup-dark.png">
-    <img alt="The setup window with its Quick Install button, and the About window with Check for Updates and Quit." src="docs/media/setup-light.png" width="720">
+    <img alt="The setup window with its Quick Install button, and the uninstall window with a deep red Uninstall button." src="docs/media/setup-light.png" width="720">
   </picture>
 </p>
+<p align="center"><sub>Setup, and the window that <b>Settings › Apps › Uninstall</b> opens. Both follow the Windows light or dark theme.</sub></p>
 
 > [!NOTE]
-> Releases are signed with a self-signed certificate, so SmartScreen may say the publisher is unknown when the file is freshly downloaded. Choose **More info**, then **Run anyway**. Each release also lists its SHA-256 if you want to check the file first.
+> Releases are signed with a self-signed certificate, so SmartScreen may describe the publisher as unknown the first time you run a download. Choose **More info**, then **Run anyway**. Each release also lists the file's SHA-256 if you would like to check it first.
 
-The setup window follows the Windows light or dark app theme, and its button folds into a progress bar while it works. Opening a newer copy the same way updates the installed one. Built for 64-bit Windows 11, and Windows 10 version 2004 or later.
+To update by hand, run a newer copy the same way; it replaces the installed one. Screenshot Toolkit needs 64-bit Windows 11, or Windows 10 version 2004 or later.
 
 <details>
 <summary><b>What Quick Install does</b></summary>
@@ -72,21 +73,21 @@ The setup window follows the Windows light or dark app theme, and its button fol
 1. Stops any running copy, including one from an earlier version.
 2. Copies the program to `Program Files\Screenshot Toolkit`.
 3. Writes `%ProgramData%\Screenshot Toolkit\settings.ini`, unless one is already there.
-4. Adds Screenshot Toolkit to **Settings › Apps** and to the Start menu for everyone on the PC. No desktop icon.
-5. Registers and starts the **Screenshot Toolkit** service, which starts the program in every signed-in session from then on, and again within a second if it is ended or crashes.
+4. Adds Screenshot Toolkit to **Settings › Apps** and to the Start menu for everyone on the PC. It doesn't add a desktop icon.
+5. Registers and starts the **Screenshot Toolkit** service. From then on the service starts the program whenever someone signs in, and starts it again within a second if it is ended or crashes.
 
-There is no custom install. Screenshots are never touched by installing, updating, or uninstalling.
+There are no options to choose. Installing, updating, and uninstalling never touch your screenshots.
 </details>
 
 <details>
-<summary><b>The About window, quitting, and uninstalling</b></summary>
+<summary><b>Quitting, restarting, and uninstalling</b></summary>
 <br>
 
-Opened from Start, the installed program shows its **About** window: the version, whether it is running, **Check for Updates**, and **Quit**. While the program is not running, Quit reads **Quick Restart**. A quit lasts until Quick Restart or the next sign-in.
+Opening Screenshot Toolkit from the Start menu shows its **About** window: the version, whether it is running, and two buttons, **Check for Updates** and **Quit**. While the program isn't running, the second button reads **Quick Restart** instead. A quit lasts until you choose Quick Restart or sign in again.
 
-To remove it, open **Settings › Apps** and choose **Uninstall**. The same window opens with a deep red **Uninstall** button, which removes the service, the program, its settings, its Start menu and Settings entries, any update waiting to be installed, and whatever earlier versions left behind. Screenshots stay where they were saved.
+To uninstall, open **Settings › Apps** and choose **Uninstall** next to Screenshot Toolkit. The window shown above opens with a deep red **Uninstall** button. It removes the service, the program, its settings, its Start menu and Settings entries, any update waiting to be installed, and anything earlier versions left behind. Your screenshots stay where they are.
 
-The About and uninstall windows run from a copy in `%TEMP%` that deletes itself when they close, so they never hold the installed file open.
+The About and uninstall windows run from a temporary copy in `%TEMP%` that deletes itself when the window closes, so they never keep the installed file open.
 </details>
 
 <details>
@@ -95,143 +96,152 @@ The About and uninstall windows run from a copy in `%TEMP%` that deletes itself 
 
 | Command | What it does |
 |---|---|
-| *(none)* | The setup window, or the About window when this is the installed copy |
-| `--install` | The setup window. Add `--quiet` to install without it |
-| `--uninstall` | The uninstall window. Add `--quiet` to remove without it |
-| `--about` | The About window |
+| *(none)* | Opens the setup window, or the About window when run from the installed copy |
+| `--install` | Opens the setup window. Add `--quiet` to install without it |
+| `--uninstall` | Opens the uninstall window. Add `--quiet` to remove the program without it |
+| `--about` | Opens the About window |
 | `--quit` | Stops the running program until Quick Restart or the next sign-in |
-| `--run` | Runs the program directly, without UI Access. The service starts it this way, with `--takeover` to replace a running copy |
-| `--apply-update` | Puts a downloaded update in place. Only the service starts it |
+| `--run` | Runs the program directly, without UI Access. The service starts it this way, adding `--takeover` to replace a running copy |
+| `--apply-update` | Puts a downloaded update in place. Only the service uses it |
 </details>
 
-## Using it
+## Taking screenshots
 
-### Take a screenshot
-
-| Keys | Result |
+| Keys | What happens |
 |---|---|
-| <kbd>PrtSc</kbd> or <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>S</kbd> | Captures the monitor under the pointer, saves it, and copies it |
-| <kbd>Alt</kbd> <kbd>PrtSc</kbd>, <kbd>Win</kbd> <kbd>PrtSc</kbd> | Left to Windows, as before |
+| <kbd>PrtSc</kbd> or <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>S</kbd> | Captures the monitor the pointer is on, saves it, and copies it |
+| <kbd>Alt</kbd> <kbd>PrtSc</kbd> and <kbd>Win</kbd> <kbd>PrtSc</kbd> | Left to Windows, as before |
 
-Screenshots are lossless PNGs in `Pictures\Screenshots`, named like `Screenshot 2026-11-22 102412.png`. Press as often as you like: each shot stacks into a small deck in the corner and leaves on its own timer. The thumbnails never show up in the next screenshot.
+Screenshots are saved as lossless PNGs in `Pictures\Screenshots`, with names like `Screenshot 2026-11-22 102412.png`. Each press makes a new screenshot, so you can press again as soon as something changes. New thumbnails go on top of the ones still in the corner, and the thumbnails themselves never appear in the next shot.
 
-### Choose the region
+## Choosing the region
 
-A capsule above the thumbnail offers every sensible region of the shot, from largest to smallest: the **whole screen**, the screen **without the taskbar**, the **top app**, each **window of a Snap layout**, and, when there is content out of view, a **scrolling screenshot**. Each icon is a tiny screen with the region filled in, drawn from where things really were, so two windows side by side are told apart at a glance. The selected one shows its name, and the capsule springs to its new width as the selection moves.
+The bar above the thumbnail lists the regions the shot can be cropped to, from largest to smallest: the **whole screen**, the screen **without the taskbar**, the **active window**, and each **window of a Snap layout**. When the active window has more to scroll through, a **scrolling screenshot** comes last. Each icon is a small picture of the screen with that region filled in, drawn from where the windows really were, so two windows side by side are easy to tell apart.
 
-Choosing a region updates the thumbnail, the saved file, and the clipboard at once, and gives the thumbnail its full time again. Regions covering the same area are merged, and the capsule hides itself when only one is left, as for a true fullscreen app.
+Choosing a region updates the thumbnail, the saved file, and the clipboard together, and gives the thumbnail its full three seconds again. Regions that cover the same area are listed once. When only one is left, as with a fullscreen game, the bar doesn't appear at all.
 
-| Keys | Result |
+| Keys | What happens |
 |---|---|
-| <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>←</kbd> / <kbd>→</kbd> | Step through the regions, wrapping around at either end |
-| <kbd>Win</kbd> <kbd>Shift</kbd> + side mouse buttons | The same, with the back and forward buttons |
+| <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>←</kbd> / <kbd>→</kbd> | Moves to the previous or next region, wrapping around at the ends |
+| <kbd>Win</kbd> <kbd>Shift</kbd> with the mouse's side buttons | The same, with the back and forward buttons |
 
-These keys only act while a thumbnail with choices is on screen. The rest of the time they keep their Windows meaning.
+These keys only do this while a thumbnail with more than one region is on screen. The rest of the time Windows handles them as usual.
 
-### Do something with it
+## After the shot
 
-| Gesture | Result |
+| Gesture | What happens |
 |---|---|
-| **Hover** | The thumbnail stays as long as the pointer is on it |
-| **Click** | Opens the image in your viewer |
-| **Drag** into an app | Drops the PNG file there. A blue **+** appears when the window under the pointer will accept it; anywhere else it flies back. Timers stand still while you drag |
-| **Right-click** or <kbd>Esc</kbd> during a drag | Calls the drag off. Neither press reaches the app underneath |
-| **Drop on the rubbish bin** | A deep red bin rises at the bottom of the screen during every drag. Releasing over it removes the image from the clipboard and sends the file to the Recycle Bin. Drag back out to change your mind |
-| **Swipe left** | Dismisses the thumbnail early. The file stays in the Gallery |
+| **Hover** | The thumbnail stays for as long as the pointer is on it |
+| **Click** | Opens the image in your default viewer |
+| **Drag** into an app | Drops the PNG file there. A blue **+** appears when the window under the pointer will accept it. Let go anywhere else and the thumbnail flies back. Thumbnails don't time out while you drag |
+| **Right-click** or <kbd>Esc</kbd> while dragging | Cancels the drag. The app underneath never sees the click or the key |
+| **Drop on the rubbish bin** | A red bin rises at the bottom of the screen during every drag. Releasing over it removes the image from the clipboard and moves the file to the Recycle Bin. Drag back out before releasing to keep it |
+| **Swipe left** | Dismisses the thumbnail early. The file stays in your screenshots folder |
 
 <p align="center">
-  <img src="docs/media/demo-bin.gif" alt="Three quick screenshots stack into a deck. The front one is dragged onto the rubbish bin, which opens its lid toward it and draws it in. The next is swiped away, and the last slides out on its own." width="100%">
+  <img src="docs/media/demo-bin.gif" alt="Three screenshots taken while reading stack up in the corner. The front one is dragged onto the rubbish bin, which opens its lid toward it and draws it in. The next is swiped away, and the last slides out on its own." width="100%">
 </p>
-<p align="center"><sub>A burst of three. One goes in the bin, one is swiped away, and the last leaves on its own.</sub></p>
+<p align="center"><sub>Three screenshots while reading. One goes in the bin, one is swiped away, and the last leaves on its own.</sub></p>
 
 ## Scrolling screenshots
 
-When the top app has content out of view, the capsule offers one more choice at the end: the area that scrolls, with a downward chevron cut out of it.
+When the active window has more content than fits on screen, the region bar offers one more option at the end, **Scrolling Screenshot**. Choose it, scroll the way you normally would, and the thumbnail grows as the page is stitched together.
 
 <table>
   <tr>
-    <td width="50%" valign="top">
-      <img src="docs/media/demo-scrolling.gif" alt="The scrolling option is chosen with Win+Shift+Left. Win+Enter starts recording, the page is scrolled, and the thumbnail grows as content is stitched on. Win+Enter finishes, and the capsule turns green: Scrolling Screenshot Saved." width="100%">
+    <td width="52%" valign="top">
+      <img src="docs/media/demo-scrolling.gif" alt="Win+Shift+Left selects Scrolling Screenshot, Win+Enter starts it, and the page is scrolled while the thumbnail grows. Win+Enter finishes, and the bar turns green: Scrolling Screenshot Saved." width="100%">
     </td>
-    <td width="50%" valign="top">
-      <b>1 · Choose it.</b> Select the option, then press it again or press <kbd>Win</kbd> <kbd>Enter</kbd>. <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd> works too, so you can keep holding Shift after stepping the selector.
+    <td width="48%" valign="top">
+      <b>1. Start.</b> Select the option, then click it again or press <kbd>Win</kbd> <kbd>Enter</kbd>. <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd> also works, so Shift can stay down after choosing the region.
       <br><br>
-      <b>2 · Scroll.</b> The capsule turns into a breathing dot. Scroll the way you normally would: wheel, touchpad, scroll bar, or keyboard. The first scroll decides which area is captured, and the thumbnail grows as new content is stitched on, up to about half the screen, then follows along.
+      <b>2. Scroll.</b> The bar shows a softly pulsing dot. Use the mouse wheel, the touchpad, the scroll bar, or the keyboard. Whatever you scroll first is what gets captured. The thumbnail grows to about half the height of the screen and then follows along.
       <br><br>
-      <b>3 · Finish.</b> Press <kbd>Win</kbd> <kbd>Enter</kbd>, <kbd>PrtSc</kbd>, or <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>S</kbd>, click the capsule, or simply stop scrolling for five seconds.
+      <b>3. Finish.</b> Press <kbd>Win</kbd> <kbd>Enter</kbd>, <kbd>PrtSc</kbd>, or <kbd>Win</kbd> <kbd>Shift</kbd> <kbd>S</kbd>, click the bar, or stop scrolling for five seconds.
       <br><br>
-      You do not have to wait for it to finish. Pressing the thumbnail finishes the capture too, and it answers immediately: drag it, swipe it, or click it while the image is completed and saved in the background.
+      You can also end the capture by pressing the thumbnail. It responds at once, so you can drag, swipe, or open it while the long image is still being finished in the background.
     </td>
   </tr>
 </table>
 
-For a moment the capsule shows how it went, then turns back into the selector with the scrolling screenshot kept as a region of its own.
+### What it gets right
+
+Long pages are where scrolling captures usually go wrong: headers repeat every screen, backgrounds smear, and whatever sat under the pointer ends up in the picture. This is the long image from the demo above, shown at half size.
+
+<table>
+  <tr>
+    <td width="40%" valign="top"><img src="docs/media/scroll-result.png" alt="The stitched article: the site header once at the top, the page content continuous, the topographic background unbroken behind it, and the floating Listen button once at the bottom." width="100%"></td>
+    <td width="60%" valign="top">
+      <b>Sticky and floating elements appear once.</b> The site header sits at the top of the image, and the floating <i>Listen</i> button sits at the bottom, where it was when scrolling stopped. Neither is repeated down the page.
+      <br><br>
+      <b>Fixed backgrounds are rebuilt, not smeared.</b> The topographic pattern behind the article never moved while the page scrolled. It is reconstructed from everywhere it showed between and beside the content, and continues behind the whole image without seams.
+      <br><br>
+      <b>See-through bars don't tint the content.</b> Text and photos that passed under the translucent header are taken from where they were seen clearly.
+      <br><br>
+      <b>Hover effects stay out.</b> The pointer rested over the article the whole time. Anything near it is taken from frames where it wasn't affected.
+      <br><br>
+      <b>Fast or uneven scrolling is fine.</b> Each frame is matched against everything captured so far, so errors don't add up. Frames blurred by motion are replaced once the page settles.
+    </td>
+  </tr>
+</table>
+
+When it ends, the bar shows the result for a moment, then turns back into the region bar with the long image kept as a region of its own.
 
 <p align="center"><img src="docs/media/scroll-outcomes.png" alt="Three outcomes: green, Scrolling Screenshot Saved; dark green, Stopped Early, Saved; red, Scrolling Screenshot Failed." width="560"></p>
 
-| Outcome | Meaning |
+| Result | Meaning |
 |---|---|
-| **Saved** | Finished normally. The long image is saved and on the clipboard |
-| **Stopped Early, Saved** | It ended early, but had already grown by at least 10%, so that part is kept |
-| **Failed** | Nothing worth keeping. The thumbnail goes back to the region chosen before |
+| **Saved** | It finished normally. The long image is saved and on the clipboard |
+| **Stopped Early, Saved** | It ended before you finished, but had already grown by at least 10%, so what it had is kept |
+| **Failed** | There was nothing worth keeping. The thumbnail returns to the region chosen before |
 
 <details>
-<summary><b>What gets offered, and what ends a recording early</b></summary>
+<summary><b>When the option is offered, and what ends a capture early</b></summary>
 <br>
 
-The program looks for content out of view in the background, right after the shot is on screen. It never scrolls or clicks anything to find out, so no window reacts. Only what the app itself reports through UI Automation counts:
+Right after a shot, the program checks in the background whether the active window has content out of view. It never scrolls or clicks anything to find out, so nothing on screen reacts. It relies only on what the app reports through UI Automation:
 
-- Something says it shows only part of its content. That covers native lists and documents, and in browsers and the apps built on them, every plain box that scrolls.
-- Items stacked in a container run past the edge that clips them, or a list reports more items than it has drawn.
-- A text document, such as a terminal or an editor, reports text out of view.
+- A control reports that it shows only part of its content. This covers native lists and documents, and in browsers and apps built on them, any element that scrolls.
+- Items in a container run past the edge that clips them, or a list reports more items than it has drawn.
+- A text document, such as a terminal or a code editor, reports text out of view.
 
-Each candidate must also be what the screen really shows at that place, so a page under a dialog, behind a fullscreen video, or covered by another window does not count. Games, videos, short pages, and dialogs that fit get no scrolling option. Scroll bars play no part in the decision.
+The candidate also has to be what is actually visible at that spot. A page behind a dialog, behind a fullscreen video, or under another window doesn't count. Games, videos, short pages, and dialogs that already fit get no scrolling option. Scroll bars play no part in the decision.
 
-A recording ends early when the window moves or closes, when a wheel turns outside the window, or when the content stops matching for a moment, for example after a click opens another page. Something merely playing in the page, such as a video, does not end it. Each screenshot holds at most one scrolling screenshot.
-</details>
-
-<details>
-<summary><b>How the long image is put together</b></summary>
-<br>
-
-- The area that scrolls is decided by what actually moves, with the pointer settling it when several things could be. An area the app reports is kept whole, as wide as the app lays it out, minus a scroll bar at its edge.
-- Content enters the image where successive readings agree that it followed the scroll. Anything first seen under something else, such as a see-through bar, is taken from wherever it was later seen clearly.
-- Fixed headers, floating buttons, composers, and bars that only stick partway appear once, at the end of the image nearer to where they sit, just as the screen showed them.
-- A background that scrolls with the content is part of it, and a plain one keeps its color. A fixed background is rebuilt from wherever it showed and repeats down the image one view at a time, without seams where it is a pattern.
-- Hover effects stay out: content near the pointer is taken from where it was seen without it.
-- Fast scrolling, frames blurred in motion, and see-through windows are all followed. What was first seen blurred is retaken once the content rests. Scrolling up past the start adds content above it as well.
+A capture ends early if the window moves or closes, if you turn the wheel outside the window, or if the content stops matching for a moment, for example after a click opens a different page. A video playing inside the page doesn't end it. Each screenshot can hold one scrolling screenshot.
 </details>
 
 ## Updates
 
-The service keeps the program current from this repository's releases, dev builds included, with no administrator prompt and nothing to click.
+The installed service keeps Screenshot Toolkit up to date from this repository's releases, including dev builds. There is nothing to click and no administrator prompt.
 
-- It looks for a newer build each time the program starts and every 12 hours, and tries again an hour after a failed check. **Check for Updates** in the About window looks right away and installs what it finds.
-- A build is newer only when its build number, the count of commits on `main` that lead to it, is higher. A copy built from a commit GitHub has never seen is never replaced.
-- Downloads run in the background at low priority, through the proxy your Windows settings name. A file is used only once its size and SHA-256 match the release.
-- An update goes in when no thumbnail, drag, or recording is on screen and the keyboard and mouse have been still for a minute. The new copy starts before the old one lets go, so screenshots pause for a few tens of milliseconds at most, while nobody is using them.
+- It checks each time the program starts and every 12 hours after that, and retries an hour after a failed check. **Check for Updates** in the About window checks immediately and installs whatever it finds.
+- A build counts as newer only if its build number, the number of commits on `main` behind it, is higher. A build made from a commit that isn't on GitHub is never replaced.
+- Downloads run in the background at low priority, through the proxy set in your Windows settings. A file is only used once its size and SHA-256 match the release.
+- The update is installed when no thumbnail, drag, or scrolling capture is on screen and the keyboard and mouse have been idle for a minute. The new version starts before the old one exits, so screenshots are unavailable for at most a few tens of milliseconds.
 
-Set `AutoUpdate=0` in [settings.ini](#settings) to stop the automatic checks. Check for Updates still works.
+Set `AutoUpdate=0` in [settings.ini](#settings) to turn off the automatic checks. **Check for Updates** still works.
 
 ## Settings
 
-Everything has a sensible default, and most people never change anything. For those who do, `%ProgramData%\Screenshot Toolkit\settings.ini` holds the settings for everyone on the PC. Editing it needs administrator rights, and a change applies after **Quit** and **Quick Restart** in the About window.
+Most people never need to change anything. If you do, the settings for everyone on the PC are in `%ProgramData%\Screenshot Toolkit\settings.ini`. Editing the file requires administrator rights, and changes take effect after **Quit** and **Quick Restart** in the About window.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `GalleryFolder` | *(empty)* | Where screenshots are saved. Empty means `Pictures\Screenshots`. Variables such as `%USERPROFILE%` work |
-| `DwellSeconds` | `3` | Seconds a thumbnail stays on screen |
-| `CaptureIncludesThumbnails` | `0` | `1` lets screenshots show the program's own thumbnails |
-| `DeleteToRecycleBin` | `1` | `0` deletes screenshots dropped on the rubbish bin for good |
-| `AutoUpdate` | `1` | `0` stops the automatic update checks |
+| `DwellSeconds` | `3` | How many seconds a thumbnail stays on screen |
+| `CaptureIncludesThumbnails` | `0` | Set to `1` to let screenshots include the program's own thumbnails |
+| `DeleteToRecycleBin` | `1` | Set to `0` to delete screenshots dropped on the rubbish bin permanently |
+| `AutoUpdate` | `1` | Set to `0` to turn off the automatic update checks |
 
 <details>
 <summary><b>Privacy and permissions</b></summary>
 <br>
 
-Screenshots never leave your PC. The only network traffic is checking this repository's GitHub releases for updates and downloading them, and `AutoUpdate=0` turns the automatic part off.
+Screenshots never leave your PC. The only network traffic is checking this repository's releases for updates and downloading them, and `AutoUpdate=0` turns off the automatic part.
 
-The program itself runs as you, without administrator rights, so drag and drop, the clipboard, and opening files behave like any other app. It carries the **UI Access** right, as Magnifier and the on-screen keyboard do. That is what lets thumbnails sit above Start and Task View and lets the hotkeys work while an administrator window has focus. Granting that right takes SYSTEM, which is why a small service starts the program. It is also why the program lives in Program Files: a file the service starts without asking must be one that only administrators can replace. Keys are only intercepted while the program is running; if it is not, Windows behaves as usual.
+The program runs under your own account without administrator rights, so drag and drop, the clipboard, and opening files work just as they do for any other app. To be useful everywhere, a screenshot tool has to see its keys even while an administrator window has focus, and its thumbnails have to stay visible over Start and Task View. Windows allows that only for programs with the **UI Access** right, such as Magnifier and the on-screen keyboard. That right can only be granted by SYSTEM, which is why a small service starts the program. It is also why the program is installed in Program Files: the service starts it without asking, so it must be a file only administrators can replace.
+
+The keys are only intercepted while the program is running. When it isn't, Windows behaves as usual.
 </details>
 
 <br>
@@ -242,47 +252,47 @@ The program itself runs as you, without administrator rights, so drag and drop, 
 
 # Developer guide
 
-Screenshot Toolkit is a single native Win32 program written in C++20. It has no third-party dependencies: rendering goes through DirectComposition and Direct3D 11, images through WIC, downloads through WinHTTP, and the long-image work is plain C++ with SSE2. This guide covers how the repository is organized, how to build and run it, how the pieces fit together, and how changes are verified and released.
+Screenshot Toolkit is a single native Win32 program written in C++20, with no third-party dependencies. Rendering uses DirectComposition and Direct3D 11, images go through WIC, downloads through WinHTTP, and the long-image work is plain C++ with SSE2. This guide explains how the repository is organized, how to build and run it, how the parts fit together, and how changes are checked and released.
 
 ## Repository layout
 
 ```text
 .
-├── CMakeLists.txt            Build definition; the version number lives here
-├── CHANGELOG.md              User-facing changes, with an "Unreleased" section on top
+├── CMakeLists.txt            Build definition; the version number is set here
+├── CHANGELOG.md              User-facing changes, newest first, starting with "Unreleased"
 ├── include/sstk/<module>/    Headers, one folder per module
-│   └── config/               The default build's tunables (headers only)
-├── src/<module>/             Sources, mirroring include/
+│   └── config/               Default values for the whole program (headers only)
+├── src/<module>/             Sources, in the same folders as their headers
 ├── res/                      Application manifest (UI Access) and version resource
 ├── scripts/                  Build, local release, version stamping, signing, release notes
-├── docs/media/               Images used by this README
+├── docs/media/               Images used in this README, and source/ that renders them
 └── .github/workflows/        The release pipeline
 ```
 
-Code includes headers by module, for example `#include "sstk/overlay/capsule.h"`. New files go into the module they belong to, never directly under `src/`.
+Headers are included by module, as in `#include "sstk/overlay/capsule.h"`. A new file goes into the module it belongs to, never directly under `src/`, and has to be added to the source list in `CMakeLists.txt`.
 
-| Module | What lives there |
+| Module | Contents |
 |---|---|
-| `app` | `main.cpp`: mode dispatch, the message loop, clipboard installation, memory trimming |
-| `base` | Win32 includes and tracing (`platform`), product names and install paths (`product`), `settings.ini` (`settings`), the worker pool used by scrolling screenshots (`workers`) |
-| `brand` | `iconbake.cpp`, a build-time tool that draws the icon in code and bakes it into an `.ico` |
-| `capture` | Low-level keyboard and mouse hooks (`hook`), the capture thread (`capture`), window geometry, taskbar state, Snap layouts, and the region list (`screen`) |
-| `config` | Animation, colors, core behavior, hotkeys, and layout defaults |
-| `graphics` | Resampling, frosted glass, shadows, glyphs, and text (`image`), pixel helpers (`pixels.h`), springs as DirectComposition curves (`motion`), the WARP device (`compositor`) |
-| `overlay` | The per-monitor deck (`overlay`), one screenshot (`card`), the region selector (`capsule`), the thumbnail in the air (`sprite`), the rubbish bin (`bin`), and the drag loop thread (`dragdrop`) |
-| `scroll` | Finding content out of view (`scrollable`), recording (`recorder`), motion between readings (`tracker`), building the long image (`stitcher`), and packed storage for it (`longimage`) |
-| `service` | The LocalSystem service that starts the program in each session, restarts it, and drives updates |
+| `app` | `main.cpp`: choosing the mode from the arguments, the message loop, installing clipboard data, returning memory when idle |
+| `base` | Win32 includes and tracing (`platform`), product names and install paths (`product`), reading `settings.ini` (`settings`), the worker threads used by scrolling screenshots (`workers`) |
+| `brand` | `iconbake.cpp`, a build tool that draws the icon in code and saves it as an `.ico` |
+| `capture` | The low-level keyboard and mouse hooks (`hook`), the capture thread (`capture`), and window geometry, taskbar state, Snap layouts, and the list of regions (`screen`) |
+| `config` | Default animation, colors, behavior, hotkeys, and layout |
+| `graphics` | Resampling, frosted glass, shadows, icons, and text (`image`), pixel helpers (`pixels.h`), springs turned into DirectComposition animations (`motion`), the WARP device (`compositor`) |
+| `overlay` | The thumbnails on each monitor (`overlay`), a single screenshot (`card`), the region bar (`capsule`), a thumbnail being dragged (`sprite`), the rubbish bin (`bin`), the drag loop thread (`dragdrop`) |
+| `scroll` | Detecting content out of view (`scrollable`), recording (`recorder`), measuring how far content moved between frames (`tracker`), building the long image (`stitcher`), and storing it compactly (`longimage`) |
+| `service` | The LocalSystem service that starts the program in each session, restarts it, and installs updates |
 | `setup` | The elevated install and uninstall steps (`installer`), and the setup, uninstall, and About window (`window`) |
-| `storage` | PNG encoding, atomic saves, clipboard data, and the in-memory archive of each frame (`store`) |
-| `update` | When to check and what to download (`updater`), the apply step (`apply.cpp`), shared state in the registry (`state`), HTTPS with the user's proxy and SHA-256 (`http`), and a small JSON reader (`json`) |
+| `storage` | PNG encoding, safe saving, clipboard data, and the in-memory copy of each frame (`store`) |
+| `update` | Deciding when to check and what to download (`updater`), installing it (`apply.cpp`), progress shared through the registry (`state`), HTTPS with the user's proxy plus SHA-256 (`http`), and a small JSON reader (`json`) |
 
 ## Building
 
-**You need** Windows 10 or 11 x64 with:
+**Requirements:** Windows 10 or 11 x64 with
 
-- Visual Studio 2022 or newer, or its Build Tools, with the **Desktop development with C++** workload (MSVC and a current Windows SDK)
-- CMake 3.21 or newer and Ninja (the copies that come with Visual Studio work)
-- Git, which stamps each build with its commit
+- Visual Studio 2022 or later, or the Build Tools, with the **Desktop development with C++** workload (MSVC and a current Windows SDK)
+- CMake 3.21 or later and Ninja (the copies installed with Visual Studio work)
+- Git, which is used to stamp each build with its commit
 
 From the repository root:
 
@@ -290,24 +300,24 @@ From the repository root:
 scripts\build.cmd Release
 ```
 
-The script finds the newest Visual Studio installation with `vswhere`, loads its x64 environment, configures `build\Release` with Ninja, and builds. The result is `build\Release\ScreenshotToolkit.exe`. Use `Debug` instead of `Release` for an unoptimized build in `build\Debug`.
+The script locates the newest Visual Studio installation with `vswhere`, sets up its x64 environment, configures `build\Release` with Ninja, and builds `build\Release\ScreenshotToolkit.exe`. Pass `Debug` instead of `Release` for an unoptimized build in `build\Debug`.
 
-The configure step also writes `compile_commands.json`, so clangd, VS Code, and CLion understand the project without extra setup. Visual Studio can open the folder directly as a CMake project.
+Configuring also writes `compile_commands.json`, so clangd, VS Code, and CLion pick up the project without extra setup. Visual Studio can open the folder directly as a CMake project.
 
 <details>
 <summary><b>What happens during a build</b></summary>
 <br>
 
-1. `scripts/version.cmake` runs on every build and writes two files under `build/<config>/generated/`: a header with the version name and build number, and a source file with the build's UTC time. Each is rewritten only when its content changes, so a new commit is the only thing that forces a recompile.
-2. `sstk_iconbake` is built and run. It draws the icon with the same code the program uses for its other graphics and writes `app.ico`, which `res/app.rc` embeds. There is no image file to keep in step.
-3. The program is linked with link-time code generation in Release. The rendering, codec, shell, and networking DLLs are delay-loaded, so the SYSTEM service, which shares the executable, never maps them.
+1. `scripts/version.cmake` runs on every build and writes two files under `build/<config>/generated/`: a header with the version name and build number, and a source file with the build time in UTC. Each file is only rewritten when its content changes, so only a new commit triggers a recompile.
+2. `sstk_iconbake` is built and run. It draws the icon with the same code the program uses for its other graphics and writes `app.ico`, which `res/app.rc` embeds. There is no image file to keep in sync.
+3. The program is linked, with link-time code generation in Release builds. The graphics, imaging, shell, and networking DLLs are delay-loaded, so the service, which runs from the same executable, never loads them.
 
-Builds are named `vX.Y.Z[-dev]-<commit>-beta`, for example `v0.2.0-dev-1a2b3c4d-beta`. `dev` is dropped only when `HEAD` is exactly the commit tagged `vX.Y.Z`.
+Builds are named `vX.Y.Z[-dev]-<commit>-beta`, for example `v0.2.0-dev-1a2b3c4d-beta`. The `dev` part is dropped only when `HEAD` is exactly the commit tagged `vX.Y.Z`.
 </details>
 
 ## Running a development build
 
-Only one copy runs per session, so stop the installed one first. A deliberate quit stays down, and the service will not bring it back until you ask.
+Only one copy can run in a session, so stop the installed one first. A copy stopped this way stays stopped, and the service won't restart it.
 
 ```powershell
 & "$env:ProgramFiles\Screenshot Toolkit\ScreenshotToolkit.exe" --quit
@@ -317,17 +327,17 @@ Only one copy runs per session, so stop the installed one first. A deliberate qu
 .\build\Release\ScreenshotToolkit.exe --run
 ```
 
-A development build started with `--run` works like the installed program, with two differences that come from not having UI Access: its thumbnails stay below Start and Task View, and its hooks do not see keys pressed while an administrator window has focus. To test those two behaviors, install the build with `--install` instead, and set `AutoUpdate=0` in settings.ini meanwhile so a newer release does not replace it.
+A build started with `--run` behaves like the installed program, except that it doesn't have UI Access. Its thumbnails stay below Start and Task View, and its hooks don't see keys pressed while an administrator window has focus. To test either of those, install the build with `--install` instead, and set `AutoUpdate=0` in settings.ini while you do, so that a newer release doesn't replace it.
 
-When you are done, stop the development build with `--quit`, then bring the installed one back with **Quick Restart** in its About window, or by signing out and in.
+When you are done, stop the development build with `--quit` and start the installed one again with **Quick Restart** in its About window, or by signing out and back in.
 
-Three environment variables help during development:
+These environment variables help while developing:
 
 | Variable | Effect |
 |---|---|
 | `SSTK_TRACE` | Appends timings and lifecycle events to `%TEMP%\ScreenshotToolkit.log` |
-| `SSTK_GALLERY_DIR` | Saves screenshots to another folder, overriding `settings.ini`, so test shots stay out of your Gallery |
-| `SSTK_DEBUG_VISIBLE` | Makes the overlay capturable, so screen recorders and frame-sampling tools can see the animation. Screenshots then contain the thumbnails too, so never ship or hand out a build run this way |
+| `SSTK_GALLERY_DIR` | Saves screenshots to a different folder, overriding `settings.ini`, so test shots stay out of your own |
+| `SSTK_DEBUG_VISIBLE` | Makes the thumbnails visible to screen recorders and frame-capture tools. Screenshots then include the thumbnails too, so don't use it for builds other people will run |
 
 ```powershell
 $env:SSTK_TRACE = '1'; $env:SSTK_GALLERY_DIR = "$env:TEMP\sstk-shots"; .\build\Release\ScreenshotToolkit.exe --run
@@ -335,161 +345,150 @@ $env:SSTK_TRACE = '1'; $env:SSTK_GALLERY_DIR = "$env:TEMP\sstk-shots"; .\build\R
 
 ## How it fits together
 
-### One executable, many roles
+### One executable, several roles
 
-Everything ships as one file, and the arguments decide what it becomes. Installing and updating therefore replace a single file, and the SYSTEM service loads no DLLs from disk beyond the system's own.
+Everything ships as a single file, and the command-line arguments decide what it does. Installing and updating replace one file, and the SYSTEM service loads nothing from disk beyond Windows' own DLLs.
 
 ```mermaid
 flowchart LR
-    subgraph S0["Session 0"]
-        SVC["Service<br/>--service<br/>LocalSystem"]
-    end
-    subgraph US["Each signed-in session"]
-        APP["Application<br/>--run<br/>your token + UI Access"]
-        WIN["Setup · About · Uninstall<br/>temporary copy in %TEMP%"]
-        ELEV["Install steps<br/>--elevated"]
-    end
-    GH[("GitHub releases")]
-    SVC -- "starts, watches, restarts" --> APP
-    SVC -- "starts" --> UPD["Apply step<br/>--apply-update"]
-    GH -. "check every 12 h, download" .-> SVC
-    WIN -- "Quick Restart, Check for Updates" --> SVC
-    WIN -- "one UAC prompt" --> ELEV
+    GH[("GitHub releases")] --> SVC["Service<br/>session 0, LocalSystem<br/>supervises and updates"]
+    SVC --> APP["Application<br/>each signed-in session<br/>as the user, with UI Access"]
+    WIN["Setup, About, and<br/>Uninstall window"] --> SVC
+    WIN --> ELEV["Install and uninstall steps<br/>elevated after one prompt"]
 ```
 
-The service only starts and supervises the application. An application that is ended or crashes is back within a second, more slowly if it keeps failing straight away, while one that exits cleanly stays down until Quick Restart or the next sign-in. Should the service itself fail, Windows restarts it, and it adopts the applications already running.
+- The **service** starts the application in every session that signs in and watches it. If the application is ended or crashes, it is back within a second, more slowly if it keeps failing right away. If it exits normally, as after Quit or at sign-out, it stays stopped until Quick Restart or the next sign-in. If the service itself fails, Windows restarts it, and it picks up the applications that are already running.
+- The **window** asks the service to restart the application or to check for updates, and runs the elevated install steps after a single UAC prompt.
 
 ### Inside the application
 
-The application keeps each kind of work on its own thread, so nothing slow can delay the first frame of a screenshot.
+Each kind of work has its own thread, so nothing slow can delay the first frame of a screenshot.
 
 ```mermaid
 flowchart TB
-    HOOK["Hook thread<br/>keyboard hook, always<br/>mouse hook, only while needed"]
-    CAP["Capture thread<br/>BitBlt of the monitor, window geometry"]
-    UI["UI thread<br/>controller window · decks · DirectComposition"]
-    STORE["Store worker<br/>PNG encoding, atomic saves, clipboard data"]
-    DET["Scroll detector<br/>UI Automation, raw view"]
-    REC["Scroll recorder<br/>+ worker pool while recording"]
-    DRAG["Drag thread<br/>system drag loop"]
-    HOOK -- "trigger" --> CAP
-    CAP -- "flash, then the captured frame" --> UI
-    UI --> STORE
-    UI --> DET
-    UI --> REC
-    UI --> DRAG
+    HOOK["Hook thread<br/>keyboard hook, plus a mouse hook when needed"] --> CAP["Capture thread<br/>copies the monitor"]
+    CAP --> UI["UI thread<br/>the overlay and DirectComposition"]
+    UI --> STORE["Store worker<br/>PNG encoding, saving, clipboard"]
+    UI --> DET["Scroll detector<br/>UI Automation"]
+    UI --> REC["Scroll recorder<br/>with its worker pool"]
+    UI --> DRAG["Drag thread<br/>the system drag loop"]
 ```
 
-A press travels like this:
+This is what happens after a press:
 
 ```mermaid
 sequenceDiagram
-    participant H as Hook thread
-    participant C as Capture thread
-    participant U as UI thread
+    participant H as Hook
+    participant C as Capture
+    participant U as UI
     participant D as DWM
-    participant S as Store worker
+    participant S as Store
     H->>C: PrintScreen
-    C->>U: flash (≈4 ms after the press)
+    C->>U: start flash
     U->>D: flash curve
-    C->>C: BitBlt of the monitor (25–40 ms at 2560×1600)
-    C->>U: frame, regions, taskbar state
-    U->>D: card and capsule, each motion uploaded once as a curve
-    U->>S: encode and save the PNG, prepare the clipboard
+    C->>C: copy monitor
+    C->>U: frame and regions
+    U->>D: card and bar curves
+    U->>S: encode and save
     S-->>U: saved
-    Note over U,D: the process sleeps while DWM animates
 ```
+
+The flash is on screen about 4 ms after the key press. Copying a 2560×1600 monitor takes 25 to 40 ms, and the thumbnail is on screen about 50 ms after the press. Encoding, saving, and preparing the clipboard happen after that first frame, so they never delay it.
 
 ### Rendering and motion
 
-Every visible element is a DirectComposition visual. Springs have a closed-form solution, so each animated value is uploaded once as a chain of cubic segments and DWM evaluates it at the display's refresh rate. The process sleeps during animation and the motion is immune to CPU load. Values that follow the pointer, such as a thumbnail being dragged, are stepped once per composed frame instead.
+Everything you see is a DirectComposition visual. Spring motion has an exact formula, so each animated value is handed to DWM once as a chain of curve segments, and DWM plays it at the display's refresh rate. The process sleeps while things move, and CPU load can't make an animation stutter. Values that follow the pointer, such as a thumbnail being dragged, are updated once per frame instead.
 
-Drawing goes through a WARP device that only hands pixels to DirectComposition, while DWM composes on the GPU. Measured on an RTX 4060 laptop, this makes device creation about ten times faster than the vendor driver (8–18 ms against 100–200 ms) and avoids roughly 80 MB of committed memory.
+The program draws with WARP, a software device that only passes finished pixels to DirectComposition, while DWM composes them on the GPU. On an RTX 4060 laptop this makes creating the device about ten times faster than using the graphics driver (8 to 18 ms instead of 100 to 200 ms) and saves about 80 MB of committed memory.
 
 <details>
 <summary><b>Where the time and memory go</b></summary>
 <br>
 
-- **Idle.** After each session the process returns its working set, leaving about 0.2 MB of private working set. Pages stay cached, so the next press only takes soft page faults. The only recurring wake-up is a keyboard hook refresh every five minutes, because Windows silently drops hooks it once found slow.
-- **A screenshot on screen.** A thumbnail is prepared for every region when the shot is taken, and the raw frame is released as soon as the PNG is saved. That leaves about 15 MB per session, and a burst of five stays near 8 MB. Switching regions uploads nothing; crops come from the PNG kept in memory.
-- **Dragging.** The system drag loop calls into whatever application is under the pointer and can block there, so it runs on its own thread. The UI thread wakes once per composed frame only while a thumbnail is in the air.
-- **Mouse hook.** A low-level mouse hook wakes the process on every pointer move, so it exists only while a thumbnail with choices or a drag is on screen.
-- **Scrolling screenshots.** Detection runs on its own thread after the shot is shown. While recording, the window is read about every 90 ms, every 25 ms while things move, and each reading is reduced to an edge map. Strips of columns propose shifts, 16×16 cells confirm them, and each reading is placed against the rows already held, so errors cannot add up. Rows are kept packed in address space reserved up front, and only changed thumbnail rows are redrawn.
-- **The desktop is left alone.** The overlay stops one pixel short of covering the monitor. A window covering it would count as a fullscreen app, and Windows would drop the taskbar behind everything.
+- **Idle.** After each screenshot the process hands its working set back to Windows, leaving about 0.2 MB of private working set. The pages stay cached in RAM, so the next press only takes soft page faults. The only recurring wake-up is a keyboard hook refresh every five minutes, because Windows silently drops hooks it once found slow.
+- **With a screenshot on screen.** A thumbnail is prepared for every region when the shot is taken, and the raw frame is released as soon as the PNG is saved. That leaves about 15 MB for one screenshot, and five in a row stay around 8 MB. Switching regions uploads nothing new; crops come from the PNG kept in memory.
+- **Dragging.** The system drag loop calls into whatever app is under the pointer, which can block, so it runs on its own thread. The UI thread wakes once per frame only while a thumbnail is being dragged.
+- **The mouse hook.** A low-level mouse hook wakes the process on every pointer move, so it is only installed while a thumbnail with several regions or a drag is on screen.
+- **Scrolling screenshots.** Detection runs on its own thread after the shot is shown. While recording, the window is read about every 90 ms, or every 25 ms while things move, and each reading is reduced to an edge map. Narrow strips of columns propose how far the content moved, 16×16 cells confirm it, and every reading is placed against everything captured so far, so small errors don't add up. Rows are stored compactly in memory reserved in advance, and only the thumbnail rows that changed are redrawn.
+- **Leaving the taskbar alone.** The overlay stops one pixel short of covering the whole monitor. A window that covers it entirely counts as a fullscreen app, and Windows would push the taskbar behind everything.
 </details>
 
-### Why one executable
+### Why a single executable
 
-Keeping everything in one file makes installing and updating a single-file operation and gives the SYSTEM service nothing extra to load. Each part lives in its own module, so splitting is mechanical when one of these arrives:
+One file keeps installing and updating simple and gives the service nothing extra to load. Each part already lives in its own module, so splitting it up would be mechanical. It becomes worthwhile when one of these comes along:
 
-- **A larger interface**, such as a settings window. It would move into its own executable, run as the user, leaving the resident program smaller.
-- **Updating while the program runs.** A small separate service executable could then replace the application's file without stopping itself.
+- **A larger interface**, such as a settings window. It would move into its own executable running as the user, so the program that stays resident gets smaller.
+- **Updating while the program runs.** A small separate service executable could replace the program's file without stopping itself.
 - **Code shared with other programs**, such as plugins. That code would become a DLL with a plain C interface, loaded only from the install folder.
 
-A split would also add a manifest of installed files for the uninstaller, in place of the single folder it removes today.
+A split would also need a list of installed files for the uninstaller, which today simply removes one folder.
 
-## Tuning the defaults
+## Changing the defaults
 
-The default build's behavior is defined in five headers under `include/sstk/config/`. Change a value and rebuild. A handful of them can also be overridden at run time in [settings.ini](#settings).
+The default behavior is defined in five headers under `include/sstk/config/`. Change a value and rebuild. A few of them can also be overridden without rebuilding, in [settings.ini](#settings).
 
-| Header | What it sets |
+| Header | What it controls |
 |---|---|
-| `animation.h` | Every spring, as `{response, damping}`, plus timings for the flash, the deck, the selector, dragging, and the rubbish bin |
-| `colors.h` | The "Graphite Glass" palette, shadows, the outcome colors of a scrolling screenshot, the icon, and the setup window in both themes |
-| `core.h` | Dwell time, what a shot contains, deletion, which windows become regions, and how scrolling screenshots sample, match, and end |
-| `hooks.h` | The keys and mouse buttons that capture, step the selector, start and finish a scrolling screenshot, and cancel a drag |
-| `layout.h` | Sizes, spacing, label text, and fonts, including the setup window's |
+| `animation.h` | Every spring, written as `{response, damping}`, and the timing of the flash, the stack of thumbnails, the region bar, dragging, and the rubbish bin |
+| `colors.h` | The palette, shadows, the result colors for scrolling screenshots, the icon, and the setup window in both themes |
+| `core.h` | How long thumbnails stay, what a screenshot includes, how deleting works, which windows become regions, and how scrolling screenshots sample, match, and end |
+| `hooks.h` | The keys and mouse buttons for capturing, switching regions, starting and finishing a scrolling screenshot, and cancelling a drag |
+| `layout.h` | Sizes, spacing, label text, and fonts, including those of the setup window |
 
-The visual language is deliberately monochrome: warm graphite and porcelain, so the screenshot is the only color on screen. Hue appears only where a drag asks a question (blue: this drop will land; red: this will delete). Colors are flat, with neutral shadows and no gradients or glows. Please keep new UI within that language.
+The visual style is deliberately quiet: warm graphite and off-white, so the screenshot is the only colorful thing on screen. Color appears only when a drag needs to tell you something, blue when a drop will land and red when it will delete. Colors are flat, shadows are neutral, and there are no gradients or glows. Please keep new interface work within that style.
 
-## Verifying changes
+## Checking changes
 
-There is no automated test suite yet. The program is a thin layer over input hooks, the compositor, and other applications, so changes are verified by running them. A useful pass before opening a pull request:
+There is no automated test suite yet. Most of the program sits between input hooks, the compositor, and other applications, so changes are checked by running them. Before opening a pull request, it helps to go through:
 
-- **Build clean.** `scripts\build.cmd Release` with no warnings at `/W4`.
-- **Capture.** PrintScreen and Win+Shift+S on each monitor, including mixed DPI, and fast bursts that stack the deck.
-- **Regions.** A Snap layout, a maximized window, a true fullscreen app (the capsule should hide), and the taskbar on another edge or set to auto-hide.
-- **Gestures.** Drag into Explorer, a browser, and a chat app; cancel with right-click and Esc; the rubbish bin with `DeleteToRecycleBin` on and off; swipe and click.
-- **Shell surfaces.** With an installed build, thumbnails above Start, Task View, and Quick Settings, and the hotkeys over an administrator window.
-- **Scrolling screenshots.** A Chromium page with plain `overflow: auto` boxes and sticky headers, a native list, the Settings app (see-through material), and a terminal. Check the negatives too: a game, a video, a short page.
-- **Footprint.** With `SSTK_TRACE` set, the log reports the commit charge after each trim; it should return to its idle level once the thumbnails are gone.
+- **The build.** `scripts\build.cmd Release` finishes without warnings at `/W4`.
+- **Capturing.** PrintScreen and Win+Shift+S on each monitor, including monitors with different scaling, and quick bursts of presses.
+- **Regions.** A Snap layout, a maximized window, a fullscreen app (no region bar), and the taskbar on another edge or set to hide automatically.
+- **Gestures.** Dragging into Explorer, a browser, and a chat app; cancelling with right-click and Esc; the rubbish bin with `DeleteToRecycleBin` on and off; swiping and clicking.
+- **Shell surfaces.** With an installed build, thumbnails above Start, Task View, and Quick Settings, and the hotkeys while an administrator window has focus.
+- **Scrolling screenshots.** A web page with scrolling boxes, a sticky header, and a fixed background; a native list; the Settings app with its translucent background; a terminal. And the cases that should not offer one: a game, a video, a page that fits.
+- **Memory.** With `SSTK_TRACE` set, the log reports committed memory after each trim, which should return to its idle level once the thumbnails are gone.
 
 ## Commits, versions, and releases
 
-- **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/): `feat(scope): …`, `fix(scope): …`, `perf`, `ci`, `chore`. The scope is usually a module name.
-- **Changelog.** Add user-facing changes under `## Unreleased` in `CHANGELOG.md` as you go.
-- **Version.** The number lives in `project(... VERSION X.Y.Z)` in `CMakeLists.txt`. The build number is the count of commits that lead to `HEAD`, and installed copies only ever update to a higher one.
+- **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/), such as `feat(scroll): …` or `fix(overlay): …`. The scope is usually a module name.
+- **Changelog.** Add user-facing changes to `CHANGELOG.md` under `## Unreleased` as you make them.
+- **Versions.** The version is set in `project(... VERSION X.Y.Z)` in `CMakeLists.txt`. The build number is the count of commits leading to `HEAD`, and installed copies only ever move to a higher one.
 
-GitHub Actions publishes every release from `.github/workflows/release.yml`, all marked as pre-releases while the project is in beta:
+GitHub Actions publishes every release through `.github/workflows/release.yml`. While the project is in beta, all of them are marked as pre-releases.
 
-- Each push to `main` publishes its newest commit as **the** dev build, with the changelog's Unreleased section and a comparison link, and removes the previous dev build. Pushes in quick succession publish only the newest.
-- Each `vX.Y.Z` tag without a release is built from that tag and published with its changelog section. Running the workflow by hand with **rebuild** publishes every version again, for example after the signing certificate changes.
+- Every push to `main` publishes the newest commit as the current dev build, with the changelog's Unreleased section and a comparison link, and removes the previous dev build. When several pushes arrive close together, only the newest is published.
+- Every `vX.Y.Z` tag that has no release yet is built from that tag and published with its section of the changelog. Running the workflow by hand with **rebuild** checked publishes every version again, for example after the signing certificate changes.
 
-To cut a version: move the Unreleased entries under a new `## X.Y.Z` heading, set the same version in `CMakeLists.txt`, commit, tag the commit `vX.Y.Z`, and push the branch and the tag. `scripts\release.cmd` builds the same thing locally into `release\<version>\`, a folder git ignores; tag first so the build carries no `dev`.
+To release a version, move the Unreleased entries under a new `## X.Y.Z` heading, set the same version in `CMakeLists.txt`, commit, tag the commit `vX.Y.Z`, and push the branch and the tag. `scripts\release.cmd` builds the same thing locally into `release\<version>\`, which git ignores; tag first so the build name has no `dev`.
 
 <details>
 <summary><b>Signing</b></summary>
 <br>
 
-Releases are signed with a self-signed certificate and timestamped by `scripts/sign.ps1`. The signature proves that the file is unchanged and which certificate signed it, but Windows does not trust a self-signed certificate, so SmartScreen can still call the publisher unknown.
+Releases are signed with a self-signed certificate and timestamped by `scripts/sign.ps1`. The signature shows that the file hasn't changed and which certificate signed it, but Windows doesn't trust a self-signed certificate, so SmartScreen can still report an unknown publisher.
 
-Without further setup, each build is signed with a certificate made for it alone. To sign every release with the same certificate, run this once on your own machine:
+By default every build is signed with a certificate made just for it. To sign all releases with the same certificate, run this once on your own machine:
 
 ```powershell
 powershell -File scripts\new-signing-cert.ps1
 ```
 
-Then add the two values it prints as repository secrets, `SIGNING_PFX` and `SIGNING_PASSWORD`, under **Settings › Secrets and variables › Actions**. Importing its `signing.cer` into a machine's Trusted Root Certification Authorities makes that machine show the signature as valid.
+Then add the two values it prints as repository secrets named `SIGNING_PFX` and `SIGNING_PASSWORD`, under **Settings › Secrets and variables › Actions**. Importing its `signing.cer` into a machine's Trusted Root Certification Authorities makes that machine show the signature as valid.
 </details>
+
+## The README images
+
+Everything under `docs/media` is rendered by the pages in [`docs/media/source`](docs/media/source). They contain a replica of the overlay that uses the springs, sizes, and colors from `include/sstk/config`, shown over a made-up desktop, and a small script that steps through each animation frame by frame in headless Edge and encodes the result with ffmpeg. If the interface changes visibly, update the replica and run `node render.mjs` in that folder.
 
 ## Contributing
 
-Issues and pull requests are welcome. Screenshot Toolkit is intentionally small, so for anything that adds a surface (a window, a setting, a new gesture), please open an issue first to talk about whether it fits. For pull requests:
+Issues and pull requests are welcome. Screenshot Toolkit is meant to stay small, so for anything that adds something new to the interface, such as a window, a setting, or a gesture, please open an issue first to discuss whether it fits. For pull requests:
 
-- Keep each change focused, and describe what you verified and on which Windows version and display setup.
-- Put new tunables in `include/sstk/config/` rather than in source files.
-- Prefer exact refactors for performance work: the same pixels, the same decisions, and no lower sampling rates.
-- Comments explain why, not what. Keep them short.
+- Keep each change focused, and say what you checked and on which Windows version and display setup.
+- Put new tunable values in `include/sstk/config/`, not in source files.
+- Performance changes should produce exactly the same results: the same pixels, the same decisions, and no lower sampling rates.
+- Keep comments short, and use them to explain why rather than what.
 
 ## License
 

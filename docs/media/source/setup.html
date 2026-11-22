@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: transparent; }
+  .dark { --body: #16171a; --title: #f3f2ef; --text: #8e8f94; --pf: #f3f2ef; --pi: #16171a; --border: rgba(255, 255, 255, .13); }
+  .light { --body: #f3f2ef; --title: #16171a; --text: #6b6c70; --pf: #16171a; --pi: #f3f2ef; --border: rgba(0, 0, 0, .14); }
+  .sheet { position: relative; width: 920px; height: 500px; display: flex; gap: 52px; padding: 40px 42px; align-items: flex-start; }
+  .win { width: 382px; border-radius: 8px; overflow: hidden; background: var(--body); box-shadow: 0 0 0 1px var(--border), 0 18px 48px rgba(0, 0, 0, .3), 0 3px 10px rgba(0, 0, 0, .16); }
+  .cap { height: 32px; display: flex; align-items: center; padding-left: 12px; gap: 10px; font: 12px 'Segoe UI Variable Text', 'Segoe UI'; color: var(--title); position: relative; }
+  .cap .x { position: absolute; right: 0; top: 0; width: 46px; height: 32px; display: grid; place-items: center; }
+  .client { position: relative; width: 380px; margin: 0 1px 1px; }
+  .logo { position: absolute; left: 142px; top: 52px; }
+  .t { position: absolute; left: 0; width: 380px; text-align: center; white-space: nowrap; }
+  .title { font: 400 31px 'Sitka Heading', 'Sitka', Georgia, serif; color: var(--title); }
+  .title i { font-style: italic; }
+  .line { font: 14px 'Segoe UI Variable Text', 'Segoe UI'; color: var(--text); }
+  .btn { position: absolute; left: 60px; width: 260px; height: 44px; border-radius: 22px; display: grid; place-items: center; font: 600 15px 'Segoe UI Variable Display', 'Segoe UI'; }
+  .btn.primary { background: var(--pf); color: var(--pi); }
+  .btn.danger { background: #8e1519; color: #fff; }
+</style>
+</head>
+<body>
+<div class="sheet" id="sheet"></div>
+<script src="brand.js"></script>
+<script>
+  // After src/setup/window.cpp and include/sstk/config/layout.h: the icon, the title, two lines, and one wide button.
+  const sheet = document.getElementById('sheet');
+  sheet.classList.add(new URLSearchParams(location.search).get('theme') || 'dark');
+  const ctx = document.createElement('canvas').getContext('2d');
+  const metric = (font, text) => { ctx.font = font; return ctx.measureText(text); };
+
+  function windowEl(caption, lines, button) {
+    const win = document.createElement('div');
+    win.className = 'win';
+    const ink = getComputedStyle(sheet).getPropertyValue('--title').trim();
+    win.innerHTML = `<div class="cap">${logoSvg(16)}${caption}<span class="x"><svg width="10" height="10"><path d="M.5.5l9 9M9.5.5l-9 9" stroke="${ink}" stroke-width="1"/></svg></span></div><div class="client"></div>`;
+    const client = win.querySelector('.client');
+    const add = (cls, html, baseline, size, family) => {
+      const e = document.createElement('div');
+      e.className = `t ${cls}`;
+      e.innerHTML = html;
+      const m = metric(`${size}px ${family}`, 'Hg');
+      e.style.top = `${baseline - m.fontBoundingBoxAscent}px`;
+      e.style.lineHeight = `${m.fontBoundingBoxAscent + m.fontBoundingBoxDescent}px`;
+      client.appendChild(e);
+    };
+    client.insertAdjacentHTML('beforeend', `<div class="logo">${logoSvg(96)}</div>`);
+    const titleBase = 52 + 96 + 30 + metric('31px "Sitka Heading"', 'H').actualBoundingBoxAscent;
+    add('title', 'Screenshot <i>Toolkit</i>', titleBase, 31, '"Sitka Heading"');
+    add('line', lines[0], titleBase + 31, 14, '"Segoe UI Variable Text"');
+    add('line', lines[1], titleBase + 52, 14, '"Segoe UI Variable Text"');
+    const top = titleBase + 52 + 38;
+    client.insertAdjacentHTML('beforeend', `<div class="btn ${button[1]}" style="top:${top}px">${button[0]}</div>`);
+    client.style.height = `${top + 44 + 46}px`;
+    return win;
+  }
+
+  const lines = ['Version v0.2.0-24ede71a-beta', '2026-11-22 04:03:27 UTC'];
+  sheet.appendChild(windowEl('Screenshot Toolkit Setup', lines, ['Quick Install', 'primary']));
+  sheet.appendChild(windowEl('Uninstall Screenshot Toolkit', lines, ['Uninstall', 'danger']));
+  window.ready = document.fonts.ready.then(() => true);
+</script>
+</body>
+</html>
