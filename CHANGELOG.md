@@ -1,6 +1,6 @@
 # Changelog
 
-Built programs are kept per version in the local `release/` folder, created by `release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
+Built programs are kept per version in the local `release/` folder, created by `scripts\release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
 ## Unreleased
 
@@ -25,6 +25,7 @@ Built programs are kept per version in the local `release/` folder, created by `
 - The selector's labels are drawn after the first frame of a shot, which they never delay.
 - Text on the selector is centered by the true height of its capitals, read off the letter's outline, and the option names on the glyph beside them as drawn. Segoe UI Variable reports its capitals as half the font size, well short of their real height, which set the labels a few pixels high.
 - Clicking a thumbnail opens the image without holding anything up: the thumbnail goes at once, and the viewer opens once the file is saved.
+- The source tree is split into modules: headers in `include/sstk/<module>/`, sources in `src/<module>/`, and the build scripts in `scripts/`. The default build's settings moved with it to `include/sstk/config/`.
 
 ### Performance
 

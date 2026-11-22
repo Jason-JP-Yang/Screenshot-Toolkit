@@ -10,31 +10,34 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Headers live in include/sstk/<module>/ and sources in src/<module>/, one module per folder.
 add_executable(ScreenshotToolkit WIN32
-  src/main.cpp
-  src/capsule.cpp
-  src/capture.cpp
-  src/bin.cpp
-  src/card.cpp
-  src/compositor.cpp
-  src/dragdrop.cpp
-  src/hook.cpp
-  src/image.cpp
-  src/install.cpp
-  src/longimage.cpp
-  src/motion.cpp
-  src/overlay.cpp
-  src/platform.cpp
-  src/recorder.cpp
-  src/screen.cpp
-  src/scrollable.cpp
-  src/sprite.cpp
-  src/stitcher.cpp
-  src/store.cpp
-  src/tracker.cpp
-  src/workers.cpp
+  src/app/install.cpp
+  src/app/main.cpp
+  src/base/platform.cpp
+  src/base/workers.cpp
+  src/capture/capture.cpp
+  src/capture/hook.cpp
+  src/capture/screen.cpp
+  src/graphics/compositor.cpp
+  src/graphics/image.cpp
+  src/graphics/motion.cpp
+  src/overlay/bin.cpp
+  src/overlay/capsule.cpp
+  src/overlay/card.cpp
+  src/overlay/dragdrop.cpp
+  src/overlay/overlay.cpp
+  src/overlay/sprite.cpp
+  src/scroll/longimage.cpp
+  src/scroll/recorder.cpp
+  src/scroll/scrollable.cpp
+  src/scroll/stitcher.cpp
+  src/scroll/tracker.cpp
+  src/storage/store.cpp
   res/app.rc
 )
+
+target_include_directories(ScreenshotToolkit PRIVATE include)
 
 target_compile_definitions(ScreenshotToolkit PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX

@@ -1,0 +1,308 @@
+#include "sstk/capture/screen.h"
+
+#include "sstk/config/core.h"
+#include "sstk/config/layout.h"
+
+#include <dwmapi.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cwchar>
+
+namespace sstk {
+
+namespace {
+
+struct WindowEntry {
+  HWND handle;
+  RECT rect;  // Visible frame clipped to the monitor, in virtual screen coordinates.
+  bool arranged;
+  double visible_fraction;
+};
+
+struct TaskbarState {
+  bool found = false;
+  bool covered = false;
+  RECT rect{};
+};
+
+struct WalkState {
+  HMONITOR monitor;
+  RECT bounds;
+  DWORD own_process;
+  HWND taskbar_window;
+  std::vector<WindowEntry> windows;
+  TaskbarState taskbar;
+  bool covered_so_far = false;
+};
+
+bool ClassNameIs(const wchar_t* name, const wchar_t* expected) { return wcscmp(name, expected) == 0; }
+
+bool IsTaskbarClass(const wchar_t* name) {
+  return ClassNameIs(name, L"Shell_TrayWnd") || ClassNameIs(name, L"Shell_SecondaryTrayWnd");
+}
+
+bool IsShellSurfaceClass(const wchar_t* name) {
+  static constexpr const wchar_t* kIgnored[] = {
+      L"Progman",   L"WorkerW",          L"#32768",  L"tooltips_class32",          L"SysShadow",
+      L"NotifyIconOverflowWindow",       L"TaskListThumbnailWnd",                  L"XamlExplorerHostIslandWindow",
+      L"Windows.UI.Core.CoreWindow",     L"Shell_InputSwitchTopLevelWindow",       L"ForegroundStaging",
+      L"MultitaskingViewFrame",          L"Windows.Internal.Shell.TabProxyWindow",
+  };
+  for (const wchar_t* ignored : kIgnored) {
+    if (ClassNameIs(name, ignored)) return true;
+  }
+  return false;
+}
+
+bool IsCloaked(HWND window) {
+  DWORD cloaked = 0;
+  return SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+}
+
+bool IsAppSurface(HWND window, LONG_PTR ex_style) {
+  if ((ex_style & WS_EX_APPWINDOW) != 0) return true;
+  if ((ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0) return false;
+  if ((ex_style & WS_EX_LAYERED) != 0) {
+    if ((ex_style & WS_EX_TRANSPARENT) != 0) return false;
+    BYTE alpha = 255;
+    DWORD flags = 0;
+    if (GetLayeredWindowAttributes(window, nullptr, &alpha, &flags) && (flags & LWA_ALPHA) != 0 && alpha == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
+  auto& state = *reinterpret_cast<WalkState*>(context);
+  if (!IsWindowVisible(window)) return TRUE;
+
+  wchar_t class_name[64];
+  if (GetClassNameW(window, class_name, ARRAYSIZE(class_name)) == 0) return TRUE;
+
+  if (IsTaskbarClass(class_name)) {
+    if (window == state.taskbar_window) {
+      // Windows drops the taskbar out of the topmost band only for a real fullscreen app. While it stays
+      // topmost it is on screen, whatever monitor-sized shell surfaces such as open panels sit above it.
+      const bool topmost = (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+      state.taskbar.covered = state.covered_so_far && !topmost;
+    }
+    return TRUE;
+  }
+
+  if (IsIconic(window) || IsShellSurfaceClass(class_name) || IsCloaked(window)) return TRUE;
+
+  DWORD process = 0;
+  GetWindowThreadProcessId(window, &process);
+  if (process == state.own_process) return TRUE;
+
+  const LONG_PTR ex_style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+  if (!IsAppSurface(window, ex_style)) return TRUE;
+
+  RECT frame;
+  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) {
+    if (!GetWindowRect(window, &frame)) return TRUE;
+  }
+
+  RECT clipped;
+  if (!IntersectRect(&clipped, &frame, &state.bounds)) return TRUE;
+  if (clipped.right - clipped.left < config::kMinimumWindowExtent || clipped.bottom - clipped.top < config::kMinimumWindowExtent) {
+    return TRUE;
+  }
+
+  if (EqualRect(&clipped, &state.bounds)) state.covered_so_far = true;
+
+  state.windows.push_back({window, clipped, IsWindowArranged(window) != FALSE, 0.0});
+  return TRUE;
+}
+
+long Area(const RECT& rect) { return (rect.right - rect.left) * (rect.bottom - rect.top); }
+
+long RegionArea(HRGN region) {
+  DWORD size = GetRegionData(region, 0, nullptr);
+  if (size == 0) return 0;
+  std::vector<BYTE> buffer(size);
+  auto* data = reinterpret_cast<RGNDATA*>(buffer.data());
+  if (GetRegionData(region, size, data) == 0) return 0;
+  const RECT* rects = reinterpret_cast<const RECT*>(data->Buffer);
+  long area = 0;
+  for (DWORD i = 0; i < data->rdh.nCount; ++i) area += Area(rects[i]);
+  return area;
+}
+
+// Walks windows from the top down, recording how much of each one is left uncovered.
+void ComputeVisibility(std::vector<WindowEntry>& windows, const RECT& bounds) {
+  HRGN remaining = CreateRectRgnIndirect(&bounds);
+  HRGN window_region = CreateRectRgn(0, 0, 0, 0);
+  HRGN visible = CreateRectRgn(0, 0, 0, 0);
+  for (WindowEntry& entry : windows) {
+    SetRectRgn(window_region, entry.rect.left, entry.rect.top, entry.rect.right, entry.rect.bottom);
+    int kind = CombineRgn(visible, window_region, remaining, RGN_AND);
+    entry.visible_fraction = kind == NULLREGION ? 0.0 : static_cast<double>(RegionArea(visible)) / Area(entry.rect);
+    CombineRgn(remaining, remaining, window_region, RGN_DIFF);
+  }
+  DeleteObject(visible);
+  DeleteObject(window_region);
+  DeleteObject(remaining);
+}
+
+const WindowEntry* FindTopApp(const std::vector<WindowEntry>& windows) {
+  HWND foreground = GetForegroundWindow();
+  if (foreground != nullptr) {
+    HWND root = GetAncestor(foreground, GA_ROOT);
+    for (const WindowEntry& entry : windows) {
+      if (entry.handle == foreground || entry.handle == root) return &entry;
+    }
+  }
+  // The desktop or another monitor has focus: fall back to the frontmost window that is actually seen.
+  for (const WindowEntry& entry : windows) {
+    if (entry.visible_fraction >= config::kMinimumVisibleFraction) return &entry;
+  }
+  return nullptr;
+}
+
+bool NearlyEqual(const RECT& a, const RECT& b) {
+  return std::abs(a.left - b.left) <= config::kSameRectTolerance && std::abs(a.top - b.top) <= config::kSameRectTolerance &&
+         std::abs(a.right - b.right) <= config::kSameRectTolerance && std::abs(a.bottom - b.bottom) <= config::kSameRectTolerance;
+}
+
+RECT ToMonitorSpace(const RECT& rect, const RECT& bounds) {
+  return RECT{rect.left - bounds.left, rect.top - bounds.top, rect.right - bounds.left, rect.bottom - bounds.top};
+}
+
+bool TaskbarIsShown(const TaskbarState& taskbar) {
+  if (!taskbar.found || taskbar.covered) return false;
+  const int width = taskbar.rect.right - taskbar.rect.left;
+  const int height = taskbar.rect.bottom - taskbar.rect.top;
+  return std::min(width, height) > config::kTaskbarHiddenThickness;
+}
+
+TaskbarInsets InsetsFrom(const TaskbarState& taskbar, const RECT& bounds) {
+  TaskbarInsets insets;
+  if (!TaskbarIsShown(taskbar)) return insets;
+  const RECT& bar = taskbar.rect;
+  const int width = bar.right - bar.left;
+  const int height = bar.bottom - bar.top;
+  if (width >= height) {
+    if (bar.top - bounds.top <= bounds.bottom - bar.bottom) insets.top = height;
+    else insets.bottom = height;
+  } else {
+    if (bar.left - bounds.left <= bounds.right - bar.right) insets.left = width;
+    else insets.right = width;
+  }
+  return insets;
+}
+
+HWND FindTaskbar(HMONITOR monitor) {
+  HWND primary = FindWindowW(L"Shell_TrayWnd", nullptr);
+  if (primary != nullptr && MonitorFromWindow(primary, MONITOR_DEFAULTTONULL) == monitor) return primary;
+  HWND secondary = nullptr;
+  while ((secondary = FindWindowExW(nullptr, secondary, L"Shell_SecondaryTrayWnd", nullptr)) != nullptr) {
+    if (MonitorFromWindow(secondary, MONITOR_DEFAULTTONULL) == monitor) return secondary;
+  }
+  return nullptr;
+}
+
+WalkState WalkDesktop(HMONITOR monitor, const RECT& bounds) {
+  // Looked up by name because Start and Task View move the taskbar to a shell band that EnumWindows
+  // does not report. If the walk never meets it, it is above every window the walk can see.
+  WalkState state{monitor, bounds, GetCurrentProcessId(), FindTaskbar(monitor)};
+  RECT taskbar_rect;
+  if (state.taskbar_window != nullptr && IsWindowVisible(state.taskbar_window) && GetWindowRect(state.taskbar_window, &taskbar_rect)) {
+    state.taskbar.found = true;
+    IntersectRect(&state.taskbar.rect, &taskbar_rect, &bounds);
+  }
+  state.windows.reserve(32);
+  EnumWindows(CollectWindow, reinterpret_cast<LPARAM>(&state));
+  return state;
+}
+
+}  // namespace
+
+ScreenInfo AnalyzeScreen(HMONITOR monitor) {
+  ScreenInfo info;
+  info.monitor = monitor;
+  MONITORINFO monitor_info{sizeof(monitor_info)};
+  if (!GetMonitorInfoW(monitor, &monitor_info)) return info;
+  info.bounds = monitor_info.rcMonitor;
+
+  WalkState state = WalkDesktop(monitor, info.bounds);
+  ComputeVisibility(state.windows, info.bounds);
+
+  const RECT full = ToMonitorSpace(info.bounds, info.bounds);
+  auto add_region = [&](RegionKind kind, const RECT& rect) {
+    for (const Region& existing : info.regions) {
+      if (NearlyEqual(existing.rect, rect)) return;
+    }
+    info.regions.push_back({kind, rect});
+  };
+  add_region(RegionKind::kFull, full);
+
+  std::vector<const WindowEntry*> zones;
+  for (const WindowEntry& entry : state.windows) {
+    if (entry.arranged && entry.visible_fraction >= config::kMinimumVisibleFraction) zones.push_back(&entry);
+  }
+
+  const WindowEntry* app = FindTopApp(state.windows);
+  if (app != nullptr) {
+    info.app = app->handle;
+    info.app_rect = ToMonitorSpace(app->rect, info.bounds);
+  }
+  if (zones.size() >= 2) {
+    // A window floating above a snapped layout is still offered, ahead of the zones it sits on.
+    if (app != nullptr && !app->arranged) add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
+    std::sort(zones.begin(), zones.end(), [](const WindowEntry* a, const WindowEntry* b) {
+      if (std::abs(a->rect.top - b->rect.top) > config::kSameRectTolerance) return a->rect.top < b->rect.top;
+      return a->rect.left < b->rect.left;
+    });
+    for (const WindowEntry* zone : zones) add_region(RegionKind::kZone, ToMonitorSpace(zone->rect, info.bounds));
+  } else if (app != nullptr) {
+    add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
+  }
+
+  info.insets = InsetsFrom(state.taskbar, info.bounds);
+  if (info.insets != TaskbarInsets{}) {
+    RECT without_taskbar = full;
+    without_taskbar.left += info.insets.left;
+    without_taskbar.top += info.insets.top;
+    without_taskbar.right -= info.insets.right;
+    without_taskbar.bottom -= info.insets.bottom;
+    add_region(RegionKind::kNoTaskbar, without_taskbar);
+  }
+  // Whole-screen options lead and windows follow, as does the scrolling option once offered.
+  const auto rank = [](RegionKind kind) { return kind == RegionKind::kFull ? 0 : kind == RegionKind::kNoTaskbar ? 1 : 2; };
+  std::stable_sort(info.regions.begin(), info.regions.end(),
+                   [&](const Region& a, const Region& b) { return rank(a.kind) < rank(b.kind); });
+  return info;
+}
+
+TaskbarInsets QueryTaskbarInsets(HMONITOR monitor) {
+  MONITORINFO monitor_info{sizeof(monitor_info)};
+  if (!GetMonitorInfoW(monitor, &monitor_info)) return {};
+  WalkState state = WalkDesktop(monitor, monitor_info.rcMonitor);
+  return InsetsFrom(state.taskbar, monitor_info.rcMonitor);
+}
+
+bool VisibleFrame(HWND window, const RECT& monitor, RECT* visible) {
+  RECT frame;
+  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame)) return false;
+  if (!IntersectRect(visible, &frame, &monitor)) return false;
+  // The taskbar lies over any window but one filling the whole monitor.
+  MONITORINFO info{sizeof(info)};
+  if (!EqualRect(visible, &monitor) && GetMonitorInfoW(MonitorFromRect(&monitor, MONITOR_DEFAULTTONEAREST), &info)) {
+    RECT usable;
+    if (IntersectRect(&usable, visible, &info.rcWork)) *visible = usable;
+  }
+  return true;
+}
+
+SIZE ThumbnailSize(const RECT& region, float scale) {
+  const float region_w = static_cast<float>(region.right - region.left);
+  const float region_h = static_cast<float>(region.bottom - region.top);
+  const float fit = std::min({1.0f, config::kCardMaxWidth * scale / region_w, config::kCardMaxHeight * scale / region_h});
+  return SIZE{std::max(static_cast<LONG>(std::round(region_w * fit)), 1L),
+              std::max(static_cast<LONG>(std::round(region_h * fit)), 1L)};
+}
+
+}  // namespace sstk

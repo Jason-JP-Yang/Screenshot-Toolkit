@@ -75,29 +75,29 @@ This prompts through UAC once, copies the program to `Program Files\Screenshot T
 Requires the Visual Studio C++ build tools, a Windows 10 SDK, CMake, and Ninja. There are no other dependencies.
 
 ```bash
-build.cmd Release
+scripts\build.cmd Release
 ```
 
 The result is `build\Release\ScreenshotToolkit.exe`.
 
 ## Configuration
 
-There is no settings page. The default build's settings live in headers under `src/config/`. Change a value and rebuild.
+There is no settings page. The default build's settings live in headers under `include/sstk/config/`. Change a value and rebuild.
 
 | File | What it sets |
 |---|---|
-| `src/config/animation.h` | Springs, timing, the stretch into the rubbish bin, and the recording dot's breathing |
-| `src/config/colors.h` | Colors, opacities, shadows, and the outcome colors of a scrolling screenshot |
-| `src/config/core.h` | Dwell time, what a shot contains, how deletion works, which windows become options, and how scrolling screenshots sample, match, and end |
-| `src/config/hooks.h` | The keys and mouse buttons that capture, step the selector, start and finish a scrolling screenshot, and cancel a drag |
-| `src/config/layout.h` | Sizes, spacing, label text, and fonts |
+| `include/sstk/config/animation.h` | Springs, timing, the stretch into the rubbish bin, and the recording dot's breathing |
+| `include/sstk/config/colors.h` | Colors, opacities, shadows, and the outcome colors of a scrolling screenshot |
+| `include/sstk/config/core.h` | Dwell time, what a shot contains, how deletion works, which windows become options, and how scrolling screenshots sample, match, and end |
+| `include/sstk/config/hooks.h` | The keys and mouse buttons that capture, step the selector, start and finish a scrolling screenshot, and cancel a drag |
+| `include/sstk/config/layout.h` | Sizes, spacing, label text, and fonts |
 
 ## Releases
 
 The version is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. To publish, run:
 
 ```bash
-release.cmd
+scripts\release.cmd
 ```
 
 This builds Release and copies the program to `release\<version>\`, a local folder git does not track. Each version is tagged `vX.Y.Z`.
@@ -120,7 +120,7 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Scrolling screenshots.** Looking for content out of view runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads the window about every 90 ms, and every 25 ms while things move, and reduces each reading to an edge map, which records where brightness steps and not the shades, because a window's see-through material changes every pixel slightly as the content moves over it. Strips of columns each propose the shifts that line their rows up, so that whatever is fixed in one strip costs only that strip, and the proposals are checked cell by cell in 16 by 16 pixel cells. A cell that matches at the shift and not in place moves with the scroll. That tells the moving area from what surrounds it, with no help from the app, though a rectangle it reports can settle the plain margins. Each reading is placed against the rows already held, so errors cannot add up. A row of 16 pixel slices then enters the image according to how far it can be believed: seen from under something fixed or near the pointer it only fills an empty place, seen once it stands for now, and seen moving it stays unless later readings keep disagreeing with it. Reduced to edges, one reading costs a few milliseconds on a full window. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
 
-**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `src/config/core.h` and rebuild.
+**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `include/sstk/config/core.h` and rebuild.
 
 **Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
 
@@ -138,26 +138,36 @@ Keys are swallowed only while the application is alive. If it is not running, Wi
 
 ## Source map
 
-| File | Responsibility |
-|---|---|
-| `src/main.cpp` | Modes, message loop, clipboard installation, memory trimming |
-| `src/hook.cpp` | Low-level keyboard and mouse hooks, Start menu suppression |
-| `src/capture.cpp` | Capture thread |
-| `src/screen.cpp` | Z-order walk, taskbar state, Snap layout detection, region list |
-| `src/image.cpp` | Resampling, frosted glass, shadow and glyph rasterization |
-| `src/store.cpp` | PNG encoding, atomic saves, clipboard preparation, frame archiving |
-| `src/motion.cpp` | Damped springs emitted as DirectComposition cubic animations |
-| `src/compositor.cpp` | WARP device and composition helpers |
-| `src/card.cpp` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
-| `src/capsule.cpp` | The region selector, its sliding pill and labels, and a scrolling screenshot's recording and outcome |
-| `src/scrollable.cpp` | Finding whether the top app has content out of view |
-| `src/stitcher.cpp` | The pixel work of a scrolling screenshot: what moved, by how much, and building the long image |
-| `src/recorder.cpp` | Recording a scrolling screenshot: reading the screen, its timing, and its thumbnail || `src/overlay.cpp` | Per-monitor deck, layout, timers, and input |
-| `src/sprite.cpp` | The thumbnail in the air, and the mesh that draws it into the bin |
-| `src/bin.cpp` | The rubbish bin capsule |
-| `src/dragdrop.cpp` | The system drag loop, on its own thread |
-| `src/install.cpp` | Logon task registration and starting in the user's session |
-| `src/config/` | The default build's settings. See [Configuration](#configuration) |
+Each module keeps its headers in `include/sstk/<module>/` and its sources in `src/<module>/`, and code includes headers by module, as in `#include "sstk/overlay/capsule.h"`. A name without an extension below stands for both its `.h` and its `.cpp`.
+
+| Module | File | Responsibility |
+|---|---|---|
+| `app` | `main.cpp` | Modes, message loop, clipboard installation, memory trimming |
+| | `install` | Logon task registration and starting in the user's session |
+| `base` | `platform` | Shared Win32 includes, process-wide names, timing, and tracing |
+| | `workers` | The threads a scrolling screenshot shares its heavy loops with |
+| `capture` | `hook` | Low-level keyboard and mouse hooks, Start menu suppression |
+| | `capture` | Capture thread |
+| | `screen` | Z-order walk, taskbar state, Snap layout detection, region list |
+| `config` | `*.h` | The default build's settings. See [Configuration](#configuration) |
+| `graphics` | `image` | Resampling, frosted glass, shadow and glyph rasterization |
+| | `pixels.h` | Pixel helpers for the scrolling screenshot code |
+| | `motion` | Damped springs emitted as DirectComposition cubic animations |
+| | `compositor` | WARP device and composition helpers |
+| `overlay` | `overlay` | Per-monitor deck, layout, timers, and input |
+| | `card` | One screenshot: the image plane, its crossfades, its poses, and its shadow |
+| | `capsule` | The region selector, its sliding pill and labels, and a scrolling screenshot's recording and outcome |
+| | `sprite` | The thumbnail in the air, and the mesh that draws it into the bin |
+| | `bin` | The rubbish bin capsule |
+| | `dragdrop` | The system drag loop, on its own thread |
+| `scroll` | `scrollable` | Finding whether the top app has content out of view |
+| | `recorder` | Recording a scrolling screenshot: reading the screen, its timing, and its thumbnail |
+| | `tracker` | How far content scrolled between two readings |
+| | `stitcher` | Building the long image: what is content, what holds still, and what changed by itself |
+| | `longimage` | The long image, kept packed in strips rather than as one bitmap |
+| `storage` | `store` | PNG encoding, atomic saves, clipboard preparation, frame archiving |
+
+Build scripts are in `scripts/`, and the manifest and version resource in `res/`.
 
 ## Debugging
 
