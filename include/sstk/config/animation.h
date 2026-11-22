@@ -113,4 +113,13 @@ inline constexpr float kBinInsideImpulse = 2.2f;
 inline constexpr float kBinOutsideImpulse = -1.6f;
 inline constexpr float kBinGulpImpulse = 3.4f;
 
+// The setup and About window.
+inline constexpr SpringSpec kSetupHover{0.20f, 1.0f};
+inline constexpr SpringSpec kSetupPress{0.18f, 0.90f};
+inline constexpr float kSetupPressScale = 0.97f;
+inline constexpr SpringSpec kSetupMorph{0.44f, 0.86f};  // A button folding into its progress bar and back.
+inline constexpr SpringSpec kSetupProgress{0.55f, 1.0f};
+inline constexpr SpringSpec kSetupFade{0.26f, 1.0f};
+inline constexpr double kSetupFinishHold = 0.30;  // The full bar stays this long before it turns back into a button.
+
 }  // namespace sstk::config

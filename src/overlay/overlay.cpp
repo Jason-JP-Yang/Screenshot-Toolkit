@@ -1,5 +1,6 @@
 #include "sstk/overlay/overlay.h"
 
+#include "sstk/base/settings.h"
 #include "sstk/config/animation.h"
 #include "sstk/config/colors.h"
 #include "sstk/config/core.h"
@@ -417,7 +418,7 @@ uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
 
   // A card that was paused by hover resumes a full dwell once it stops being the front.
   if (Card* previous = front(); previous != nullptr && hovering_) {
-    previous->expiry = std::max(previous->expiry, now.seconds + config::kDwellSeconds);
+    previous->expiry = std::max(previous->expiry, now.seconds + CurrentSettings().dwell_seconds);
   }
   // A scrolling screenshot's card gives way to the new one.
   if (outcome_until_ != 0.0) {
@@ -498,7 +499,7 @@ void Deck::SelectRegion(int index) {
   // A selection belongs to one screenshot, so the cards behind it stay exactly where they are.
   const TimeBase now = compositor_.Now();
   top->Select(index, now);
-  top->expiry = now.seconds + config::kDwellSeconds;
+  top->expiry = now.seconds + CurrentSettings().dwell_seconds;
   capsule_->Select(index, now);
   front_rect_ = RectForSize(top->DisplaySize());
   top->MoveTo(front_rect_, 0, config::kMorph, now, 0.0, false);
@@ -616,7 +617,7 @@ void Deck::EndScroll(const ScrollUpdate& update) {
   } else {
     // Or a newer shot came to the front while this one was still recording.
     card->busy = false;
-    card->expiry = now.seconds + config::kDwellSeconds;
+    card->expiry = now.seconds + CurrentSettings().dwell_seconds;
     scroll_shot_ = nullptr;
     if (card == front()) BindCapsuleToFront(now);
     Layout(card == front() ? config::kMorph : config::kReflow, now);
@@ -629,7 +630,7 @@ void Deck::EndOutcome(const TimeBase& now) {
   outcome_until_ = 0.0;
   if (Card* card = Find(scroll_shot_); card != nullptr) {
     card->busy = false;
-    card->expiry = now.seconds + config::kDwellSeconds;
+    card->expiry = now.seconds + CurrentSettings().dwell_seconds;
   }
   scroll_shot_ = nullptr;
 }
@@ -765,12 +766,12 @@ void Deck::SetDragActive(bool active, const TimeBase& now) {
 void Deck::ExtendDwell(double now) {
   for (auto& card : cards_) {
     const double remaining = card->expiry - now;
-    if (remaining < config::kDwellSeconds) card->expiry = now + std::min(remaining + config::kDropDwellBonus, config::kDwellSeconds);
+    if (remaining < CurrentSettings().dwell_seconds) card->expiry = now + std::min(remaining + config::kDropDwellBonus, CurrentSettings().dwell_seconds);
   }
 }
 
 void Deck::TakeBack(std::unique_ptr<Card> card, size_t index, const TimeBase& now) {
-  card->expiry = now.seconds + config::kDwellSeconds;
+  card->expiry = now.seconds + CurrentSettings().dwell_seconds;
   cards_.insert(cards_.begin() + static_cast<ptrdiff_t>(std::min(index, cards_.size())), std::move(card));
   Layout(config::kReflow, now);
 }
@@ -1004,7 +1005,7 @@ void Deck::OnButtonUp(POINT point) {
         Dismiss(cards_.size() - 1, now, swipe_velocity_);
       } else {
         top->SnapBack(now, swipe_velocity_);
-        top->expiry = now.seconds + config::kDwellSeconds;
+        top->expiry = now.seconds + CurrentSettings().dwell_seconds;
       }
       compositor_.Commit();
       break;
@@ -1019,7 +1020,7 @@ void Deck::OnMouseLeave() {
   if (press_ != Press::kNone || dragging_) return;
   hovering_ = false;
   const TimeBase now = compositor_.Now();
-  if (Card* top = front(); top != nullptr) top->expiry = now.seconds + config::kDwellSeconds;
+  if (Card* top = front(); top != nullptr) top->expiry = now.seconds + CurrentSettings().dwell_seconds;
   capsule_->SetHover(-1, now);
   compositor_.Commit();
 }

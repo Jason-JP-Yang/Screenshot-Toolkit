@@ -137,9 +137,29 @@ struct TextLine {
   Image image;
   float baseline = 0.0f;  // Pixels from the top.
   float cap_height = 0.0f;
+  float origin = 0.0f;   // Pixels from the left edge to where the pen starts.
+  float advance = 0.0f;  // How far the pen moves, which italics overhang.
 };
+
+struct TextStyle {
+  const wchar_t* const* faces;  // Tried in order.
+  int face_count;
+  int weight;
+  bool italic;
+  float ink_power;  // Below 1 thickens light text on a dark body.
+};
+
+// In the selector's label face.
 TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color);
+TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color, const TextStyle& style);
 inline Image RenderLabel(const wchar_t* text, int font_pixels, uint32_t color) { return RenderText(text, font_pixels, color).image; }
+
+// The program's icon: three viewfinder brackets on a graphite tile, the fourth corner a screenshot. Each size is
+// fitted to whole pixels on its own.
+Image RenderLogo(int size);
+
+// The ring of a rounded rectangle, `stroke` pixels wide inside its edge. Color is 0xRRGGBB.
+Image RenderRoundedOutline(int width, int height, float radius, float stroke, uint32_t color);
 
 // The box of a bitmap's visible shape, whatever clear space its canvas leaves around it.
 RECT InkBounds(const Image& image);

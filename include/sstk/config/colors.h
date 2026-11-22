@@ -51,6 +51,48 @@ inline constexpr uint32_t kBinRed = 0x8E1519;
 inline constexpr uint32_t kBinRedOver = 0x9E181D;
 inline constexpr uint32_t kBinInk = 0xFFFFFF;
 
+// The program's icon.
+inline constexpr uint32_t kLogoTile = 0x16171A;
+inline constexpr uint32_t kLogoInk = 0xF3F2EF;
+inline constexpr float kLogoRimAlpha = 0.12f;  // A hairline that keeps the tile's edge on dark backgrounds.
+
+// The setup and About window, in each Windows app theme. Buttons are a face and the ink on it; a veil of the hover
+// color lightens or darkens the face under the pointer, twice as strong while pressed.
+struct SetupButtonColors {
+  uint32_t face;
+  uint32_t ink;
+  uint32_t hover;
+  float hover_alpha;
+};
+
+struct SetupPalette {
+  uint32_t body;
+  uint32_t title;
+  uint32_t text;
+  SetupButtonColors primary;
+  SetupButtonColors secondary;
+  SetupButtonColors danger;
+  uint32_t track;
+  uint32_t progress;
+  uint32_t focus;
+};
+
+inline constexpr SetupPalette kSetupDark{
+    0x16171A, 0xF3F2EF, 0x8E8F94,
+    {0xF3F2EF, 0x16171A, 0x000000, 0.08f},
+    {0x2A2B30, 0xF3F2EF, 0xFFFFFF, 0.06f},
+    {0x8E1519, 0xFFFFFF, 0xFFFFFF, 0.07f},
+    0x2A2B30, 0xF3F2EF, 0x8E8F94,
+};
+
+inline constexpr SetupPalette kSetupLight{
+    0xF3F2EF, 0x16171A, 0x6B6C70,
+    {0x16171A, 0xF3F2EF, 0xFFFFFF, 0.12f},
+    {0xE3E2DE, 0x16171A, 0x000000, 0.05f},
+    {0x8E1519, 0xFFFFFF, 0xFFFFFF, 0.07f},
+    0xE0DFDB, 0x16171A, 0x6B6C70,
+};
+
 // Shadows are always neutral black. Blur and offset are in device independent pixels.
 struct ShadowSpec {
   float sigma;

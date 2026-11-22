@@ -1,5 +1,6 @@
 #include "sstk/storage/store.h"
 
+#include "sstk/base/settings.h"
 #include "sstk/config/core.h"
 
 #include <knownfolders.h>
@@ -18,6 +19,11 @@ std::wstring GalleryFolder() {
   // Test tooling redirects output so that automated runs never touch the real Gallery.
   wchar_t override_path[MAX_PATH];
   if (GetEnvironmentVariableW(L"SSTK_GALLERY_DIR", override_path, MAX_PATH) > 0) return override_path;
+
+  if (const std::wstring& chosen = CurrentSettings().gallery_folder; !chosen.empty()) {
+    SHCreateDirectoryExW(nullptr, chosen.c_str(), nullptr);
+    return chosen;
+  }
 
   PWSTR folder = nullptr;
   std::wstring result;
@@ -80,7 +86,7 @@ bool WriteFileAtomically(const std::wstring& path, IStream* stream) {
 }
 
 void RemoveShotFile(const std::wstring& path) {
-  if constexpr (config::kDeleteToRecycleBin) {
+  if (CurrentSettings().delete_to_recycle_bin) {
     // The list of paths ends with an empty string, which c_str() supplies after the embedded terminator.
     std::wstring list = path;
     list.push_back(L'\0');

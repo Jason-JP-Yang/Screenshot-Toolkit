@@ -2,6 +2,24 @@
 
 Built programs are kept per version in the local `release/` folder, created by `scripts\release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
+## Unreleased
+
+### Added
+
+- An icon: three viewfinder corners on a graphite tile, the fourth a screenshot landing there. It is drawn in code and fitted to whole pixels at each size from 16 to 256, then baked into the program at build time.
+- A setup window in the style of an About box: the icon, "Screenshot *Toolkit*" in Sitka, the version, and one wide **Quick Install** button. It follows the Windows light or dark app theme, title bar included, and the button folds into a progress bar that reports each step, then unfolds into **Done**.
+- Installing, after one administrator prompt, copies the program to Program Files, writes `%ProgramData%\Screenshot Toolkit\settings.ini` if there is none, adds an entry in Settings > Apps and a Start menu shortcut for everyone without a desktop icon, and registers the Screenshot Toolkit service. Earlier versions' logon tasks and their folder go.
+- The service starts the program with UI Access in every signed-in session. The program comes back within a second if it is ended or crashes, more slowly if it keeps failing at once, and Windows restarts the service should it fail.
+- Uninstall in Settings > Apps opens the same window with a deep red **Uninstall** button. It removes the service, the program, its settings, its entries, and what earlier versions left, and the copy that runs it deletes itself afterward. Screenshots stay.
+- Opened from Start, the program shows its About window, with **Quick Restart** and **Complete Quit**. A complete quit lasts until Quick Restart or the next sign-in.
+- `settings.ini` changes the gallery folder, the dwell time, whether shots show the thumbnails, and whether deleting goes to the Recycle Bin, without a rebuild.
+- Every build is named `vX.Y.Z[-dev]-<commit>-beta`, with `dev` unless it was built from the commit tagged for its version.
+
+### Changed
+
+- With no arguments the program opens its window. The program itself now runs with `--run`.
+- `--install` and `--uninstall` open the window, and take `--quiet` to run without it.
+
 ## 0.2.0
 
 ### Added

@@ -1,6 +1,6 @@
 #include "sstk/base/platform.h"
 
-#include "sstk/config/core.h"
+#include "sstk/base/settings.h"
 
 #include <wincodec.h>
 
@@ -38,7 +38,7 @@ double NowSeconds() {
 }
 
 bool OverlayVisibleToCapture() {
-  static const bool visible = config::kCaptureIncludesThumbnails || EnvironmentFlag(L"SSTK_DEBUG_VISIBLE");
+  static const bool visible = CurrentSettings().capture_includes_thumbnails || EnvironmentFlag(L"SSTK_DEBUG_VISIBLE");
   return visible;
 }
 

@@ -1,6 +1,10 @@
 #include <winres.h>
+#include "sstk/version.h"
 
 1 RT_MANIFEST "app.manifest"
+
+// The program's icon, baked from code at build time. The lowest ID is the one Explorer shows.
+1 ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION SSTK_VERSION_NUMBERS
@@ -15,6 +19,7 @@ BEGIN
   BEGIN
     BLOCK "040904b0"
     BEGIN
+      VALUE "CompanyName", "Jason-JP-Yang"
       VALUE "FileDescription", "Screenshot Toolkit"
       VALUE "FileVersion", SSTK_VERSION_TEXT
       VALUE "InternalName", "ScreenshotToolkit"

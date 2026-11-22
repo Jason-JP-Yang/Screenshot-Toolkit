@@ -1,5 +1,6 @@
 #include "sstk/overlay/card.h"
 
+#include "sstk/base/settings.h"
 #include "sstk/config/animation.h"
 #include "sstk/config/colors.h"
 #include "sstk/config/core.h"
@@ -122,7 +123,7 @@ Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<
   root_->AddVisual(frame_.Get(), FALSE, nullptr);
 
   parent_->AddVisual(root_.Get(), FALSE, nullptr);
-  expiry = created_at + config::kFlightLanding + config::kDwellSeconds;
+  expiry = created_at + config::kFlightLanding + CurrentSettings().dwell_seconds;
   exit_end_time_ = 1e300;
 }
 

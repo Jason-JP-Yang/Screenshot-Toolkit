@@ -1,26 +1,34 @@
 // Entry point. Modes:
-//   (no arguments)   The application: capture, overlay, and persistence.
-//   --launch         Run by the logon task: starts the application in the user's session. See install.cpp.
-//   --install        Copies to Program Files and registers the logon task. Prompts through UAC.
-//   --uninstall      Removes the task and the installed program. Prompts through UAC.
-//   --quit           Asks a running instance to exit.
-#include "sstk/app/install.h"
+//   (no arguments)  The About window when this is the installed copy, and the setup window otherwise.
+//   --run           The application: capture, overlay, and persistence. The service starts it this way.
+//   --service       The service that keeps the application running in each session. See service/service.h.
+//   --install       The setup window. With --quiet, installs without one.
+//   --uninstall     The uninstall window, as Settings > Apps opens it. With --quiet, removes without one.
+//   --elevated <install|uninstall> <window>   The setup steps, run elevated for the window.
+//   --quit          Asks the running application to exit. It stays down until the next sign-in.
 #include "sstk/base/platform.h"
+#include "sstk/base/product.h"
 #include "sstk/capture/capture.h"
 #include "sstk/capture/hook.h"
 #include "sstk/config/core.h"
 #include "sstk/graphics/compositor.h"
 #include "sstk/overlay/dragdrop.h"
 #include "sstk/overlay/overlay.h"
+#include "sstk/service/service.h"
+#include "sstk/setup/installer.h"
+#include "sstk/setup/window.h"
 #include "sstk/storage/store.h"
 
 #include <psapi.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <windowsx.h>
 
 #include <cwchar>
 #include <memory>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace sstk {
 
@@ -295,33 +303,69 @@ int RunApplication() {
   return 0;
 }
 
-bool HasArgument(int argc, wchar_t** argv, const wchar_t* name) {
-  for (int i = 1; i < argc; ++i) {
-    if (_wcsicmp(argv[i], name) == 0) return true;
+// The words after the program's name. None of this program's own arguments is quoted, and splitting them here keeps
+// shell32 out of the service.
+std::vector<std::wstring> Arguments() {
+  const wchar_t* p = GetCommandLineW();
+  if (*p == L'"') {
+    for (++p; *p != L'\0' && *p != L'"'; ++p) {
+    }
+    if (*p != L'\0') ++p;
+  } else {
+    while (*p != L'\0' && *p != L' ' && *p != L'\t') ++p;
   }
-  return false;
+  std::vector<std::wstring> arguments;
+  while (*p != L'\0') {
+    while (*p == L' ' || *p == L'\t') ++p;
+    const wchar_t* start = p;
+    while (*p != L'\0' && *p != L' ' && *p != L'\t') ++p;
+    if (p > start) arguments.emplace_back(start, p);
+  }
+  return arguments;
+}
+
+int Find(const std::vector<std::wstring>& arguments, const wchar_t* name) {
+  for (size_t i = 0; i < arguments.size(); ++i) {
+    if (_wcsicmp(arguments[i].c_str(), name) == 0) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int RunWindow(SetupWindowMode mode) {
+  SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);
+  return RunSetupWindow(mode);
+}
+
+int RunElevatedSteps(const std::vector<std::wstring>& arguments, int at) {
+  if (at + 2 >= static_cast<int>(arguments.size())) return 1;
+  const SetupAction action = _wcsicmp(arguments[at + 1].c_str(), L"uninstall") == 0 ? SetupAction::kUninstall : SetupAction::kInstall;
+  HWND window = reinterpret_cast<HWND>(static_cast<uintptr_t>(wcstoull(arguments[at + 2].c_str(), nullptr, 10)));
+  return RunSetupSteps(action, IsWindow(window) ? window : nullptr);
+}
+
+int Dispatch() {
+  const std::vector<std::wstring> arguments = Arguments();
+  const bool quiet = Find(arguments, L"--quiet") >= 0;
+  if (Find(arguments, L"--service") >= 0) return RunService();
+  if (Find(arguments, L"--run") >= 0) return RunApplication();
+  if (const int at = Find(arguments, L"--elevated"); at >= 0) return RunElevatedSteps(arguments, at);
+  if (Find(arguments, L"--install") >= 0) return quiet ? RunQuietSetup(SetupAction::kInstall) : RunWindow(SetupWindowMode::kInstall);
+  if (Find(arguments, L"--uninstall") >= 0) {
+    if (quiet) return RunQuietSetup(SetupAction::kUninstall);
+    if (HandOffToTemporaryCopy()) return 0;
+    const int result = RunWindow(SetupWindowMode::kUninstall);
+    RemoveTemporaryCopyAtExit();
+    return result;
+  }
+  if (Find(arguments, L"--quit") >= 0) {
+    RequestQuit();
+    return 0;
+  }
+  return RunWindow(IsInstalledCopy() ? SetupWindowMode::kAbout : SetupWindowMode::kInstall);
 }
 
 }  // namespace
 
 }  // namespace sstk
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-  int argc = 0;
-  wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  int result;
-  if (sstk::HasArgument(argc, argv, L"--launch")) {
-    result = sstk::LaunchInUserSession();
-  } else if (sstk::HasArgument(argc, argv, L"--install")) {
-    result = sstk::InstallApplication();
-  } else if (sstk::HasArgument(argc, argv, L"--uninstall")) {
-    result = sstk::UninstallApplication();
-  } else if (sstk::HasArgument(argc, argv, L"--quit")) {
-    sstk::RequestQuit();
-    result = 0;
-  } else {
-    result = sstk::RunApplication();
-  }
-  LocalFree(argv);
-  return result;
-}
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) { return sstk::Dispatch(); }

@@ -1,5 +1,6 @@
 #include "sstk/graphics/image.h"
 
+#include "sstk/config/colors.h"
 #include "sstk/config/layout.h"
 
 #include <emmintrin.h>
@@ -553,6 +554,11 @@ Image RenderBinLid(int size, float scale, uint32_t color) {
 }
 
 TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
+  return RenderText(text, font_pixels, color,
+                    TextStyle{config::kLabelFaces, ARRAYSIZE(config::kLabelFaces), FW_NORMAL, false, config::kLabelWeight});
+}
+
+TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color, const TextStyle& style) {
   // Drawn large and reduced, which gives even, unhinted edges at any display scale.
   constexpr int kOversample = 6;
   TextLine line;
@@ -561,9 +567,10 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
   if (dc == nullptr) return line;
   HFONT font = nullptr;
   HGDIOBJ previous_font = nullptr;
-  for (const wchar_t* face : config::kLabelFaces) {
-    font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
-                       CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, face);
+  for (int i = 0; i < style.face_count; ++i) {
+    const wchar_t* face = style.faces[i];
+    font = CreateFontW(-font_pixels * kOversample, 0, 0, 0, style.weight, style.italic, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                       CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face);
     previous_font = SelectObject(dc, font);
     wchar_t chosen[LF_FACESIZE];
     GetTextFaceW(dc, LF_FACESIZE, chosen);
@@ -589,7 +596,12 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
   const int length = lstrlenW(text);
   SIZE extent{};
   GetTextExtentPoint32W(dc, text, length, &extent);
-  const int width = std::max<int>((extent.cx + kOversample - 1) / kOversample + 2, 1);
+  // Italic letters lean past the pen's start and end.
+  const int left = 1 + (style.italic ? (font_pixels + 7) / 8 : 0);
+  const int right = 1 + (style.italic ? (font_pixels + 3) / 4 : 0);
+  line.origin = static_cast<float>(left);
+  line.advance = static_cast<float>(extent.cx) / kOversample;
+  const int width = std::max<int>((extent.cx + kOversample - 1) / kOversample + left + right, 1);
   const int height = std::max<int>((extent.cy + kOversample - 1) / kOversample, 1);
 
   BITMAPINFO info{};
@@ -605,7 +617,7 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
     HGDIOBJ previous_bitmap = SelectObject(dc, dib);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(255, 255, 255));
-    TextOutW(dc, kOversample, 0, text, length);
+    TextOutW(dc, left * kOversample, 0, text, length);
     GdiFlush();
 
     label = Image::Allocate(width, height);
@@ -620,7 +632,7 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
             const uint8_t* row = source + static_cast<ptrdiff_t>(y * kOversample + sy) * source_stride + static_cast<ptrdiff_t>(x * kOversample) * 4;
             for (int sx = 0; sx < kOversample; ++sx) sum += row[sx * 4];
           }
-          WriteCoverage(out, color, std::pow(sum / (255.0f * kOversample * kOversample), config::kLabelWeight));
+          WriteCoverage(out, color, std::pow(sum / (255.0f * kOversample * kOversample), style.ink_power));
         }
       }
     }
@@ -631,6 +643,81 @@ TextLine RenderText(const wchar_t* text, int font_pixels, uint32_t color) {
   DeleteObject(font);
   DeleteDC(dc);
   return line;
+}
+
+namespace {
+
+// Distance to a viewfinder bracket in the top-left corner: two arms on the line `line`, bent around `bend`,
+// ending with round caps at `tip`.
+float BracketDistance(float x, float y, float line, float bend, float tip) {
+  const float corner = line + bend;
+  const float end = std::max(tip, corner);
+  float distance = std::min(SegmentDistance(x, y, line, end, line, corner), SegmentDistance(x, y, corner, line, end, line));
+  if (x <= corner && y <= corner) distance = std::min(distance, std::fabs(std::hypot(x - corner, y - corner) - bend));
+  return distance;
+}
+
+}  // namespace
+
+Image RenderLogo(int size) {
+  Image logo = Image::Allocate(size, size);
+  if (!logo) return logo;
+
+  // Drawn on a 256-unit grid. Below 128 pixels the edges that carry the shape are moved onto whole pixels.
+  const float s = static_cast<float>(size);
+  const float k = s / 256.0f;
+  const bool fitted = size < 128;
+  const float inset = std::max(std::round(16.0f * k), 1.0f);
+  const float tile_half = s * 0.5f - inset;
+  const float tile_radius = 54.0f * k;
+  const float stroke = fitted ? std::max(std::round(13.0f * k), 1.0f) : 13.0f * k;
+  const float rim = std::max(2.0f * k, 1.0f);
+  // The brackets' outer edges, and the screenshot's left and bottom edges with them.
+  const float outer = fitted ? std::round(55.5f * k) : 55.5f * k;
+  const float bottom = s - outer;
+  const float line = outer + stroke * 0.5f;
+  const float bend = std::max(16.0f * k, stroke * 0.5f);
+  const float tip = (fitted ? std::round(outer + 51.5f * k) : outer + 51.5f * k) - stroke * 0.5f;
+  const float card_right = fitted ? std::round(outer + 82.0f * k) : outer + 82.0f * k;
+  const float card_top = fitted ? std::round(bottom - 71.5f * k) : bottom - 71.5f * k;
+  const float card_radius = (bend + stroke * 0.5f) * 0.65f;
+
+  const float tile[3] = {static_cast<float>(config::kLogoTile & 0xFF), static_cast<float>((config::kLogoTile >> 8) & 0xFF),
+                         static_cast<float>((config::kLogoTile >> 16) & 0xFF)};
+  const float ink[3] = {static_cast<float>(config::kLogoInk & 0xFF), static_cast<float>((config::kLogoInk >> 8) & 0xFF),
+                        static_cast<float>((config::kLogoInk >> 16) & 0xFF)};
+  uint8_t* out = logo.data();
+  for (int y = 0; y < size; ++y) {
+    for (int x = 0; x < size; ++x, out += 4) {
+      const float px = x + 0.5f;
+      const float py = y + 0.5f;
+      const float edge = RoundedBoxDistance(px, py, s * 0.5f, s * 0.5f, tile_half, tile_half, tile_radius);
+      const float body = Coverage(edge);
+      if (body <= 0.0f) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        continue;
+      }
+      const float bracket = std::min({BracketDistance(px, py, line, bend, tip), BracketDistance(s - px, py, line, bend, tip),
+                                      BracketDistance(s - px, s - py, line, bend, tip)});
+      const float card = RoundedBoxDistance(px, py, (outer + card_right) * 0.5f, (card_top + bottom) * 0.5f, (card_right - outer) * 0.5f,
+                                            (bottom - card_top) * 0.5f, card_radius);
+      const float ink_cover = std::max(Coverage(bracket - stroke * 0.5f), Coverage(card));
+      const float rim_cover = Coverage(std::fabs(edge + rim * 0.5f) - rim * 0.5f) * config::kLogoRimAlpha;
+      for (int c = 0; c < 3; ++c) {
+        float face = tile[c] + (255.0f - tile[c]) * rim_cover;
+        face += (ink[c] - face) * ink_cover;
+        out[c] = ToByte(face * body);
+      }
+      out[3] = ToByte(body * 255.0f);
+    }
+  }
+  return logo;
+}
+
+Image RenderRoundedOutline(int width, int height, float radius, float stroke, uint32_t color) {
+  return RenderShape(width, height, color, [&](float px, float py) {
+    return Outline(px, py, width * 0.5f, height * 0.5f, width * 0.5f, height * 0.5f, radius, stroke);
+  });
 }
 
 RECT InkBounds(const Image& image) {

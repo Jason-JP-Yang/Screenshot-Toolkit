@@ -2,7 +2,7 @@
 
 An always-running, invisible replacement for the Windows Snipping Tool. Press **PrintScreen** or **Win+Shift+S** and the whole screen is captured instantly, without freezing it. The screenshot flies into the bottom-left corner on a physically modeled spring, is saved to your Gallery, and is on your clipboard before you can move your hand.
 
-There is no window, tray icon, editor, or settings page, by design.
+There is no tray icon, editor, or settings page, by design. Its one window is for installing, removing, and restarting it.
 
 ## Using it
 
@@ -58,17 +58,38 @@ A kept scrolling screenshot stays as an option of its own, so switching away and
 
 ## Install
 
-```bash
-ScreenshotToolkit.exe --install
-```
+Open `ScreenshotToolkit.exe` and choose **Quick Install**. There is no custom install. After one administrator prompt it:
 
-This prompts through UAC once, copies the program to `Program Files\Screenshot Toolkit`, registers a logon task, and starts the program.
+1. Stops any running copy, including one from an earlier version.
+2. Copies the program to `Program Files\Screenshot Toolkit`.
+3. Writes `%ProgramData%\Screenshot Toolkit\settings.ini`, unless one is already there. See [Settings](#settings).
+4. Adds Screenshot Toolkit to Settings > Apps and to the Start menu for everyone on the PC. It adds no desktop icon.
+5. Registers and starts the Screenshot Toolkit service, which starts the program in each signed-in session from then on, at every sign-in, and again within a second if it is ended or crashes.
+
+The window follows the Windows light or dark app theme, and its button folds into a progress bar while setup works. Opening a newer copy the same way updates the installed one.
+
+Opened from Start, the installed program shows its About window instead: its version, whether it is running, **Quick Restart**, and **Complete Quit**. A complete quit stays in effect until Quick Restart or the next sign-in, and so does `--quit`.
+
+To remove it, choose Uninstall in Settings > Apps. The same window opens with **Uninstall**, which removes the service, the program, its settings, its Settings and Start menu entries, and what earlier versions left, such as their logon task. Screenshots stay where they were saved.
 
 | Command | Effect |
 |---|---|
-| `--install` | Install or update, and start now |
-| `--uninstall` | Remove the task and the program. Screenshots are kept |
-| `--quit` | Stop the running application until the next logon |
+| (none) | The setup window, or the About window when this is the installed copy |
+| `--install` | The setup window. With `--quiet`, installs without it |
+| `--uninstall` | The uninstall window. With `--quiet`, removes without it |
+| `--quit` | Stops the running program until Quick Restart or the next sign-in |
+| `--run` | Runs the program directly, without UI Access. The service starts it this way |
+
+## Settings
+
+`%ProgramData%\Screenshot Toolkit\settings.ini` is read when the program starts, so a change applies after Quick Restart. It holds the settings for everyone on the PC, and editing it needs administrator rights. A line left out keeps its default from `include/sstk/config/core.h`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `GalleryFolder` | empty | Where screenshots are saved. Empty means `Pictures\Screenshots`. Variables such as `%USERPROFILE%` work |
+| `DwellSeconds` | `3` | Seconds a thumbnail stays on screen |
+| `CaptureIncludesThumbnails` | `0` | `1` lets screenshots show the program's own thumbnails |
+| `DeleteToRecycleBin` | `1` | `0` deletes screenshots dropped on the rubbish bin for good |
 
 ## Build
 
@@ -78,29 +99,31 @@ Requires the Visual Studio C++ build tools, a Windows 10 SDK, CMake, and Ninja. 
 scripts\build.cmd Release
 ```
 
-The result is `build\Release\ScreenshotToolkit.exe`.
+The result is `build\Release\ScreenshotToolkit.exe`. The build also compiles a small tool that draws the icon from code and bakes it into an `.ico` for the program's resources, so the icon has no image file to keep in step.
 
 ## Configuration
 
-There is no settings page. The default build's settings live in headers under `include/sstk/config/`. Change a value and rebuild.
+The default build's settings live in headers under `include/sstk/config/`. Change a value and rebuild. A few of them can also be changed without a rebuild, in [settings.ini](#settings).
 
 | File | What it sets |
 |---|---|
 | `include/sstk/config/animation.h` | Springs, timing, the stretch into the rubbish bin, and the recording dot's breathing |
-| `include/sstk/config/colors.h` | Colors, opacities, shadows, and the outcome colors of a scrolling screenshot |
+| `include/sstk/config/colors.h` | Colors, opacities, shadows, the outcome colors of a scrolling screenshot, the icon, and the setup window in both themes |
 | `include/sstk/config/core.h` | Dwell time, what a shot contains, how deletion works, which windows become options, and how scrolling screenshots sample, match, and end |
 | `include/sstk/config/hooks.h` | The keys and mouse buttons that capture, step the selector, start and finish a scrolling screenshot, and cancel a drag |
-| `include/sstk/config/layout.h` | Sizes, spacing, label text, and fonts |
+| `include/sstk/config/layout.h` | Sizes, spacing, label text, and fonts, including the setup window's |
 
 ## Releases
 
-The version is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. To publish, run:
+The version number is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. Every build is named `vX.Y.Z[-dev]-<commit>-beta`, as in `v0.2.0-dev-1a2b3c4d-beta`: the first eight characters of the commit it was built from, and `dev` unless that commit is the one tagged `vX.Y.Z`. `beta` stays until a later version drops it. The name shows in the setup window, in Settings > Apps, and in the file's properties.
+
+To publish, tag the release commit first, so the build carries no `dev`, then run:
 
 ```bash
 scripts\release.cmd
 ```
 
-This builds Release and copies the program to `release\<version>\`, a local folder git does not track. Each version is tagged `vX.Y.Z`.
+This builds Release and copies the program to `release\<version>\`, a local folder git does not track.
 
 ## How it stays fast and light
 
@@ -120,7 +143,7 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 **Scrolling screenshots.** Looking for content out of view runs on its own thread after the shot is on screen, so a slow app never delays it. While recording, a thread reads the window about every 90 ms, and every 25 ms while things move, and reduces each reading to an edge map, which records where brightness steps and not the shades, because a window's see-through material changes every pixel slightly as the content moves over it. Strips of columns each propose the shifts that line their rows up, so that whatever is fixed in one strip costs only that strip, and the proposals are checked cell by cell in 16 by 16 pixel cells. A cell that matches at the shift and not in place moves with the scroll. That tells the moving area from what surrounds it, with no help from the app, though a rectangle it reports can settle the plain margins. Each reading is placed against the rows already held, so errors cannot add up. A row of 16 pixel slices then enters the image according to how far it can be believed: seen from under something fixed or near the pointer it only fills an empty place, seen once it stands for now, and seen moving it stays unless later readings keep disagreeing with it. Reduced to edges, one reading costs a few milliseconds on a full window. New rows go into address space reserved up front, so the capture never has to be copied as it grows. Only the thumbnail rows that changed are resampled and drawn into a sparse surface, so the thumbnail grows without uploading what is already shown. Screen reads skip CAPTUREBLT, so the pointer never flickers.
 
-**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `kCaptureIncludesThumbnails` in `include/sstk/config/core.h` and rebuild.
+**Consecutive shots.** All overlay windows use `WDA_EXCLUDEFROMCAPTURE`, so thumbnails and the flash never appear in later screenshots. To include thumbnails instead, set `CaptureIncludesThumbnails=1` in [settings.ini](#settings).
 
 **Leaving the desktop alone.** The overlay stops one pixel short of covering the monitor. A window that covers it counts as a fullscreen app, and Windows answers by dropping the taskbar below every other window.
 
@@ -130,9 +153,11 @@ This builds Release and copies the program to `release\<version>\`, a local fold
 
 The application runs as the logged-on user without administrator rights, so drag and drop, opening files, and the clipboard behave normally with every other program. It carries the UI Access right, as Magnifier and the on-screen keyboard do. Nothing else puts its topmost windows above Start and Task View, or lets its keyboard hook see keys typed into administrator windows.
 
-Setting that right takes SYSTEM, so a logon task running as SYSTEM starts the application with it and exits at once. Only one process stays running, and it is not elevated. Because the task runs without a prompt at each logon, its executable has to live where only administrators can write. A user-writable path would let any program replace the file and silently gain those rights, which is why installation copies to Program Files.
+Setting that right takes SYSTEM, so the Screenshot Toolkit service, running as LocalSystem, starts the application with it in each signed-in session. The application is not elevated. The service only starts and watches it: an application that is ended or crashes comes back within a second, more slowly if it keeps failing at once, while one that exits cleanly, as on Complete Quit or sign-out, stays down. Should the service itself fail, Windows restarts it, and it takes over the applications already running. Signed-in users may send the service one control, which asks it to start the application in their own session; that is how Quick Restart gets UI Access back.
 
-Run directly without installing, the program works the same except that it stays below Start and Task View and does not see keys typed into administrator windows.
+Because the service runs without a prompt, its executable has to live where only administrators can write. A user-writable path would let any program replace the file and silently gain those rights, which is why installation copies to Program Files.
+
+Run directly with `--run`, the program works the same except that it stays below Start and Task View and does not see keys typed into administrator windows.
 
 Keys are swallowed only while the application is alive. If it is not running, Windows keeps its native behavior.
 
@@ -143,14 +168,16 @@ Each module keeps its headers in `include/sstk/<module>/` and its sources in `sr
 | Module | File | Responsibility |
 |---|---|---|
 | `app` | `main.cpp` | Modes, message loop, clipboard installation, memory trimming |
-| | `install` | Logon task registration and starting in the user's session |
 | `base` | `platform` | Shared Win32 includes, process-wide names, timing, and tracing |
+| | `product` | Product names, install locations, and the running application in this session |
+| | `settings` | Reading `settings.ini` |
 | | `workers` | The threads a scrolling screenshot shares its heavy loops with |
+| `brand` | `iconbake.cpp` | Build tool that bakes the icon drawn in code into an `.ico` |
 | `capture` | `hook` | Low-level keyboard and mouse hooks, Start menu suppression |
 | | `capture` | Capture thread |
 | | `screen` | Z-order walk, taskbar state, Snap layout detection, region list |
 | `config` | `*.h` | The default build's settings. See [Configuration](#configuration) |
-| `graphics` | `image` | Resampling, frosted glass, shadow and glyph rasterization |
+| `graphics` | `image` | Resampling, frosted glass, shadow, glyph, icon, and text rasterization |
 | | `pixels.h` | Pixel helpers for the scrolling screenshot code |
 | | `motion` | Damped springs emitted as DirectComposition cubic animations |
 | | `compositor` | WARP device and composition helpers |
@@ -165,9 +192,24 @@ Each module keeps its headers in `include/sstk/<module>/` and its sources in `sr
 | | `tracker` | How far content scrolled between two readings |
 | | `stitcher` | Building the long image: what is content, what holds still, and what changed by itself |
 | | `longimage` | The long image, kept packed in strips rather than as one bitmap |
+| `service` | `service` | The service: starting the application in each session with UI Access, and restarting it |
+| `setup` | `installer` | The elevated install and uninstall steps |
+| | `window` | The setup, uninstall, and About window |
 | `storage` | `store` | PNG encoding, atomic saves, clipboard preparation, frame archiving |
 
-Build scripts are in `scripts/`, and the manifest and version resource in `res/`.
+Build scripts and the version script are in `scripts/`, and the manifest and version resource in `res/`.
+
+## Binary layout
+
+Everything is one executable, and the mode it starts in decides what it does: the application, the service, the setup window, or the elevated setup steps. That keeps installing and updating to one file, and gives a SYSTEM service no DLLs to load from disk. The service never maps the rendering, codec, or shell libraries, which are delay-loaded, and pages it does not touch are never read in. Each part lives in its own module, so a split is mechanical when it is needed.
+
+Worth splitting when one of these comes:
+
+- A settings window or another large interface. The interface would move into its own executable, run as the user, which leaves the resident application smaller.
+- Updates while the program runs. A small separate service executable could then replace the application's file without stopping itself.
+- Code shared with other programs, such as plugins. That shared code would become a DLL with a plain C interface, loaded only from the install folder.
+
+A split would add a manifest of installed files for the uninstaller to remove, in place of the one folder it removes today.
 
 ## Debugging
 
@@ -175,4 +217,6 @@ Build scripts are in `scripts/`, and the manifest and version resource in `res/`
 |---|---|
 | `SSTK_TRACE` | Appends timing to `%TEMP%\ScreenshotToolkit.log` |
 | `SSTK_DEBUG_VISIBLE` | Makes the overlay capturable, so tooling can sample animation frames. Screenshots then contain thumbnails |
-| `SSTK_GALLERY_DIR` | Saves screenshots to another folder |
+| `SSTK_GALLERY_DIR` | Saves screenshots to another folder, over `settings.ini` |
+
+Test runs start the program with `--run`.

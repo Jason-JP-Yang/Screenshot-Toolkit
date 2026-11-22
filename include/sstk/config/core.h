@@ -1,4 +1,5 @@
-// Default build settings: what the program does and when.
+// Default build settings: what the program does and when. The dwell time, what a shot contains, how deletion
+// works, and the gallery folder can also be changed without a rebuild, in settings.ini (see base/settings.h).
 #pragma once
 
 #include <cstdint>
