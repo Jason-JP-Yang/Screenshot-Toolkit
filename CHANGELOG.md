@@ -2,7 +2,7 @@
 
 Built programs are kept per version in the local `release/` folder, created by `scripts\release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
-## Unreleased
+## 0.3.1
 
 ### Changed
 
