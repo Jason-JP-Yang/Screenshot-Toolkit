@@ -257,10 +257,17 @@ float Capsule::TextTop(const TextLine& line, float center) const {
   return std::round((center < 0.0f ? height_ * 0.5f : center) - (line.baseline - line.cap_height * 0.5f));
 }
 
+// A window reaching past the screen is drawn as far as the screen shows it.
+RECT Capsule::OnScreen(const RECT& rect) const {
+  const RECT screen{0, 0, monitor_.cx, monitor_.cy};
+  RECT shown{};
+  return IntersectRect(&shown, &rect, &screen) ? shown : rect;
+}
+
 std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, const TaskbarInsets& insets) {
   auto segment = std::make_unique<Segment>();
   segment->kind = region.kind;
-  segment->rect = region.rect;
+  segment->rect = OnScreen(region.rect);
 
   // Glyphs come from the shot's real geometry. A maximized window merges with the "without taskbar" option, so the
   // taskbar's gap goes by area rather than by kind.
@@ -270,7 +277,7 @@ std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, con
   else if (insets.left > 0) taskbar_edge = GlyphGap::kLeft;
   else if (insets.right > 0) taskbar_edge = GlyphGap::kRight;
   const RECT usable{insets.left, insets.top, monitor_.cx - insets.right, monitor_.cy - insets.bottom};
-  const RECT& rect = region.rect;
+  const RECT& rect = segment->rect;
   const bool without_taskbar = std::abs(rect.left - usable.left) <= config::kSameRectTolerance &&
                                std::abs(rect.top - usable.top) <= config::kSameRectTolerance &&
                                std::abs(rect.right - usable.right) <= config::kSameRectTolerance &&
@@ -440,8 +447,9 @@ void Capsule::Bind(const std::vector<Region>& regions, const TaskbarInsets& inse
   std::vector<std::unique_ptr<Segment>> next;
   next.reserve(regions.size());
   for (const Region& region : regions) {
+    const RECT shown = OnScreen(region.rect);
     const auto same = std::find_if(segments_.begin(), segments_.end(), [&](const std::unique_ptr<Segment>& segment) {
-      return segment != nullptr && segment->kind == region.kind && EqualRect(&segment->rect, &region.rect);
+      return segment != nullptr && segment->kind == region.kind && EqualRect(&segment->rect, &shown);
     });
     if (same != segments_.end()) {
       next.push_back(std::move(*same));

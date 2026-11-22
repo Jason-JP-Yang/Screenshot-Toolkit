@@ -30,6 +30,9 @@ enum Message : UINT {
   kMsgScrollWheel,             // lParam: where the wheel turned, in virtual screen coordinates, as two signed halves.
   kMsgScrollUpdate,            // lParam: ScrollUpdate*, ownership moves to the receiver
   kMsgOpenShot,                // lParam: std::wstring*, the saved file to open, ownership moves to the receiver
+  kMsgWindowShots,             // lParam: WindowShots*, ownership moves to the receiver
+  kMsgPointerInput,            // wParam: when, in microseconds of NowSeconds. lParam: where a button or wheel went, as two signed halves.
+  kMsgKeyInput,                // wParam: when, in microseconds of NowSeconds.
 };
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.

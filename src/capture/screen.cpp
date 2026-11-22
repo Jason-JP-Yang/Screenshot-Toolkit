@@ -16,6 +16,7 @@ namespace {
 struct WindowEntry {
   HWND handle;
   RECT rect;  // Visible frame clipped to the monitor, in virtual screen coordinates.
+  RECT frame;  // The same, whole.
   bool arranged;
   double visible_fraction;
 };
@@ -101,9 +102,7 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
   if (!IsAppSurface(window, ex_style)) return TRUE;
 
   RECT frame;
-  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) {
-    if (!GetWindowRect(window, &frame)) return TRUE;
-  }
+  if (!WholeFrame(window, &frame)) return TRUE;
 
   RECT clipped;
   if (!IntersectRect(&clipped, &frame, &state.bounds)) return TRUE;
@@ -113,7 +112,7 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM context) {
 
   if (EqualRect(&clipped, &state.bounds)) state.covered_so_far = true;
 
-  state.windows.push_back({window, clipped, IsWindowArranged(window) != FALSE, 0.0});
+  state.windows.push_back({window, clipped, frame, IsWindowArranged(window) != FALSE, 0.0});
   return TRUE;
 }
 
@@ -237,6 +236,14 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
     }
     info.regions.push_back({kind, rect});
   };
+  auto add_window = [&](RegionKind kind, const WindowEntry& entry) {
+    const RECT rect = ToMonitorSpace(entry.rect, info.bounds);
+    for (const Region& existing : info.regions) {
+      if (NearlyEqual(existing.rect, rect)) return;
+    }
+    info.regions.push_back({kind, rect, entry.handle});
+    info.windows.push_back({entry.handle, entry.frame});
+  };
   add_region(RegionKind::kFull, full);
 
   std::vector<const WindowEntry*> zones;
@@ -248,17 +255,18 @@ ScreenInfo AnalyzeScreen(HMONITOR monitor) {
   if (app != nullptr) {
     info.app = app->handle;
     info.app_rect = ToMonitorSpace(app->rect, info.bounds);
+    GetWindowRect(app->handle, &info.app_bounds);
   }
   if (zones.size() >= 2) {
     // A window floating above a snapped layout is still offered, ahead of the zones it sits on.
-    if (app != nullptr && !app->arranged) add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
+    if (app != nullptr && !app->arranged) add_window(RegionKind::kApp, *app);
     std::sort(zones.begin(), zones.end(), [](const WindowEntry* a, const WindowEntry* b) {
       if (std::abs(a->rect.top - b->rect.top) > config::kSameRectTolerance) return a->rect.top < b->rect.top;
       return a->rect.left < b->rect.left;
     });
-    for (const WindowEntry* zone : zones) add_region(RegionKind::kZone, ToMonitorSpace(zone->rect, info.bounds));
+    for (const WindowEntry* zone : zones) add_window(RegionKind::kZone, *zone);
   } else if (app != nullptr) {
-    add_region(RegionKind::kApp, ToMonitorSpace(app->rect, info.bounds));
+    add_window(RegionKind::kApp, *app);
   }
 
   info.insets = InsetsFrom(state.taskbar, info.bounds);
@@ -284,9 +292,13 @@ TaskbarInsets QueryTaskbarInsets(HMONITOR monitor) {
   return InsetsFrom(state.taskbar, monitor_info.rcMonitor);
 }
 
+bool WholeFrame(HWND window, RECT* frame) {
+  return SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, frame, sizeof(*frame))) || GetWindowRect(window, frame);
+}
+
 bool VisibleFrame(HWND window, const RECT& monitor, RECT* visible) {
   RECT frame;
-  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) && !GetWindowRect(window, &frame)) return false;
+  if (!WholeFrame(window, &frame)) return false;
   if (!IntersectRect(visible, &frame, &monitor)) return false;
   // The taskbar lies over any window but one filling the whole monitor.
   MONITORINFO info{sizeof(info)};

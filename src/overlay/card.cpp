@@ -55,12 +55,13 @@ CardShadow BuildCardShadow(Compositor& compositor, float scale) {
   return result;
 }
 
-Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, const ScreenInfo& screen,
+Card::Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, const CaptureResult& capture,
            float scale, ComPtr<IDCompositionSurface> frost, const CardShadow& shadow, IDCompositionClip* shadow_clip,
            double created_at)
-    : compositor_(compositor), parent_(parent), shot_(std::move(shot)), regions_(screen.regions), insets_(screen.insets),
+    : compositor_(compositor), parent_(parent), shot_(std::move(shot)), regions_(capture.screen.regions), insets_(capture.screen.insets),
       scale_(scale), border_(std::max(std::round(config::kCardBorder * scale), 1.0f)), frost_(std::move(frost)),
-      app_(screen.app), app_rect_(screen.app_rect) {
+      sources_(regions_.size()), capture_(capture.id), taken_(capture.trigger_time), app_(capture.screen.app),
+      app_rect_(capture.screen.app_rect), app_bounds_(capture.screen.app_bounds) {
   const Image& frame = *shot_->frame;
 
   root_ = compositor_.CreateVisual();
@@ -256,6 +257,10 @@ void Card::BuildCaches(const Image& frame, bool with_base) {
     if (crisp_surfaces_[i] || kind == RegionKind::kScroll || kind == RegionKind::kLong) continue;
     const RECT& region = regions_[i].rect;
     const SIZE size = ThumbnailSize(region, scale_);
+    if (const std::shared_ptr<const LongImage>& source = sources_[i]; source != nullptr) {
+      SetCrisp(i, source->Resample(0.0, source->height(), size.cx, size.cy));
+      continue;
+    }
     const double region_w = region.right - region.left;
     const double region_h = region.bottom - region.top;
     // The border takes the outermost pixels, so the bitmap is mapped 1:1 onto the whole card and simply clipped by it.
@@ -267,10 +272,47 @@ void Card::BuildCaches(const Image& frame, bool with_base) {
     } else {
       pixels = ResampleArea(frame, region.left, region.top, region.right, region.bottom, size.cx, size.cy);
     }
-    crisp_surfaces_[i] = compositor_.CreateSurface(pixels, true);
-    crisp_sizes_[i] = size;
-    crisp_pixels_[i] = std::move(pixels);
+    SetCrisp(i, std::move(pixels));
   }
+}
+
+void Card::SetCrisp(size_t index, Image pixels) {
+  if (!pixels) return;
+  crisp_surfaces_[index] = compositor_.CreateSurface(pixels, true);
+  crisp_sizes_[index] = SIZE{pixels.width(), pixels.height()};
+  crisp_pixels_[index] = std::move(pixels);
+}
+
+bool Card::AttachWindows(std::vector<WindowShot>& shots, const TimeBase& now) {
+  const int shown = CrispIndex(selected_);
+  bool selection = false;
+  for (WindowShot& shot : shots) {
+    for (size_t i = 0; i < regions_.size(); ++i) {
+      Region& region = regions_[i];
+      const bool own = region.kind == RegionKind::kApp || region.kind == RegionKind::kZone || region.kind == RegionKind::kScroll;
+      if (!own || region.window != shot.window || shot.image == nullptr) continue;
+      region.rect = shot.rect;
+      sources_[i] = shot.image;
+      // The scroll option borrows its picture, and a card deep in the deck makes its own when it comes back.
+      const bool kept = static_cast<int>(i) == shown;
+      if (region.kind == RegionKind::kScroll || (hibernating_ && !kept)) continue;
+      const SIZE size = ThumbnailSize(region.rect, scale_);
+      if (shot.thumbnail.width() == size.cx && shot.thumbnail.height() == size.cy) {
+        SetCrisp(i, std::move(shot.thumbnail));
+      } else {
+        SetCrisp(i, shot.image->Resample(0.0, shot.image->height(), size.cx, size.cy));
+      }
+      selection = selection || kept;
+    }
+  }
+  if (selection && !ShowsLong(selected_)) ShowCrisp(selected_, now, 0.0, config::kMorphFade);
+  return selection;
+}
+
+std::shared_ptr<const LongImage> Card::whole() const {
+  if (regions_[selected_].kind == RegionKind::kLong) return long_image_;
+  const int source = CrispIndex(selected_);
+  return source >= 0 && source < static_cast<int>(sources_.size()) ? sources_[source] : nullptr;
 }
 
 void Card::BuildDerivedAssets(const TimeBase& now) {
@@ -395,23 +437,52 @@ RectF Card::SourceRect() const {
 }
 
 bool Card::OfferScroll(ScrollHints hints) {
-  if (app_ == nullptr) return false;
+  if (!scroll_open()) return false;
   if (scroll_source_ >= 0) {
     // A later look at the app saw more.
     if (regions_.back().kind == RegionKind::kScroll) scroll_hints_ = std::move(hints);
     return false;
   }
-  for (size_t i = 0; i < regions_.size(); ++i) {
-    if (!NearlyEqual(regions_[i].rect, app_rect_)) continue;
-    scroll_source_ = static_cast<int>(i);
-    scroll_hints_ = std::move(hints);
-    regions_.push_back(Region{RegionKind::kScroll, regions_[i].rect});
-    crisp_surfaces_.resize(regions_.size());
-    crisp_sizes_.resize(regions_.size());
-    crisp_pixels_.resize(regions_.size());
-    return true;
+  // The option showing the app window, or one showing the same as it does, as the whole screen may.
+  int source = -1;
+  for (size_t i = 0; i < regions_.size() && source < 0; ++i) {
+    if (regions_[i].window == app_) source = static_cast<int>(i);
   }
-  return false;
+  for (size_t i = 0; i < regions_.size() && source < 0; ++i) {
+    if (regions_[i].window == nullptr && NearlyEqual(regions_[i].rect, app_rect_)) source = static_cast<int>(i);
+  }
+  if (source < 0) return false;
+  scroll_source_ = source;
+  scroll_hints_ = std::move(hints);
+  regions_.push_back(Region{RegionKind::kScroll, regions_[source].rect, regions_[source].window});
+  crisp_surfaces_.resize(regions_.size());
+  crisp_sizes_.resize(regions_.size());
+  crisp_pixels_.resize(regions_.size());
+  sources_.push_back(sources_[source]);
+  return true;
+}
+
+bool Card::AppChanged() const {
+  RECT rect{};
+  return !IsWindow(app_) || IsIconic(app_) || !GetWindowRect(app_, &rect) || !EqualRect(&rect, &app_bounds_);
+}
+
+bool Card::WithdrawScroll() {
+  if (!scroll_open()) return false;
+  scroll_closed_ = true;
+  if (busy || long_.surface || scroll_source_ < 0 || regions_.back().kind != RegionKind::kScroll) return false;
+  // The scroll option shows the app window, which stays.
+  if (selected_ == static_cast<int>(regions_.size()) - 1) selected_ = scroll_source_;
+  PopOption();
+  return true;
+}
+
+void Card::PopOption() {
+  regions_.pop_back();
+  crisp_surfaces_.pop_back();
+  crisp_sizes_.pop_back();
+  crisp_pixels_.pop_back();
+  sources_.pop_back();
 }
 
 void Card::SetLongView(int content_top, int content_bottom, int view_bottom) {
@@ -492,17 +563,13 @@ void Card::KeepLong(const ScrollUpdate& update) {
   long_.pixels = update.image->Resample(top, bottom, long_.view_width, long_.view_bottom - long_.view_top);
   long_.done = true;
   long_.drawn = std::deque<std::vector<uint32_t>>{};
+  long_image_ = update.image;
 }
 
 void Card::DropLong(const TimeBase& now) {
   long_ = Long{};
-  if (scroll_source_ >= 0 && regions_.back().kind == RegionKind::kScroll) {
-    // One image takes one scrolling screenshot, so the option goes with the attempt.
-    regions_.pop_back();
-    crisp_surfaces_.pop_back();
-    crisp_sizes_.pop_back();
-    crisp_pixels_.pop_back();
-  }
+  // One image takes one scrolling screenshot, so the option goes with the attempt.
+  if (scroll_source_ >= 0 && regions_.back().kind == RegionKind::kScroll) PopOption();
   selected_ = std::min(before_scroll_, static_cast<int>(regions_.size()) - 1);
   ShowCrisp(selected_, now, config::kCrispMorphDelay, config::kMorphFade);
 }

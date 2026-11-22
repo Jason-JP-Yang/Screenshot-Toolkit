@@ -138,9 +138,9 @@ HGLOBAL BuildDib(const Image& frame, const RECT& region) {
   return memory;
 }
 
-constexpr int kLongChunkRows = 128;  // Rows of a scrolling screenshot unpacked at a time.
+constexpr int kLongChunkRows = 128;  // Rows of a packed picture unpacked at a time.
 
-// The same for a whole scrolling screenshot, unpacked a few rows at a time.
+// The same for a packed picture, unpacked a few rows at a time.
 HGLOBAL BuildLongDib(const LongImage& image) {
   const int width = image.width();
   const int height = image.height();
@@ -205,29 +205,24 @@ void Store::ReleaseCodec() {
   saved_.wait(lock, [&] { return !codec_release_requested_ || stopping_; });
 }
 
-void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long) {
+void Store::Submit(const std::shared_ptr<Shot>& shot, const RECT& region, std::shared_ptr<const LongImage> whole) {
   {
     std::lock_guard lock(mutex_);
     if (shot->discarded) return;
     shot->awaiting_long = false;
     shot->region = region;
-    shot->region_in_long = in_long;
+    shot->whole = whole;
     ++shot->requested_version;
     if (std::find(pending_saves_.begin(), pending_saves_.end(), shot) == pending_saves_.end()) {
       pending_saves_.push_back(shot);
     }
     pending_clipboard_ = shot;
     pending_clipboard_region_ = region;
-    pending_clipboard_in_long_ = in_long;
+    pending_clipboard_whole_ = std::move(whole);
     clipboard_shot_ = shot.get();
     clipboard_sequence_.fetch_add(1, std::memory_order_relaxed);
   }
   wake_.notify_all();
-}
-
-void Store::SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image) {
-  std::lock_guard lock(mutex_);
-  if (!shot->discarded) shot->long_image = std::move(image);
 }
 
 void Store::Expect(const std::shared_ptr<Shot>& shot) {
@@ -261,14 +256,14 @@ HGLOBAL Store::RenderLongClipboard() {
   std::shared_ptr<const LongImage> image;
   {
     std::lock_guard lock(mutex_);
-    image = clipboard_long_;
+    image = clipboard_whole_;
   }
   return image ? BuildLongDib(*image) : nullptr;
 }
 
 void Store::ForgetLongClipboard() {
   std::lock_guard lock(mutex_);
-  clipboard_long_.reset();
+  clipboard_whole_.reset();
 }
 
 bool Store::Discard(const std::shared_ptr<Shot>& shot) {
@@ -276,7 +271,10 @@ bool Store::Discard(const std::shared_ptr<Shot>& shot) {
   {
     std::lock_guard lock(mutex_);
     pending_saves_.erase(std::remove(pending_saves_.begin(), pending_saves_.end(), shot), pending_saves_.end());
-    if (pending_clipboard_ == shot) pending_clipboard_ = nullptr;
+    if (pending_clipboard_ == shot) {
+      pending_clipboard_ = nullptr;
+      pending_clipboard_whole_.reset();
+    }
     if (clipboard_shot_ == shot.get()) {
       on_clipboard = true;
       clipboard_shot_ = nullptr;
@@ -317,14 +315,14 @@ std::shared_ptr<const Image> Store::FrameForWork(const std::shared_ptr<Shot>& sh
   return work_frame_;
 }
 
-void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence) {
+void Store::PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, std::shared_ptr<const LongImage> whole, uint64_t sequence) {
   HGLOBAL dib = nullptr;
+  const bool promise = whole != nullptr;
   {
     std::lock_guard lock(mutex_);
-    clipboard_long_ = in_long ? shot->long_image : nullptr;
-    if (in_long && !clipboard_long_) return;
+    clipboard_whole_ = std::move(whole);
   }
-  if (!in_long) {
+  if (!promise) {
     std::shared_ptr<const Image> frame = FrameForWork(shot);
     if (!frame) return;
     dib = BuildDib(*frame, region);
@@ -343,9 +341,9 @@ bool Store::EnsureCodec() {
   return SUCCEEDED(result);
 }
 
-// Encodes a scrolling screenshot straight into its file, a few rows at a time, so that neither its pixels nor the
-// file are ever held whole.
-bool Store::SaveLongToDisk(Shot& shot, const LongImage& image) {
+// Encodes a packed picture straight into its file, a few rows at a time, so that neither its pixels nor the file are
+// ever held whole.
+bool Store::SaveWholeToDisk(Shot& shot, const LongImage& image) {
   if (shot.path.empty()) shot.path = AllocateFilePath(shot.local_time);
   if (shot.path.empty()) {
     Trace("save: no gallery path");
@@ -588,10 +586,11 @@ void Store::WorkerMain() {
       pending_clipboard_ = nullptr;
       active_shot_ = shot.get();
       const RECT region = pending_clipboard_region_;
-      const bool in_long = pending_clipboard_in_long_;
+      std::shared_ptr<const LongImage> whole = std::move(pending_clipboard_whole_);
+      pending_clipboard_whole_.reset();
       const uint64_t sequence = clipboard_sequence_.load(std::memory_order_relaxed);
       lock.unlock();
-      PrepareClipboard(shot, region, in_long, sequence);
+      PrepareClipboard(shot, region, std::move(whole), sequence);
       shot.reset();
       lock.lock();
       continue;
@@ -618,14 +617,13 @@ void Store::WorkerMain() {
       pending_saves_.erase(pending_saves_.begin());
       active_shot_ = shot.get();
       const RECT region = shot->region;
-      const bool in_long = shot->region_in_long;
       const uint64_t version = shot->requested_version;
-      const std::shared_ptr<const LongImage> long_image = in_long ? shot->long_image : nullptr;
+      const std::shared_ptr<const LongImage> whole = shot->whole;
       lock.unlock();
       const double started = NowSeconds();
       bool saved = false;
-      if (in_long) {
-        saved = long_image != nullptr && SaveLongToDisk(*shot, *long_image);
+      if (whole) {
+        saved = SaveWholeToDisk(*shot, *whole);
       } else {
         std::shared_ptr<const Image> frame = FrameForWork(shot);
         saved = frame != nullptr && SaveToDisk(*shot, frame, region);

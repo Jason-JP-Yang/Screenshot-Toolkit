@@ -38,10 +38,16 @@ class Overlay {
   void OnDragCancel();
   void OnSelectorStep(int direction);
 
+  void OnWindowShots(std::unique_ptr<WindowShots> shots);
+
   void OnScrollAreas(std::unique_ptr<ScrollAreas> found);
   void OnScrollChord(bool from_capture);
   void OnScrollWheel(POINT point);
   void OnScrollUpdate(std::unique_ptr<ScrollUpdate> update);
+
+  // Input that reached the desktop: whatever was shot before it may no longer be as the shot saw it.
+  void OnPointerInput(double when, POINT point);
+  void OnKeyInput(double when);
 
   // True when nothing is on screen, so memory can be returned.
   bool IsIdle() const;
@@ -63,6 +69,7 @@ class Overlay {
   void StartScroll(Deck& deck);
   void FinishScroll();
   void CancelScroll();
+  void WithdrawScrolls(double before);
   Card* HeldCard(const std::shared_ptr<Shot>& shot) const;  // The card of the shot, if it is in the air.
 
   HWND controller_;
@@ -79,6 +86,7 @@ class Overlay {
   uint64_t next_drag_id_ = 1;
   double last_frame_ = 0.0;
   HookMode hook_mode_ = HookMode::kIdle;
+  bool watching_input_ = false;
 
   uint64_t next_shot_id_ = 1;
   std::unique_ptr<ScrollDetector> detector_;

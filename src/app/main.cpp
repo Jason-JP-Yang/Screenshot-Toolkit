@@ -267,6 +267,15 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
     case kMsgOpenShot:
       OpenInViewer(*std::unique_ptr<std::wstring>(reinterpret_cast<std::wstring*>(lparam)));
       return 0;
+    case kMsgWindowShots:
+      app->overlay->OnWindowShots(std::unique_ptr<WindowShots>(reinterpret_cast<WindowShots*>(lparam)));
+      return 0;
+    case kMsgPointerInput:
+      app->overlay->OnPointerInput(static_cast<double>(wparam) / 1e6, POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
+      return 0;
+    case kMsgKeyInput:
+      app->overlay->OnKeyInput(static_cast<double>(wparam) / 1e6);
+      return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {
         app->overlay->OnTick();

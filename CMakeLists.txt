@@ -52,6 +52,7 @@ add_executable(ScreenshotToolkit WIN32
   src/capture/capture.cpp
   src/capture/hook.cpp
   src/capture/screen.cpp
+  src/capture/window.cpp
   src/graphics/compositor.cpp
   src/graphics/image.cpp
   src/graphics/motion.cpp
@@ -96,7 +97,8 @@ target_link_options(ScreenshotToolkit PRIVATE
   # The SYSTEM service must never map the rendering or codec stacks.
   /DELAYLOAD:d3d11.dll /DELAYLOAD:dcomp.dll /DELAYLOAD:dxgi.dll
   /DELAYLOAD:ole32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:windowscodecs.dll
-  /DELAYLOAD:dwmapi.dll /DELAYLOAD:psapi.dll
+  /DELAYLOAD:dwmapi.dll /DELAYLOAD:psapi.dll /DELAYLOAD:api-ms-win-shcore-scaling-l1-1-1.dll
+  /DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll /DELAYLOAD:api-ms-win-core-winrt-error-l1-1-1.dll
   /DELAYLOAD:wtsapi32.dll /DELAYLOAD:userenv.dll /DELAYLOAD:cabinet.dll
   /DELAYLOAD:oleaut32.dll /DELAYLOAD:winhttp.dll /DELAYLOAD:bcrypt.dll
   $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
@@ -104,7 +106,7 @@ target_link_options(ScreenshotToolkit PRIVATE
 
 target_link_libraries(ScreenshotToolkit PRIVATE
   user32 gdi32 advapi32 ole32 oleaut32 shell32 uuid
-  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv cabinet winhttp bcrypt delayimp
+  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv cabinet winhttp bcrypt shcore runtimeobject delayimp
 )
 
 # Publishes the built program to release/<version>, which is not versioned by git.

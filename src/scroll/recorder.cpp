@@ -2,6 +2,7 @@
 
 #include "sstk/base/workers.h"
 #include "sstk/capture/screen.h"
+#include "sstk/capture/window.h"
 #include "sstk/config/core.h"
 #include "sstk/scroll/stitcher.h"
 
@@ -65,12 +66,15 @@ class Session : private Stitcher::Sink {
 
   ScrollRequest request_;
   Workers workers_;
+  // The window is read by itself, whatever covers it and wherever it reaches. Where it cannot be, the screen is read.
+  CaptureDevice device_;
+  std::unique_ptr<WindowStream> stream_;
   HDC screen_ = nullptr;
   HDC memory_ = nullptr;  // What the screen is read into a reading through.
   DWORD own_process_ = 0;
   double started_ = 0.0;
   RECT window_rect_{};
-  RECT watch_{};  // The window on the monitor, in monitor pixels.
+  RECT watch_{};  // The window's visible frame, in monitor pixels: whole when read by itself, or as far as the screen shows it.
   double last_change_ = 0.0;
   double last_scroll_ = 0.0;
   double last_wheel_ = -1e9;
@@ -116,11 +120,20 @@ Session::Session(ScrollRequest request)
   memory_ = CreateCompatibleDC(screen_);
   last_change_ = started_;
   GetWindowRect(request_.window, &window_rect_);
-  if (!VisibleFrame(request_.window, request_.monitor, &watch_)) watch_ = request_.monitor;
+  stream_ = std::make_unique<WindowStream>();
+  if (stream_->Start(device_, request_.window, false) && stream_->Wait(config::kScrollPictureWaitMs)) {
+    watch_ = stream_->frame();
+  } else {
+    stream_.reset();
+    device_.Close();
+    if (!VisibleFrame(request_.window, request_.monitor, &watch_)) watch_ = request_.monitor;
+  }
+  Trace("scroll: reading the %s", stream_ ? "window by itself" : "screen");
   OffsetRect(&watch_, -request_.monitor.left, -request_.monitor.top);
 }
 
 Session::~Session() {
+  stream_.reset();
   if (memory_ != nullptr) DeleteDC(memory_);
   if (screen_ != nullptr) ReleaseDC(nullptr, screen_);
 }
@@ -181,8 +194,13 @@ bool Session::WindowStays() const {
   return IsWindow(request_.window) && !IsIconic(request_.window) && GetWindowRect(request_.window, &rect) && EqualRect(&rect, &window_rect_);
 }
 
-// Reads monitor pixels into a reading of the same size, without CAPTUREBLT, so the pointer never flickers.
+// Reads monitor pixels into a reading of the same size: from the window's own pictures, or from the screen without
+// CAPTUREBLT, so the pointer never flickers.
 bool Session::Read(Frame& frame, const RECT& rect) {
+  if (stream_) {
+    const RECT inside{rect.left - watch_.left, rect.top - watch_.top, rect.right - watch_.left, rect.bottom - watch_.top};
+    return stream_->Read(inside, frame.pixels(), static_cast<ptrdiff_t>(frame.width()) * 4);
+  }
   const HGDIOBJ previous = SelectObject(memory_, frame.bitmap());
   if (previous == nullptr) return false;
   const bool read = BitBlt(memory_, 0, 0, frame.width(), frame.height(), screen_, request_.monitor.left + rect.left, request_.monitor.top + rect.top, SRCCOPY) != FALSE;
@@ -647,7 +665,9 @@ void ScrollRecorder::Finish() {
 }
 
 void ScrollRecorder::Main(ScrollRequest request) {
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   Run(std::move(request));
+  CoUninitialize();
   done_.store(true, std::memory_order_release);
 }
 

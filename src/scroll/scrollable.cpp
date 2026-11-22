@@ -118,8 +118,8 @@ struct Candidate {
 
 class Look {
  public:
-  Look(IUIAutomation* automation, HWND window, const RECT& limit, float scale, std::vector<RECT>& shown)
-      : automation_(automation), window_(window), limit_(limit), shown_(shown),
+  Look(IUIAutomation* automation, HWND window, const RECT& limit, bool fullscreen, float scale, std::vector<RECT>& shown)
+      : automation_(automation), window_(window), limit_(limit), fullscreen_(fullscreen), shown_(shown),
         min_width_(static_cast<int>(std::lround(config::kScrollAreaMinWidth * scale))),
         min_height_(static_cast<int>(std::lround(config::kScrollAreaMinHeight * scale))),
         hidden_min_(static_cast<int>(std::lround(config::kScrollHiddenMinHeight * scale))),
@@ -424,25 +424,30 @@ class Look {
     const RuntimeId id = ReadRuntimeId(candidate.element.Get());
     if (id.empty()) return false;
     const RECT& area = candidate.area;
+    IUIAutomationCacheRequest* cache = fullscreen_ ? placed_.Get() : identity_.Get();
     for (const auto& probe : kProbes) {
       const POINT point{area.left + static_cast<LONG>((area.right - area.left) * probe[0]), area.top + static_cast<LONG>((area.bottom - area.top) * probe[1])};
       const HWND hit = WindowFromPoint(point);
       if (hit == nullptr || GetAncestor(hit, GA_ROOT) != window_) continue;
       ComPtr<IUIAutomationElement> at;
-      if (FAILED(automation_->ElementFromPointBuildCache(point, identity_.Get(), &at)) || !at) continue;
-      if (Within(at.Get(), id)) return true;
+      if (FAILED(automation_->ElementFromPointBuildCache(point, cache, &at)) || !at) continue;
+      if (Within(at.Get(), id, area, cache)) return true;
     }
     return false;
   }
 
-  bool Within(IUIAutomationElement* element, const RuntimeId& id) {
+  // In a window filling its monitor, something inside the area as large as all of it is what the screen shows there: a
+  // fullscreen element, such as a video played fullscreen, laid over the content. The content is then not in sight.
+  bool Within(IUIAutomationElement* element, const RuntimeId& id, const RECT& area, IUIAutomationCacheRequest* cache) {
     ComPtr<IUIAutomationElement> current = element;
     for (int step = 0; current && step < kMaxAncestorSteps; ++step) {
       const RuntimeId here = ReadRuntimeId(current.Get());
       if (here.empty() || here == root_id_) return here == id;
       if (here == id) return true;
+      RECT rect{};
+      if (fullscreen_ && SUCCEEDED(current->get_CachedBoundingRectangle(&rect)) && SameArea(Clip(rect), area)) return false;
       ComPtr<IUIAutomationElement> parent;
-      if (FAILED(walker_->GetParentElementBuildCache(current.Get(), identity_.Get(), &parent))) return false;
+      if (FAILED(walker_->GetParentElementBuildCache(current.Get(), cache, &parent))) return false;
       current = parent;
     }
     return false;
@@ -468,6 +473,7 @@ class Look {
   IUIAutomation* automation_;
   HWND window_;
   RECT limit_;
+  bool fullscreen_;
   std::vector<RECT>& shown_;  // Areas earlier looks at the same window found on screen.
   int min_width_;
   int min_height_;
@@ -529,8 +535,13 @@ void ScrollDetector::Main() {
     pending_ = Job{};
     has_pending_ = false;
     lock.unlock();
+    // The whole window counts, as a scrolling screenshot reads the window by itself, past the screen's edges too.
     RECT limit{};
-    const bool visible = IsWindow(job.window) && !IsIconic(job.window) && VisibleFrame(job.window, job.monitor, &limit);
+    RECT shown_part{};
+    const bool visible = IsWindow(job.window) && !IsIconic(job.window) && WholeFrame(job.window, &limit) && IntersectRect(&shown_part, &limit, &job.monitor);
+    // Fullscreen, as a video played fullscreen makes a browser, a window covers its monitor and is not maximized.
+    const bool fullscreen = visible && !IsZoomed(job.window) && limit.left <= job.monitor.left && limit.top <= job.monitor.top &&
+                            limit.right >= job.monitor.right && limit.bottom >= job.monitor.bottom;
     lock.lock();
     if (!visible || !automation) continue;
 
@@ -542,7 +553,7 @@ void ScrollDetector::Main() {
     for (size_t attempt = 0;; ++attempt) {
       lock.unlock();
       const double started = NowSeconds();
-      Look look(automation.Get(), job.window, limit, job.scale, shown);
+      Look look(automation.Get(), job.window, limit, fullscreen, job.scale, shown);
       look.Run();
       auto result = std::make_unique<ScrollAreas>();
       result->shot = job.shot;

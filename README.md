@@ -119,6 +119,8 @@ Screenshots are saved as lossless PNGs in `Pictures\Screenshots`, with names lik
 
 The bar above the thumbnail lists the regions the shot can be cropped to, from largest to smallest: the **whole screen**, the screen **without the taskbar**, the **active window**, and each **window of a Snap layout**. When the active window has more to scroll through, a **scrolling screenshot** comes last. Each icon is a small picture of the screen with that region filled in, drawn from where the windows really were, so two windows side by side are easy to tell apart.
 
+A window region holds that window alone, read by itself a moment after the shot. A notification or the taskbar lying over it stays out, and any part reaching past the edge of the screen is included.
+
 Choosing a region updates the thumbnail, the saved file, and the clipboard together, and gives the thumbnail its full three seconds again. Regions that cover the same area are listed once. When only one is left, as with a fullscreen game, the bar doesn't appear at all.
 
 | Keys | What happens |
@@ -135,7 +137,7 @@ These keys only do this while a thumbnail with more than one region is on screen
 | **Hover** | The thumbnail stays for as long as the pointer is on it |
 | **Click** | Opens the image in your default viewer |
 | **Drag** into an app | Drops the PNG file there. A blue **+** appears when the window under the pointer will accept it. Let go anywhere else and the thumbnail flies back. Thumbnails don't time out while you drag |
-| **Right-click** or <kbd>Esc</kbd> while dragging | Cancels the drag. The app underneath never sees the click or the key |
+| **Right-click** or <kbd>Esc</kbd> while dragging or swiping | Cancels it, and the thumbnail goes back. The app underneath never sees the click or the key |
 | **Drop on the rubbish bin** | A red bin rises at the bottom of the screen during every drag. Releasing over it removes the image from the clipboard and moves the file to the Recycle Bin. Drag back out before releasing to keep it |
 | **Swipe left** | Dismisses the thumbnail early. The file stays in your screenshots folder |
 
@@ -208,6 +210,10 @@ Right after a shot, the program checks in the background whether the active wind
 
 The candidate also has to be what is actually visible at that spot. A page behind a dialog, behind a fullscreen video, or under another window doesn't count. Games, videos, short pages, and dialogs that already fit get no scrolling option. Scroll bars play no part in the decision.
 
+The option stays only while the window is as the shot found it. A click, a scroll, or a key press anywhere but on the region bar takes it away, and so does the window moving or changing size. Content changing by itself, such as a playing video, doesn't.
+
+The window is read by itself while it is captured, so a notification passing over it stays out of the image, and an area reaching past the edge of the screen is captured whole.
+
 A capture ends early if the window moves or closes, if you turn the wheel outside the window, or if the content stops matching for a moment, for example after a click opens a different page. A video playing inside the page doesn't end it. Each screenshot can hold one scrolling screenshot.
 </details>
 
@@ -277,7 +283,7 @@ Headers are included by module, as in `#include "sstk/overlay/capsule.h"`. A new
 | `app` | `main.cpp`: choosing the mode from the arguments, the message loop, installing clipboard data, returning memory when idle |
 | `base` | Win32 includes and tracing (`platform`), product names and install paths (`product`), reading `settings.ini` (`settings`), the worker threads used by scrolling screenshots (`workers`) |
 | `brand` | `iconbake.cpp`, a build tool that draws the icon in code and saves it as an `.ico` |
-| `capture` | The low-level keyboard and mouse hooks (`hook`), the capture thread (`capture`), and window geometry, taskbar state, Snap layouts, and the list of regions (`screen`) |
+| `capture` | The low-level keyboard and mouse hooks (`hook`), the capture thread (`capture`), window geometry, taskbar state, Snap layouts, and the list of regions (`screen`), and reading a window by itself through Windows Graphics Capture or its own rendering (`window`) |
 | `config` | Default animation, colors, behavior, hotkeys, and layout |
 | `graphics` | Resampling, frosted glass, shadows, icons, and text (`image`), pixel helpers (`pixels.h`), springs turned into DirectComposition animations (`motion`), the WARP device (`compositor`) |
 | `overlay` | The thumbnails on each monitor (`overlay`), a single screenshot (`card`), the region bar (`capsule`), a thumbnail being dragged (`sprite`), the rubbish bin (`bin`), the drag loop thread (`dragdrop`) |
@@ -369,6 +375,8 @@ Each kind of work has its own thread, so nothing slow can delay the first frame 
 flowchart TB
     HOOK["Hook thread<br/>keyboard hook, plus a mouse hook when needed"] --> CAP["Capture thread<br/>copies the monitor"]
     CAP --> UI["UI thread<br/>the overlay and DirectComposition"]
+    CAP --> WIN["Window reader<br/>each window region by itself"]
+    WIN --> UI
     UI --> STORE["Store worker<br/>PNG encoding, saving, clipboard"]
     UI --> DET["Scroll detector<br/>UI Automation"]
     UI --> REC["Scroll recorder<br/>with its worker pool"]
@@ -409,8 +417,9 @@ The program draws with WARP, a software device that only passes finished pixels 
 - **Idle.** After each screenshot the process hands its working set back to Windows, leaving about 0.2 MB of private working set. The pages stay cached in RAM, so the next press only takes soft page faults. The only recurring wake-up is a keyboard hook refresh every five minutes, because Windows silently drops hooks it once found slow.
 - **With a screenshot on screen.** A thumbnail is prepared for every region when the shot is taken, and the raw frame is released as soon as the PNG is saved. That leaves about 15 MB for one screenshot, and five in a row stay around 8 MB. Switching regions uploads nothing new; crops come from the PNG kept in memory.
 - **Dragging.** The system drag loop calls into whatever app is under the pointer, which can block, so it runs on its own thread. The UI thread wakes once per frame only while a thumbnail is being dragged.
-- **The mouse hook.** A low-level mouse hook wakes the process on every pointer move, so it is only installed while a thumbnail with several regions or a drag is on screen.
-- **Scrolling screenshots.** Detection runs on its own thread after the shot is shown. While recording, the window is read about every 90 ms, or every 25 ms while things move, and each reading is reduced to an edge map. Narrow strips of columns propose how far the content moved, 16×16 cells confirm it, and every reading is placed against everything captured so far, so small errors don't add up. Rows are stored compactly in memory reserved in advance, and only the thumbnail rows that changed are redrawn.
+- **Window regions.** Each is read by itself on its own thread once the thumbnail is up, and packed like a long image. Windows Graphics Capture needs a hardware device, which is opened for it and closed 30 seconds after the last shot. Where Windows would draw a capture border around the window, the window renders itself into a bitmap instead.
+- **The mouse hook.** A low-level mouse hook wakes the process on every pointer move, so it is only installed while a thumbnail with several regions, a scrolling screenshot on offer, or a drag is on screen.
+- **Scrolling screenshots.** Detection runs on its own thread after the shot is shown. While recording, the window is read by itself through Windows Graphics Capture about every 90 ms, or every 25 ms while things move, and each reading is reduced to an edge map. Narrow strips of columns propose how far the content moved, 16×16 cells confirm it, and every reading is placed against everything captured so far, so small errors don't add up. Rows are stored compactly in memory reserved in advance, and only the thumbnail rows that changed are redrawn.
 - **Leaving the taskbar alone.** The overlay stops one pixel short of covering the whole monitor. A window that covers it entirely counts as a fullscreen app, and Windows would push the taskbar behind everything.
 </details>
 

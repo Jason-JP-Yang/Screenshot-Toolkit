@@ -22,11 +22,12 @@ namespace sstk {
 struct Shot {
   std::shared_ptr<const Image> frame;  // Null once archived; see Store::ReleaseFrame.
   std::vector<uint8_t> archive;        // Lossless copy of the whole frame, far smaller than the raw pixels.
-  std::shared_ptr<const LongImage> long_image;  // The scrolling screenshot once taken, packed from the start.
+  // The selection when it is a picture of its own rather than a region of the frame: a scrolling screenshot, or a
+  // window read by itself. Packed from the start.
+  std::shared_ptr<const LongImage> whole;
   SYSTEMTIME local_time{};
   std::wstring path;
   RECT region{};
-  bool region_in_long = false;  // Whether the region lies in the scrolling screenshot rather than in the frame.
   bool awaiting_long = false;   // A scrolling screenshot of it is on its way, and whoever waits for the file waits for it.
   bool discarded = false;       // Deleted: nothing more is saved for it.
   uint64_t requested_version = 0;
@@ -43,11 +44,8 @@ class Store {
   void Warmup();
 
   // Records region as the shot's selection. The newest request wins; stale work is skipped.
-  // With in_long, the region lies in the shot's scrolling screenshot.
-  void Submit(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long = false);
-
-  // Gives the shot its scrolling screenshot.
-  void SetLongImage(const std::shared_ptr<Shot>& shot, std::shared_ptr<const LongImage> image);
+  // With `whole`, the selection is that picture, as it is.
+  void Submit(const std::shared_ptr<Shot>& shot, const RECT& region, std::shared_ptr<const LongImage> whole = nullptr);
 
   // A scrolling screenshot of the shot is being taken: waiting for its file waits for that, until the next Submit or
   // Settle says what the file is.
@@ -57,8 +55,8 @@ class Store {
   // Opens the shot's file in the viewer once it is on disk, without anyone waiting: posts kMsgOpenShot then.
   void OpenWhenSaved(const std::shared_ptr<Shot>& shot);
 
-  // A scrolling screenshot goes on the clipboard as a promise, since its bitmap is far larger than everything else
-  // this program holds. This makes the bitmap when something asks for it, and the other forgets the promise.
+  // A picture of its own goes on the clipboard as a promise, since a scrolling screenshot's bitmap is far larger than
+  // everything else this program holds. This makes the bitmap when something asks for it, and the other forgets the promise.
   HGLOBAL RenderLongClipboard();
   void ForgetLongClipboard();
 
@@ -90,9 +88,9 @@ class Store {
   bool OpenReady() const;
   void WorkerMain();
   std::shared_ptr<const Image> FrameForWork(const std::shared_ptr<Shot>& shot);
-  void PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, bool in_long, uint64_t sequence);
+  void PrepareClipboard(const std::shared_ptr<Shot>& shot, const RECT& region, std::shared_ptr<const LongImage> whole, uint64_t sequence);
   bool SaveToDisk(Shot& shot, const std::shared_ptr<const Image>& frame, const RECT& region);
-  bool SaveLongToDisk(Shot& shot, const LongImage& image);
+  bool SaveWholeToDisk(Shot& shot, const LongImage& image);
   bool EnsureCodec();
   std::shared_ptr<const Image> DecodeArchive(const std::vector<uint8_t>& archive);
 
@@ -108,7 +106,7 @@ class Store {
   std::vector<std::shared_ptr<Shot>> pending_opens_;
   const Shot* clipboard_shot_ = nullptr;  // Compared only, never read: the shot may be long gone.
   RECT pending_clipboard_region_{};
-  bool pending_clipboard_in_long_ = false;
+  std::shared_ptr<const LongImage> pending_clipboard_whole_;
   std::atomic<uint64_t> clipboard_sequence_{0};
   bool busy_ = false;
   const Shot* active_shot_ = nullptr;
@@ -119,7 +117,7 @@ class Store {
   // Decoded on demand for crops of a released shot, and kept until the worker runs out of work.
   std::shared_ptr<const Image> work_frame_;
   const Shot* work_frame_shot_ = nullptr;
-  std::shared_ptr<const LongImage> clipboard_long_;  // What the promise on the clipboard is made good from.
+  std::shared_ptr<const LongImage> clipboard_whole_;  // What the promise on the clipboard is made good from.
 };
 
 }  // namespace sstk

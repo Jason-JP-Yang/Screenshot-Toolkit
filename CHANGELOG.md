@@ -2,6 +2,19 @@
 
 Built programs are kept per version in the local `release/` folder, created by `scripts\release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
+## Unreleased
+
+### Changed
+
+- A window region, and the scrolling option before it starts, hold the window alone: it is read by itself a moment after the shot, through Windows Graphics Capture without its border, or where Windows would draw one, by the window rendering itself. A notification or the taskbar over it stays out, and a part past the edge of the screen is included. Rounded corners show what the screen showed there. The picture is packed as a long image is, and saved and copied as it is.
+- A scrolling screenshot reads the window by itself too, so a notification passing over it stays out, and an area reaching past the edge of the screen is captured whole. Where the window can't be read, the screen is, as before.
+- The scrolling option stands only while the app is as the shot found it. A click, a scroll, or a key press anywhere but on the region bar withdraws it for every shot taken before, and so does the app window moving or changing size. Content changing by itself does not.
+- Esc or a right-click while swiping or pressing a thumbnail calls it off, as during a drag, and the thumbnail goes back.
+
+### Fixed
+
+- A video played fullscreen in a browser was offered a scrolling screenshot, because the page under it scrolls. In a window covering its monitor, something inside the area as large as all of it now counts as covering the content.
+
 ## 0.3.0
 
 ### Added

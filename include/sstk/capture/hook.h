@@ -17,6 +17,10 @@ enum class HookMode {
 // Any mode but idle also hooks the mouse, which is why it is not left on: that hook wakes this process on every move.
 void SetHookMode(HookMode mode);
 
+// While watching, which hooks the mouse too, every key and button pressed and every wheel turned is reported with
+// kMsgKeyInput or kMsgPointerInput, but for the chords taken here and keys that only modify others.
+void SetInputWatch(bool watch);
+
 // Installs the keyboard hook and pumps messages on the calling thread until stop_event is signaled.
 // Keys are swallowed only while the application's trigger event exists, so Windows keeps
 // its native behavior whenever the application is not running.

@@ -53,7 +53,7 @@ class Capsule {
   // One option: its glyph on the glass and on the pill, and its label, which shows only while it is selected.
   struct Segment {
     RegionKind kind;
-    RECT rect;
+    RECT rect;  // What the screen shows of the region.
     ComPtr<IDCompositionVisual> light;
     ComPtr<IDCompositionVisual> dark;
     ComPtr<IDCompositionEffectGroup> icon_effect;
@@ -75,6 +75,7 @@ class Capsule {
     float ink_width = 0.0f;
   };
 
+  RECT OnScreen(const RECT& rect) const;
   std::unique_ptr<Segment> MakeSegment(const Region& region, const TaskbarInsets& insets);
   void RemoveSegment(Segment& segment);
   void MakePiece(Piece& piece, const Image& image, float y);

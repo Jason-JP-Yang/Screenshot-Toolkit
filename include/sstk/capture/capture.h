@@ -3,21 +3,30 @@
 
 #include "sstk/base/platform.h"
 #include "sstk/capture/screen.h"
+#include "sstk/capture/window.h"
 #include "sstk/graphics/image.h"
 
 #include <memory>
+#include <vector>
 
 namespace sstk {
 
 struct CaptureResult {
+  uint64_t id = 0;
   double trigger_time = 0.0;
   ScreenInfo screen;
   std::shared_ptr<const Image> frame;  // Null when the screen could not be read, e.g. on a secure desktop.
   SYSTEMTIME local_time{};
 };
 
-// Blocks until quit_event is signaled, posting kMsgFlash and kMsgCaptured to the controller window.
-// A kMsgFlash carries the monitor in wParam.
+// The own pictures of the windows a shot offers by themselves. They come a moment after the shot.
+struct WindowShots {
+  uint64_t capture = 0;  // The CaptureResult they belong to.
+  std::vector<WindowShot> shots;
+};
+
+// Blocks until quit_event is signaled, posting kMsgFlash and kMsgCaptured to the controller window, and kMsgWindowShots
+// once the windows are read by themselves. A kMsgFlash carries the monitor in wParam.
 void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE quit_event);
 
 }  // namespace sstk

@@ -11,8 +11,10 @@
 //
 // A scrolling screenshot is one more such bitmap. It starts where the scrolled area sits in the
 // screenshot and reaches past it, so the card shows it by moving its window over the plane too.
+// So is a window read by itself, which lies where the window does and may reach past the screen.
 #pragma once
 
+#include "sstk/capture/capture.h"
 #include "sstk/capture/screen.h"
 #include "sstk/graphics/compositor.h"
 #include "sstk/graphics/motion.h"
@@ -45,7 +47,7 @@ CardShadow BuildCardShadow(Compositor& compositor, float scale);
 
 class Card {
  public:
-  Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, const ScreenInfo& screen,
+  Card(Compositor& compositor, IDCompositionVisual* parent, std::shared_ptr<Shot> shot, const CaptureResult& capture,
        float scale, ComPtr<IDCompositionSurface> frost, const CardShadow& shadow, IDCompositionClip* shadow_clip,
        double created_at);
   ~Card();
@@ -68,11 +70,28 @@ class Card {
   SIZE DisplaySize() const;
   RectF SourceRect() const;
 
+  // The windows' own pictures for the options that show them, in place of what the screen showed of them. Returns
+  // whether the selection is one of them.
+  bool AttachWindows(std::vector<WindowShot>& shots, const TimeBase& now);
+
+  // The selection when it is a picture of its own rather than a region of the frame.
+  std::shared_ptr<const LongImage> whole() const;
+
   // Adds the option of a scrolling screenshot of the app window, once its scrollable areas are known. It shows the
   // app window until the screenshot starts. Returns false if there is no such window among the options.
   bool OfferScroll(ScrollHints hints);
   const ScrollHints& scroll_hints() const { return scroll_hints_; }
   HWND app() const { return app_; }
+
+  // A scrolling screenshot can be had only of the app as the shot saw it. Once anything may have changed that, the
+  // offer is withdrawn for good, and the option goes unless it is in use. Returns whether the options changed.
+  bool scroll_open() const { return app_ != nullptr && !scroll_closed_; }
+  bool AppChanged() const;  // The app window has gone, moved, or changed size.
+  bool WithdrawScroll();
+  void CloseScroll() { scroll_closed_ = true; }
+
+  uint64_t capture() const { return capture_; }
+  double taken() const { return taken_; }
 
   // A scrolling screenshot growing in place of the selected scroll option: started, extended, and then kept as
   // the option's picture or dropped along with the option.
@@ -157,6 +176,8 @@ class Card {
   bool ShowsLong(int index) const;
   void SetLongView(int content_top, int content_bottom, int view_bottom);
   void BuildCaches(const Image& frame, bool with_base);
+  void SetCrisp(size_t index, Image pixels);
+  void PopOption();
   void ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec);
   void BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip);
   IDCompositionDevice* device() const { return compositor_.device(); }
@@ -195,6 +216,7 @@ class Card {
   std::vector<ComPtr<IDCompositionSurface>> crisp_surfaces_;  // One per region; empty until built.
   std::vector<SIZE> crisp_sizes_;
   std::vector<Image> crisp_pixels_;  // The same thumbnails in memory, kept for the moment one is lifted.
+  std::vector<std::shared_ptr<const LongImage>> sources_;  // Per region, its own picture, or null for a part of the frame.
   std::vector<std::unique_ptr<CrispLayer>> crisp_layers_;
 
   AnimFloat left_, top_, right_, bottom_, radius_;
@@ -202,13 +224,18 @@ class Card {
   AnimFloat opacity_, slide_, ring_alpha_, base_alpha_;
   AnimFloat shadow_alpha_, shadow_edge_w_, shadow_edge_h_;
 
+  uint64_t capture_ = 0;
+  double taken_ = 0.0;
   HWND app_ = nullptr;
   RECT app_rect_{};
+  RECT app_bounds_{};
   ScrollHints scroll_hints_;
   int scroll_source_ = -1;
   int before_scroll_ = 0;  // The selection to go back to if the scrolling screenshot fails.
+  bool scroll_closed_ = false;
   Long long_;
   SIZE long_size_{};
+  std::shared_ptr<const LongImage> long_image_;
 
   float shadow_reach_ = 0.0f;
   bool hibernating_ = false;

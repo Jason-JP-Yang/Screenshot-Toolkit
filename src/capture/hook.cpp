@@ -21,7 +21,9 @@ HWND g_controller = nullptr;
 HHOOK g_hook = nullptr;
 HHOOK g_mouse_hook = nullptr;
 std::atomic<HookMode> g_mode{HookMode::kIdle};
+std::atomic<bool> g_watch{false};
 std::atomic<DWORD> g_hook_thread{0};
+bool g_key_down[256] = {};
 bool g_capture_held[std::size(config::kCaptureChords)] = {};
 bool g_previous_key_held = false;
 bool g_next_key_held = false;
@@ -113,6 +115,38 @@ bool IsScrollChord() {
 
 bool IsDragging() { return Mode() == HookMode::kDrag; }
 
+WPARAM Stamp() { return static_cast<WPARAM>(NowSeconds() * 1e6); }
+
+bool IsModifier(DWORD virtual_key) {
+  switch (virtual_key) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+    case VK_MENU: case VK_LMENU: case VK_RMENU:
+    case VK_LWIN: case VK_RWIN:
+    case VK_CAPITAL: case VK_NUMLOCK: case VK_SCROLL:
+    case kMaskKey:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// A key the rest of the system gets, pressed rather than held on.
+void NoteKey(DWORD virtual_key, bool is_down) {
+  if (virtual_key >= std::size(g_key_down)) return;
+  const bool repeat = is_down && g_key_down[virtual_key];
+  g_key_down[virtual_key] = is_down;
+  if (is_down && !repeat && !IsModifier(virtual_key) && g_watch.load(std::memory_order_relaxed)) PostMessageW(g_controller, kMsgKeyInput, Stamp(), 0);
+}
+
+void NotePointer(POINT point) {
+  if (g_watch.load(std::memory_order_relaxed)) PostMessageW(g_controller, kMsgPointerInput, Stamp(), MAKELPARAM(point.x, point.y));
+}
+
+bool IsButtonDown(WPARAM message) {
+  return message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN;
+}
+
 // Returns true when the key event must not reach the rest of the system.
 bool HandleKey(DWORD virtual_key, bool is_down) {
   for (int i = 0; i < static_cast<int>(std::size(config::kCaptureChords)); ++i) {
@@ -133,6 +167,7 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wparam, LPARAM lparam) {
     const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
     const bool is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
     if (HandleKey(key->vkCode, is_down)) return 1;
+    NoteKey(key->vkCode, is_down);
   }
   return CallNextHookEx(g_hook, code, wparam, lparam);
 }
@@ -170,20 +205,23 @@ bool HandleButton(WPARAM message, const MSLLHOOKSTRUCT& info) {
 LRESULT CALLBACK MouseProc(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION) {
     const auto& info = *reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam);
-    if (wparam == WM_MOUSEWHEEL) {
+    if (wparam == WM_MOUSEWHEEL || wparam == WM_MOUSEHWHEEL) {
       // Reported, never taken: the scroll itself is what a scrolling screenshot records.
-      if (IsScrolling()) PostMessageW(g_controller, kMsgScrollWheel, 0, MAKELPARAM(info.pt.x, info.pt.y));
+      if (wparam == WM_MOUSEWHEEL && IsScrolling()) PostMessageW(g_controller, kMsgScrollWheel, 0, MAKELPARAM(info.pt.x, info.pt.y));
+      NotePointer(info.pt);
     } else if (HandleButton(wparam, info)) {
       // The hook may have been outliving its mode only to catch this release.
       PostThreadMessageW(GetCurrentThreadId(), kMsgSyncMouseHook, 0, 0);
       return 1;
+    } else if (IsButtonDown(wparam)) {
+      NotePointer(info.pt);
     }
   }
   return CallNextHookEx(g_mouse_hook, code, wparam, lparam);
 }
 
 void SyncMouseHook() {
-  bool wanted = g_mode.load(std::memory_order_relaxed) != HookMode::kIdle;
+  bool wanted = g_mode.load(std::memory_order_relaxed) != HookMode::kIdle || g_watch.load(std::memory_order_relaxed);
   for (bool held : g_button_held) wanted = wanted || held;
   if (wanted == (g_mouse_hook != nullptr)) return;
   if (wanted) {
@@ -243,6 +281,12 @@ bool PumpHookMessages(HANDLE stop_event, DWORD interval_ms) {
 
 void SetHookMode(HookMode mode) {
   g_mode.store(mode, std::memory_order_relaxed);
+  const DWORD thread = g_hook_thread.load(std::memory_order_acquire);
+  if (thread != 0) PostThreadMessageW(thread, kMsgSyncMouseHook, 0, 0);
+}
+
+void SetInputWatch(bool watch) {
+  g_watch.store(watch, std::memory_order_relaxed);
   const DWORD thread = g_hook_thread.load(std::memory_order_acquire);
   if (thread != 0) PostThreadMessageW(thread, kMsgSyncMouseHook, 0, 0);
 }

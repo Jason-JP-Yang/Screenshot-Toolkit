@@ -43,6 +43,12 @@ inline constexpr float kBinNearHysteresis = 30.0f;
 inline constexpr float kBinHotMargin = 16.0f;
 inline constexpr float kBinHotMarginEngaged = 38.0f;
 
+// Reading a window by itself, for its region and for scrolling screenshots: how long to wait for its first picture,
+// and how long the capture device stays open after the last shot.
+inline constexpr unsigned kWindowPictureWaitMs = 500;
+inline constexpr unsigned kScrollPictureWaitMs = 1000;
+inline constexpr unsigned kCaptureDeviceKeepSeconds = 30;
+
 // Which windows become selector options. Lengths are physical pixels.
 inline constexpr int kMinimumWindowExtent = 48;
 inline constexpr double kMinimumVisibleFraction = 0.5;

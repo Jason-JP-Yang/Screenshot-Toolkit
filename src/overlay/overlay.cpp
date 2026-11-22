@@ -59,6 +59,18 @@ class Deck {
   void EndScroll(const ScrollUpdate& update);
   void CancelScroll();
 
+  // The windows of a shot read by themselves. Returns whether the shot is here.
+  bool AttachWindows(WindowShots& shots);
+
+  // Offers of scrolling screenshots stand only while their apps stay as they were shot.
+  bool WatchesInput() const;
+  void WithdrawScrolls(double before);
+  bool InCapsule(POINT screen) const;
+
+  // A press on the thumbnail, before it becomes a drag. Calling it off lets the thumbnail go back.
+  bool pressing() const { return press_ != Press::kNone; }
+  void CancelPress();
+
   LRESULT HandleSinkMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
   // While a thumbnail is held by the pointer. Screen positions are in virtual screen coordinates.
@@ -98,6 +110,7 @@ class Deck {
   void SelectRegion(int index);
   void SubmitSelection(Card& card);
   void BindCapsuleToFront(const TimeBase& now);
+  void CheckScrollApps();
   void EndOutcome(const TimeBase& now);
   void ExcludeWhileScrolling(bool exclude);
   int LongMaxRows() const;
@@ -450,7 +463,7 @@ uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
     frost = compositor_.CreateSurface(frost_pixels, true);
   }
 
-  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, capture->screen, scale_, std::move(frost),
+  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, *capture, scale_, std::move(frost),
                                      card_shadow_, shadow_clip_.Get(), now.seconds);
   Card* raw = card.get();
   raw->PlaceFullScreen();
@@ -511,11 +524,64 @@ void Deck::SelectRegion(int index) {
 
 void Deck::SubmitSelection(Card& card) {
   const Region& region = card.regions()[card.selected()];
-  if (region.kind == RegionKind::kLong) {
-    store_.Submit(card.shot(), card.long_rect(), true);
-  } else {
-    store_.Submit(card.shot(), region.rect);
+  store_.Submit(card.shot(), region.kind == RegionKind::kLong ? card.long_rect() : region.rect, card.whole());
+}
+
+bool Deck::AttachWindows(WindowShots& shots) {
+  const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& card) { return card->capture() == shots.capture; });
+  if (found == cards_.end()) return false;
+  Card* card = found->get();
+  const TimeBase now = compositor_.Now();
+  // Shown already, the window's own picture takes the place of the screen's, and becomes the file.
+  if (card->AttachWindows(shots.shots, now) && !card->busy) {
+    Layout(card == front() ? config::kMorph : config::kReflow, now);
+    SubmitSelection(*card);
   }
+  compositor_.Commit();
+  return true;
+}
+
+bool Deck::WatchesInput() const {
+  return std::any_of(cards_.begin(), cards_.end(), [](const auto& card) { return card->scroll_open() && !card->busy; });
+}
+
+void Deck::WithdrawScrolls(double before) {
+  bool changed = false;
+  for (auto& card : cards_) {
+    if (card->taken() < before && card->WithdrawScroll() && card.get() == front()) changed = true;
+  }
+  if (!changed) return;
+  const TimeBase now = compositor_.Now();
+  BindCapsuleToFront(now);
+  UpdateSink();
+  compositor_.Commit();
+}
+
+void Deck::CheckScrollApps() {
+  bool changed = false;
+  for (auto& card : cards_) {
+    if (card->scroll_open() && !card->busy && card->AppChanged() && card->WithdrawScroll() && card.get() == front()) changed = true;
+  }
+  if (!changed) return;
+  BindCapsuleToFront(compositor_.Now());
+  UpdateSink();
+}
+
+bool Deck::InCapsule(POINT screen) const {
+  return capsule_->visible() && capsule_->Contains(screen.x - bounds_.left, screen.y - bounds_.top);
+}
+
+void Deck::CancelPress() {
+  if (press_ == Press::kNone) return;
+  const Press press = press_;
+  // The pointer stays with the sink until the button comes up, so that the release reaches nothing else.
+  press_ = Press::kNone;
+  const TimeBase now = compositor_.Now();
+  if (Card* top = front(); top != nullptr) {
+    if (press == Press::kSwipe) top->SnapBack(now, 0.0f);
+    top->expiry = now.seconds + CurrentSettings().dwell_seconds;
+  }
+  compositor_.Commit();
 }
 
 bool Deck::HasOptions() const {
@@ -556,6 +622,7 @@ bool Deck::BeginScroll(ScrollRequest& request) {
 
   const TimeBase now = compositor_.Now();
   top->busy = true;
+  top->CloseScroll();
   scroll_shot_ = top->shot();
   // Whoever wants the file from now on, to drop it somewhere or to open it, gets the scrolling screenshot.
   store_.Expect(scroll_shot_);
@@ -586,7 +653,6 @@ void Deck::EndScroll(const ScrollUpdate& update) {
   if (shot == nullptr) return;
   const TimeBase now = compositor_.Now();
   const bool kept = update.outcome != ScrollOutcome::kFailed && update.image != nullptr;
-  if (kept) store_.SetLongImage(shot, update.image);
   Card* card = Find(shot);
   // Lifted, the card still takes the image, and shows it should it come back.
   Card* held = card == nullptr ? owner_.HeldCard(shot) : nullptr;
@@ -599,7 +665,7 @@ void Deck::EndScroll(const ScrollUpdate& update) {
     SubmitSelection(*taker);
   } else if (kept) {
     // The card left while the image was being made, swiped away or opened, and the image is kept all the same.
-    store_.Submit(shot, RECT{0, 0, update.image->width(), update.image->height()}, true);
+    store_.Submit(shot, RECT{0, 0, update.image->width(), update.image->height()}, update.image);
   } else {
     store_.Settle(shot);
   }
@@ -683,6 +749,7 @@ void Deck::Tick() {
     UpdateSink();
     owner_.SyncHookMode();
   }
+  CheckScrollApps();
 
   // Checked in place from the back so that dismissing the front cannot invalidate older indices.
   const double elapsed = std::min(now.seconds - last_tick_, 0.25);
@@ -955,6 +1022,7 @@ void Deck::OnButtonDown(POINT point) {
       SetCapture(sink_);
       press_point_ = point;
       press_ = Press::kCard;
+      owner_.SyncHookMode();
     }
     return;
   }
@@ -983,6 +1051,8 @@ void Deck::OnButtonDown(POINT point) {
   SetCapture(sink_);
   press_point_ = point;
   press_ = Press::kCard;
+  // From here the cancel key and button call the press off, as they do a drag.
+  owner_.SyncHookMode();
 }
 
 void Deck::OnButtonUp(POINT point) {
@@ -1013,6 +1083,7 @@ void Deck::OnButtonUp(POINT point) {
     case Press::kNone:
       break;
   }
+  owner_.SyncHookMode();
 }
 
 void Deck::OnMouseLeave() {
@@ -1483,8 +1554,13 @@ void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
 }
 
 void Overlay::SyncHookMode() {
+  const bool watch = std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->WatchesInput(); });
+  if (watch != watching_input_) {
+    watching_input_ = watch;
+    SetInputWatch(watch);
+  }
   HookMode mode = HookMode::kIdle;
-  if (session_) {
+  if (session_ || std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->pressing(); })) {
     mode = HookMode::kDrag;
   } else if (recorder_) {
     mode = HookMode::kScrolling;
@@ -1509,6 +1585,27 @@ void Overlay::OnSelectorStep(int direction) {
     if (deck->HasOptions() && (chosen == nullptr || deck->monitor() == under)) chosen = deck.get();
   }
   if (chosen != nullptr) chosen->StepRegion(direction);
+}
+
+void Overlay::OnWindowShots(std::unique_ptr<WindowShots> shots) {
+  for (auto& deck : decks_) {
+    if (deck->AttachWindows(*shots)) break;
+  }
+}
+
+void Overlay::OnPointerInput(double when, POINT point) {
+  // The selector is the one place a press leaves the shot's apps as they were.
+  for (const auto& deck : decks_) {
+    if (deck->InCapsule(point)) return;
+  }
+  WithdrawScrolls(when);
+}
+
+void Overlay::OnKeyInput(double when) { WithdrawScrolls(when); }
+
+void Overlay::WithdrawScrolls(double before) {
+  for (auto& deck : decks_) deck->WithdrawScrolls(before);
+  SyncHookMode();
 }
 
 void Overlay::OnScrollAreas(std::unique_ptr<ScrollAreas> found) {
@@ -1645,7 +1742,11 @@ void Overlay::OnDragFinished(std::unique_ptr<FileDragOutcome> outcome) {
 }
 
 void Overlay::OnDragCancel() {
-  if (!session_) return;
+  if (!session_) {
+    for (auto& deck : decks_) deck->CancelPress();
+    SyncHookMode();
+    return;
+  }
   Trace("drag: called off");
   file_drag_->Cancel();
   FileDragOutcome outcome;
