@@ -70,6 +70,11 @@ add_executable(ScreenshotToolkit WIN32
   src/setup/installer.cpp
   src/setup/window.cpp
   src/storage/store.cpp
+  src/update/apply.cpp
+  src/update/http.cpp
+  src/update/json.cpp
+  src/update/state.cpp
+  src/update/updater.cpp
   res/app.rc
   ${SSTK_GENERATED}/build_time.cpp
 )
@@ -93,13 +98,13 @@ target_link_options(ScreenshotToolkit PRIVATE
   /DELAYLOAD:ole32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:windowscodecs.dll
   /DELAYLOAD:dwmapi.dll /DELAYLOAD:psapi.dll
   /DELAYLOAD:wtsapi32.dll /DELAYLOAD:userenv.dll /DELAYLOAD:cabinet.dll
-  /DELAYLOAD:oleaut32.dll
+  /DELAYLOAD:oleaut32.dll /DELAYLOAD:winhttp.dll /DELAYLOAD:bcrypt.dll
   $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
 )
 
 target_link_libraries(ScreenshotToolkit PRIVATE
   user32 gdi32 advapi32 ole32 oleaut32 shell32 uuid
-  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv cabinet delayimp
+  d3d11 dxgi dcomp dwmapi psapi windowscodecs wtsapi32 userenv cabinet winhttp bcrypt delayimp
 )
 
 # Publishes the built program to release/<version>, which is not versioned by git.

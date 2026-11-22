@@ -68,21 +68,37 @@ Open `ScreenshotToolkit.exe` and choose **Quick Install**. There is no custom in
 
 The window follows the Windows light or dark app theme, and its button folds into a progress bar while setup works. Opening a newer copy the same way updates the installed one.
 
-Opened from Start, the installed program shows its About window instead: its version, whether it is running, **Quick Restart**, and **Complete Quit**. A complete quit stays in effect until Quick Restart or the next sign-in, and so does `--quit`.
+Opened from Start, the installed program shows its About window instead: its version, whether it is running, **Check for Updates**, and **Quit**, which reads **Quick Restart** while the program is not running. A quit stays in effect until Quick Restart or the next sign-in, and so does `--quit`.
 
-To remove it, choose Uninstall in Settings > Apps. The same window opens with **Uninstall**, which removes the service, the program, its settings, its Settings and Start menu entries, and what earlier versions left, such as their logon task. Screenshots stay where they were saved.
+To remove it, choose Uninstall in Settings > Apps. The same window opens with **Uninstall**, which removes the service, the program, its settings, its Settings and Start menu entries, any update waiting, and what earlier versions left, such as their logon task. Screenshots stay where they were saved.
+
+The About and uninstall windows run from a copy in `%TEMP%`, which deletes itself when they close, so they never hold the installed file.
 
 | Command | Effect |
 |---|---|
 | (none) | The setup window, or the About window when this is the installed copy |
 | `--install` | The setup window. With `--quiet`, installs without it |
 | `--uninstall` | The uninstall window. With `--quiet`, removes without it |
+| `--about` | The About window |
 | `--quit` | Stops the running program until Quick Restart or the next sign-in |
-| `--run` | Runs the program directly, without UI Access. The service starts it this way |
+| `--run` | Runs the program directly, without UI Access. The service starts it this way, with `--takeover` to replace a running copy |
+| `--apply-update` | Puts a downloaded update in place. Only the service starts it |
+
+## Updates
+
+The service keeps the program up to date from this repository's [releases](https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases), dev builds included, without an administrator prompt and without anything to click.
+
+- **When.** It looks for a newer build each time the program starts, at sign-in or on Quick Restart, and every 12 hours. A failed check is tried again an hour later. **Check for Updates** in the About window looks at once, and installs what it finds straight away.
+- **What counts as newer.** Each release's notes carry a hidden line with its build number, which is the number of commits on `main` that lead to it, and its file's SHA-256. Only a higher build number is newer, so a copy built from a commit GitHub has not seen is never replaced.
+- **Downloading.** The service downloads in the background at low priority, through the proxy the signed-in user's Windows settings name, such as one Clash sets, or directly. The file is written to `update\` inside the install folder under a temporary name, and takes its final name only once its size and SHA-256 match. A download cut off at any point is never taken for a finished one.
+- **Installing.** An update goes in once no thumbnail, drag, or scrolling capture is on screen and the keyboard and mouse have been still for a minute, or at once when the program is not running. The new copy starts fully before the old one lets go, so screenshots pause for a few tens of milliseconds, while nobody is using them. The installed file is then replaced in a single rename, which leaves it whole whatever is stopped at whatever moment, the service restarts, and the download is deleted.
+- **The About window** shows an update under way, whoever started it: the check button becomes a progress bar, and the second button steps aside until it is over.
+
+`AutoUpdate=0` in settings.ini stops the automatic checks. Check for Updates still works.
 
 ## Settings
 
-`%ProgramData%\Screenshot Toolkit\settings.ini` is read when the program starts, so a change applies after Quick Restart. It holds the settings for everyone on the PC, and editing it needs administrator rights. A line left out keeps its default from `include/sstk/config/core.h`.
+`%ProgramData%\Screenshot Toolkit\settings.ini` is read when the program starts, so a change applies after Quit and Quick Restart. It holds the settings for everyone on the PC, and editing it needs administrator rights. A line left out keeps its default from `include/sstk/config/core.h`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -90,6 +106,7 @@ To remove it, choose Uninstall in Settings > Apps. The same window opens with **
 | `DwellSeconds` | `3` | Seconds a thumbnail stays on screen |
 | `CaptureIncludesThumbnails` | `0` | `1` lets screenshots show the program's own thumbnails |
 | `DeleteToRecycleBin` | `1` | `0` deletes screenshots dropped on the rubbish bin for good |
+| `AutoUpdate` | `1` | `0` stops the automatic update checks. See [Updates](#updates) |
 
 ## Build
 
@@ -209,16 +226,21 @@ Each module keeps its headers in `include/sstk/<module>/` and its sources in `sr
 | | `tracker` | How far content scrolled between two readings |
 | | `stitcher` | Building the long image: what is content, what holds still, and what changed by itself |
 | | `longimage` | The long image, kept packed in strips rather than as one bitmap |
-| `service` | `service` | The service: starting the application in each session with UI Access, and restarting it |
+| `service` | `service` | The service: starting the application in each session with UI Access, restarting it, and driving updates |
 | `setup` | `installer` | The elevated install and uninstall steps |
 | | `window` | The setup, uninstall, and About window |
 | `storage` | `store` | PNG encoding, atomic saves, clipboard preparation, frame archiving |
+| `update` | `updater` | When to check, the check and download, and starting the apply step |
+| | `apply.cpp` | Putting a downloaded update in place |
+| | `state` | Where an update stands, shared through the registry |
+| | `http` | HTTPS over WinHTTP with the user's proxy, and SHA-256 |
+| | `json` | A small JSON reader for GitHub's answers |
 
-Build scripts and the version script are in `scripts/`, and the manifest and version resource in `res/`.
+Build scripts, the version script, and the release scripts are in `scripts/`, the release workflow in `.github/workflows/`, and the manifest and version resource in `res/`.
 
 ## Binary layout
 
-Everything is one executable, and the mode it starts in decides what it does: the application, the service, the setup window, or the elevated setup steps. That keeps installing and updating to one file, and gives a SYSTEM service no DLLs to load from disk. The service never maps the rendering, codec, or shell libraries, which are delay-loaded, and pages it does not touch are never read in. Each part lives in its own module, so a split is mechanical when it is needed.
+Everything is one executable, and the mode it starts in decides what it does: the application, the service, a window, the elevated setup steps, or the update's apply step. That keeps installing and updating to one file, and gives a SYSTEM service no DLLs to load from disk. The service never maps the rendering, codec, or shell libraries, which are delay-loaded, and pages it does not touch are never read in. Each part lives in its own module, so a split is mechanical when it is needed.
 
 Worth splitting when one of these comes:
 

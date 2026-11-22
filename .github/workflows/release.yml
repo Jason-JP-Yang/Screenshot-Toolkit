@@ -133,8 +133,9 @@ jobs:
             $section = 'Unreleased'
             $base = git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD
           }
-          "sha=$sha", "tag=$tag", "name=$name", "section=$section", "base=$base" | Add-Content $env:GITHUB_OUTPUT
-          Write-Host "$name from $sha, compared with '$base'"
+          $build = git rev-list --count HEAD
+          "sha=$sha", "tag=$tag", "name=$name", "section=$section", "base=$base", "build=$build" | Add-Content $env:GITHUB_OUTPUT
+          Write-Host "$name, build $build, from $sha, compared with '$base'"
 
       - name: Sign
         shell: pwsh
@@ -156,12 +157,14 @@ jobs:
           NAME: ${{ steps.name.outputs.name }}
           SECTION: ${{ steps.name.outputs.section }}
           BASE: ${{ steps.name.outputs.base }}
+          BUILD: ${{ steps.name.outputs.build }}
         run: |
           $repo = $env:GITHUB_REPOSITORY
           $asset = "ScreenshotToolkit-$env:NAME.exe"
           "$((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant())  $asset" | Set-Content "$asset.sha256" -Encoding ascii
           & pipeline/scripts/release-notes.ps1 -Changelog pipeline/CHANGELOG.md -Section $env:SECTION -Repository $repo `
-            -Head $env:TAG -Base $env:BASE -Asset $asset -Signature signature.md -Output notes.md
+            -Head $env:TAG -Base $env:BASE -Asset $asset -Signature signature.md -Name $env:NAME -Build $env:BUILD -Commit $env:SHA `
+            -Output notes.md
           $title = "Screenshot Toolkit $env:NAME"
 
           gh release view $env:TAG --repo $repo *> $null

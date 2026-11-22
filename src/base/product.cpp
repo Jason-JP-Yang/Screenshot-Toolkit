@@ -1,19 +1,18 @@
 #include "sstk/base/product.h"
 
-#include <knownfolders.h>
-#include <shlobj.h>
+#include <cwchar>
 
 namespace sstk {
 
 namespace {
 
-std::wstring KnownFolder(REFKNOWNFOLDERID id) {
-  PWSTR folder = nullptr;
-  std::wstring result;
-  if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &folder))) result = folder;
-  CoTaskMemFree(folder);
-  return result;
+std::wstring EnvironmentFolder(const wchar_t* name) {
+  wchar_t folder[MAX_PATH];
+  const DWORD length = GetEnvironmentVariableW(name, folder, MAX_PATH);
+  return length > 0 && length < MAX_PATH ? std::wstring(folder) : std::wstring();
 }
+
+std::wstring Under(const std::wstring& folder, const wchar_t* name) { return folder.empty() ? folder : folder + L"\\" + name; }
 
 std::wstring LongPath(const std::wstring& path) {
   std::wstring result(32768, L'\0');
@@ -31,19 +30,20 @@ std::wstring ExecutablePath() {
   return path;
 }
 
-std::wstring InstallDirectory() {
-  const std::wstring folder = KnownFolder(FOLDERID_ProgramFiles);
-  return folder.empty() ? folder : folder + L"\\" + kProductName;
-}
+std::wstring InstallDirectory() { return Under(EnvironmentFolder(L"ProgramFiles"), kProductName); }
 
-std::wstring InstalledExecutablePath() {
-  const std::wstring directory = InstallDirectory();
-  return directory.empty() ? directory : directory + L"\\" + kExecutableName;
-}
+std::wstring InstalledExecutablePath() { return Under(InstallDirectory(), kExecutableName); }
 
-std::wstring DataDirectory() {
-  const std::wstring folder = KnownFolder(FOLDERID_ProgramData);
-  return folder.empty() ? folder : folder + L"\\" + kProductName;
+std::wstring UpdateDirectory() { return Under(InstallDirectory(), L"update"); }
+
+std::wstring StagedExecutablePath() { return Under(UpdateDirectory(), kExecutableName); }
+
+std::wstring DataDirectory() { return Under(EnvironmentFolder(L"ProgramData"), kProductName); }
+
+std::wstring SystemDirectory() {
+  wchar_t directory[MAX_PATH];
+  const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+  return length > 0 && length < MAX_PATH ? std::wstring(directory) : std::wstring(L"C:\\Windows\\System32");
 }
 
 bool SamePath(const std::wstring& a, const std::wstring& b) {
@@ -55,6 +55,24 @@ bool SamePath(const std::wstring& a, const std::wstring& b) {
 }
 
 bool IsInstalledCopy() { return SamePath(ExecutablePath(), InstalledExecutablePath()); }
+
+bool DeleteTree(const std::wstring& path) {
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) return true;
+  if (attributes & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
+  if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) return DeleteFileW(path.c_str()) != FALSE;
+  if (!(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    WIN32_FIND_DATAW data;
+    HANDLE find = FindFirstFileW((path + L"\\*").c_str(), &data);
+    if (find != INVALID_HANDLE_VALUE) {
+      do {
+        if (wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) DeleteTree(path + L"\\" + data.cFileName);
+      } while (FindNextFileW(find, &data));
+      FindClose(find);
+    }
+  }
+  return RemoveDirectoryW(path.c_str()) != FALSE;
+}
 
 // The handle is closed at once: held open, it would keep the name alive and turn away an instance starting meanwhile.
 bool IsApplicationRunning() {

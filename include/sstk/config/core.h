@@ -20,6 +20,13 @@ inline constexpr bool kDeleteToRecycleBin = true;
 // Saved files. Takes the year, month, day, hour, minute, and second.
 inline constexpr wchar_t kFileNameFormat[] = L"Screenshot %04d-%02d-%02d %02d%02d%02d";
 
+// Updates. A newer build is looked for at each start and every 12 hours, and again an hour after a check fails. One
+// downloaded is installed once nothing is on screen and no key or button has been touched for kUpdateIdleSeconds.
+inline constexpr bool kAutoUpdate = true;
+inline constexpr unsigned kUpdateCheckHours = 12;
+inline constexpr unsigned kUpdateRetryMinutes = 60;
+inline constexpr unsigned kUpdateIdleSeconds = 60;
+
 // How long thumbnails stay.
 inline constexpr double kDwellSeconds = 3.0;
 inline constexpr double kDropDwellBonus = 2.0;

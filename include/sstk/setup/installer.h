@@ -34,9 +34,15 @@ HANDLE StartElevatedSetup(SetupAction action, HWND window, bool* cancelled);
 // For --quiet: runs the steps without a window, through the administrator prompt if needed.
 int RunQuietSetup(SetupAction action);
 
-// The uninstall window must not run from the folder it removes. When it would, a copy in %TEMP% takes over and this
-// returns true.
-bool HandOffToTemporaryCopy();
+// Ends every process running `image` in any session, apart from this one and the one that started it.
+void EndProcessesRunning(const std::wstring& image);
+
+// Writes the entry in Settings > Apps for the installed file, with this build's version.
+bool RecordUninstallEntry();
+
+// The uninstall and About windows must not hold the installed file, which they may see removed or replaced. When this
+// is the installed copy, a copy in %TEMP% takes over with `arguments` and this returns true.
+bool HandOffToTemporaryCopy(const wchar_t* arguments);
 
 // A copy started by HandOffToTemporaryCopy removes itself once it exits.
 void RemoveTemporaryCopyAtExit();

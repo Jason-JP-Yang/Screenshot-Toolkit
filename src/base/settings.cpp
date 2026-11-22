@@ -32,8 +32,10 @@ bool IsAbsolute(const std::wstring& path) {
   return (path.size() > 2 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) || path.rfind(L"\\\\", 0) == 0;
 }
 
-Settings Load() {
-  Settings settings{L"", config::kDwellSeconds, config::kCaptureIncludesThumbnails, config::kDeleteToRecycleBin};
+}  // namespace
+
+Settings ReadSettings() {
+  Settings settings{L"", config::kDwellSeconds, config::kCaptureIncludesThumbnails, config::kDeleteToRecycleBin, config::kAutoUpdate};
   const std::wstring path = SettingsPath();
   if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return settings;
 
@@ -51,13 +53,12 @@ Settings Load() {
   }
   settings.capture_includes_thumbnails = ReadFlag(path, L"CaptureIncludesThumbnails", settings.capture_includes_thumbnails);
   settings.delete_to_recycle_bin = ReadFlag(path, L"DeleteToRecycleBin", settings.delete_to_recycle_bin);
+  settings.auto_update = ReadFlag(path, L"AutoUpdate", settings.auto_update);
   return settings;
 }
 
-}  // namespace
-
 const Settings& CurrentSettings() {
-  static const Settings settings = Load();
+  static const Settings settings = ReadSettings();
   return settings;
 }
 
@@ -70,7 +71,7 @@ std::wstring DefaultSettingsText() {
   wchar_t dwell[32];
   swprintf_s(dwell, L"%g", config::kDwellSeconds);
   std::wstring text;
-  text += L"; Screenshot Toolkit settings, read when it starts. After a change, choose Quick Restart in its About window.\r\n";
+  text += L"; Screenshot Toolkit settings, read when it starts. After a change, choose Quit and then Quick Restart in its About window.\r\n";
   text += L"; A line left out keeps its default.\r\n\r\n";
   text += L"[General]\r\n";
   text += L"; Where screenshots are saved. Empty means Pictures\\Screenshots. Variables such as %USERPROFILE% work.\r\n";
@@ -81,6 +82,9 @@ std::wstring DefaultSettingsText() {
   text += std::wstring(L"CaptureIncludesThumbnails=") + (config::kCaptureIncludesThumbnails ? L"1" : L"0") + L"\r\n";
   text += L"; 1 sends screenshots dropped on the rubbish bin to the Recycle Bin, 0 deletes them for good.\r\n";
   text += std::wstring(L"DeleteToRecycleBin=") + (config::kDeleteToRecycleBin ? L"1" : L"0") + L"\r\n";
+  text += L"; 1 checks GitHub for a newer build every 12 hours and at each start, and installs it while you are away.\r\n";
+  text += L"; 0 checks only when you choose Check for Updates.\r\n";
+  text += std::wstring(L"AutoUpdate=") + (config::kAutoUpdate ? L"1" : L"0") + L"\r\n";
   return text;
 }
 

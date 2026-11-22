@@ -40,7 +40,7 @@ constexpr wchar_t kServiceDescription[] =
 constexpr wchar_t kServiceSecurity[] =
     L"D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
 constexpr wchar_t kShortcutName[] = L"Screenshot Toolkit.lnk";
-constexpr wchar_t kTemporaryPrefix[] = L"ScreenshotToolkit-Uninstall-";
+constexpr wchar_t kTemporaryPrefix[] = L"ScreenshotToolkit-Window-";
 
 // What earlier versions left: logon tasks in their own folder, and a hook process.
 constexpr wchar_t kLegacyTaskFolder[] = L"Screenshot Toolkit";
@@ -69,12 +69,6 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id) {
   return result;
 }
 
-std::wstring SystemDirectory() {
-  wchar_t directory[MAX_PATH];
-  const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
-  return length > 0 && length < MAX_PATH ? std::wstring(directory) : std::wstring(L"C:\\Windows\\System32");
-}
-
 std::wstring ShortcutPath() {
   const std::wstring folder = KnownFolder(FOLDERID_CommonPrograms);
   return folder.empty() ? folder : folder + L"\\" + kShortcutName;
@@ -97,26 +91,11 @@ DWORD ParentProcessId() {
   return parent;
 }
 
-// Whatever still runs the installed file, in any session: an application started before, or an About window.
-void EndInstalledProcesses() {
-  const std::wstring installed = InstalledExecutablePath();
-  const DWORD self = GetCurrentProcessId();
-  const DWORD parent = ParentProcessId();
-  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return;
-  PROCESSENTRY32W entry{sizeof(entry)};
-  for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
-    if (entry.th32ProcessID == self || entry.th32ProcessID == parent || _wcsicmp(entry.szExeFile, kExecutableName) != 0) continue;
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
-    if (process == nullptr) continue;
-    wchar_t image[MAX_PATH * 4];
-    DWORD length = ARRAYSIZE(image);
-    if (QueryFullProcessImageNameW(process, 0, image, &length) && SamePath(image, installed) && TerminateProcess(process, 1)) {
-      WaitForSingleObject(process, 3000);
-    }
-    CloseHandle(process);
-  }
-  CloseHandle(snapshot);
+void RemoveProductKey() {
+  HKEY software = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE", 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY, &software) != ERROR_SUCCESS) return;
+  RegDeleteTreeW(software, kProductName);
+  RegCloseKey(software);
 }
 
 bool StopService() {
@@ -148,7 +127,9 @@ bool StopEverything() {
     CloseHandle(event);
   }
   WaitForApplicationExit(5000);
-  EndInstalledProcesses();
+  // Whatever still runs the installed file or an update waiting to go in, in any session.
+  EndProcessesRunning(InstalledExecutablePath());
+  EndProcessesRunning(StagedExecutablePath());
   return stopped;
 }
 
@@ -341,25 +322,6 @@ bool RemoveService() {
   return removed;
 }
 
-// A file, or a folder and all it holds. A link inside is removed, never followed.
-bool DeleteTree(const std::wstring& path) {
-  const DWORD attributes = GetFileAttributesW(path.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES) return true;
-  if (attributes & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
-  if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) return DeleteFileW(path.c_str()) != FALSE;
-  if (!(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-    WIN32_FIND_DATAW data;
-    HANDLE find = FindFirstFileW((path + L"\\*").c_str(), &data);
-    if (find != INVALID_HANDLE_VALUE) {
-      do {
-        if (wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) DeleteTree(path + L"\\" + data.cFileName);
-      } while (FindNextFileW(find, &data));
-      FindClose(find);
-    }
-  }
-  return RemoveDirectoryW(path.c_str()) != FALSE;
-}
-
 // Tracing's log, switch file, and images in this user's %TEMP%.
 void RemoveTraceFiles() {
   wchar_t temp[MAX_PATH + 1];
@@ -410,6 +372,9 @@ int Install(HWND window) {
   const std::wstring target = InstalledExecutablePath();
   step(0);
   if (!StopEverything()) return kFailStop;
+  // An update waiting from the copy installed before has no place over this one.
+  DeleteTree(UpdateDirectory());
+  RemoveProductKey();
   step(1);
   if (!CopyProgram()) return kFailCopy;
   step(2);
@@ -430,6 +395,7 @@ int Uninstall(HWND window) {
   step(1);
   if (!RemoveService()) return kFailRemoveService;
   RemoveUninstallEntry();
+  RemoveProductKey();
   RemoveStartShortcut();
   RemoveLegacyTasks();
   step(2);
@@ -520,7 +486,30 @@ int RunQuietSetup(SetupAction action) {
   return static_cast<int>(code);
 }
 
-bool HandOffToTemporaryCopy() {
+void EndProcessesRunning(const std::wstring& image) {
+  if (image.empty()) return;
+  const DWORD self = GetCurrentProcessId();
+  const DWORD parent = ParentProcessId();
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return;
+  PROCESSENTRY32W entry{sizeof(entry)};
+  for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+    if (entry.th32ProcessID == self || entry.th32ProcessID == parent || _wcsicmp(entry.szExeFile, kExecutableName) != 0) continue;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+    if (process == nullptr) continue;
+    wchar_t path[MAX_PATH * 4];
+    DWORD length = ARRAYSIZE(path);
+    if (QueryFullProcessImageNameW(process, 0, path, &length) && SamePath(path, image) && TerminateProcess(process, 1)) {
+      WaitForSingleObject(process, 3000);
+    }
+    CloseHandle(process);
+  }
+  CloseHandle(snapshot);
+}
+
+bool RecordUninstallEntry() { return WriteUninstallEntry(InstalledExecutablePath()); }
+
+bool HandOffToTemporaryCopy(const wchar_t* arguments) {
   if (!IsInstalledCopy()) return false;
   wchar_t temp[MAX_PATH + 1];
   const DWORD length = GetTempPathW(MAX_PATH, temp);
@@ -532,7 +521,7 @@ bool HandOffToTemporaryCopy() {
     RemoveDirectoryW(directory.c_str());
     return false;
   }
-  std::wstring command_line = Quoted(copy) + L" --uninstall";
+  std::wstring command_line = Quoted(copy) + L" " + arguments;
   STARTUPINFOW startup{sizeof(startup)};
   PROCESS_INFORMATION process{};
   if (!CreateProcessW(copy.c_str(), command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, temp, &startup, &process)) {

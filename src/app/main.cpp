@@ -1,9 +1,12 @@
 // Entry point. Modes:
 //   (no arguments)  The About window when this is the installed copy, and the setup window otherwise.
-//   --run           The application: capture, overlay, and persistence. The service starts it this way.
+//   --run           The application: capture, overlay, and persistence. The service starts it this way. With
+//                   --takeover, it replaces the copy running in this session once it is ready.
 //   --service       The service that keeps the application running in each session. See service/service.h.
+//   --apply-update  Puts a downloaded update in place. See update/updater.h.
 //   --install       The setup window. With --quiet, installs without one.
 //   --uninstall     The uninstall window, as Settings > Apps opens it. With --quiet, removes without one.
+//   --about         The About window.
 //   --elevated <install|uninstall> <window>   The setup steps, run elevated for the window.
 //   --quit          Asks the running application to exit. It stays down until the next sign-in.
 #include "sstk/base/platform.h"
@@ -18,6 +21,8 @@
 #include "sstk/setup/installer.h"
 #include "sstk/setup/window.h"
 #include "sstk/storage/store.h"
+#include "sstk/update/state.h"
+#include "sstk/update/updater.h"
 
 #include <psapi.h>
 #include <shellapi.h>
@@ -37,6 +42,42 @@ namespace {
 constexpr wchar_t kControllerClass[] = L"ScreenshotToolkit.Controller";
 constexpr UINT_PTR kTrimTimer = 2;
 constexpr UINT_PTR kClipboardTimer = 3;
+constexpr UINT_PTR kUpdateTimer = 4;
+constexpr UINT kUpdateIdlePollMs = 5000;
+constexpr DWORD kTakeoverWaitMs = 10000;
+
+// Watches the service's update state through the registry's own notification, so it costs nothing until it changes.
+class UpdateWatch {
+ public:
+  ~UpdateWatch() {
+    if (key_ != nullptr) RegCloseKey(key_);
+    if (event_ != nullptr) CloseHandle(event_);
+  }
+
+  bool Open() {
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UpdateKeyPath().c_str(), 0, KEY_NOTIFY | KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key_) != ERROR_SUCCESS) {
+      key_ = nullptr;
+      return false;
+    }
+    event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    return Arm();
+  }
+
+  bool Arm() {
+    return event_ != nullptr && RegNotifyChangeKeyValue(key_, FALSE, REG_NOTIFY_CHANGE_LAST_SET, event_, TRUE) == ERROR_SUCCESS;
+  }
+
+  HANDLE event() const { return event_; }
+
+ private:
+  HKEY key_ = nullptr;
+  HANDLE event_ = nullptr;
+};
+
+DWORD InputIdleMs() {
+  LASTINPUTINFO input{sizeof(input)};
+  return GetLastInputInfo(&input) ? GetTickCount() - input.dwTime : 0;
+}
 
 // Everything owned by the UI thread.
 struct App {
@@ -145,6 +186,22 @@ void ClearInstalledClipboard(App& app) {
   app.clearing_clipboard = false;
 }
 
+// An update the service holds asks for a quiet moment: nothing on screen, and nobody at the keyboard or mouse for a
+// while. The check runs on a timer only while one waits.
+void WatchUpdate(App& app) {
+  UpdateStatus status;
+  if (ReadUpdateStatus(&status) && status.state == UpdateState::kReady) {
+    SetTimer(app.controller, kUpdateTimer, kUpdateIdlePollMs, nullptr);
+  } else {
+    KillTimer(app.controller, kUpdateTimer);
+  }
+}
+
+void OfferUpdate(App& app) {
+  if (!app.overlay->IsIdle() || !app.store.IsIdle() || InputIdleMs() < config::kUpdateIdleSeconds * 1000u) return;
+  if (AskServiceToApplyUpdate()) KillTimer(app.controller, kUpdateTimer);
+}
+
 LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   App* app = g_app;
   if (app == nullptr || app->overlay == nullptr) return DefWindowProcW(window, message, wparam, lparam);
@@ -223,6 +280,8 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
         } else {
           InstallPendingClipboard(*app);
         }
+      } else if (wparam == kUpdateTimer) {
+        OfferUpdate(*app);
       }
       return 0;
     case WM_DISPLAYCHANGE:
@@ -238,44 +297,52 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
   }
 }
 
-int RunApplication() {
-  HANDLE instance = CreateMutexW(nullptr, TRUE, kAppMutexName);
-  if (instance == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+// Waits for a handle while still answering messages, so that broadcasts to this process's windows never stall.
+DWORD WaitAnswering(HANDLE handle, DWORD timeout_ms) {
+  const ULONGLONG deadline = GetTickCount64() + timeout_ms;
+  for (;;) {
+    const ULONGLONG now = GetTickCount64();
+    const DWORD left = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
+    const DWORD wait = MsgWaitForMultipleObjectsEx(1, &handle, left, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (wait != WAIT_OBJECT_0 + 1) return wait;
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      if (message.message == WM_QUIT) return WAIT_FAILED;
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+  }
+}
 
-  DisablePowerThrottling();
-  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
-
+// Captures until asked to quit: the hooks, the capture thread, and the message loop.
+int Serve(App& app) {
   HANDLE trigger = CreateEventW(nullptr, FALSE, FALSE, kTriggerEventName);
   HANDLE quit = CreateEventW(nullptr, TRUE, FALSE, kQuitEventName);
-  if (trigger == nullptr || quit == nullptr) return 1;
-
-  WNDCLASSW window_class{};
-  window_class.lpfnWndProc = ControllerProc;
-  window_class.hInstance = GetModuleHandleW(nullptr);
-  window_class.lpszClassName = kControllerClass;
-  RegisterClassW(&window_class);
-
-  App app;
-  // A hidden top-level window: unlike a message-only window, it receives display change broadcasts.
-  app.controller = CreateWindowExW(WS_EX_TOOLWINDOW, kControllerClass, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
-                                   window_class.hInstance, nullptr);
-  if (app.controller == nullptr || !app.compositor.Initialize()) return 1;
-
-  app.store.Start(app.controller);
-  app.overlay = std::make_unique<Overlay>(app.controller, app.compositor, app.store);
-  g_app = &app;
-  app.overlay->Warmup();
-  app.store.Warmup();
+  // A copy taken over was asked to quit through this name. Whatever that left set is not meant for this one.
+  if (quit != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) ResetEvent(quit);
+  if (trigger == nullptr || quit == nullptr) {
+    if (trigger != nullptr) CloseHandle(trigger);
+    if (quit != nullptr) CloseHandle(quit);
+    return 1;
+  }
   ScheduleTrim(app);
+  UpdateWatch updates;
+  const bool watching = updates.Open();
+  WatchUpdate(app);
 
   std::thread hook_thread([&app, quit] { RunKeyboardHook(app.controller, quit); });
   std::thread capture_thread([&app, trigger, quit] { RunCaptureLoop(app.controller, trigger, quit); });
   Trace("application ready");
 
+  const HANDLE waits[2] = {quit, updates.event()};
   bool running = true;
   while (running) {
-    DWORD wait = MsgWaitForMultipleObjectsEx(1, &quit, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    const DWORD wait = MsgWaitForMultipleObjectsEx(watching ? 2 : 1, waits, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     if (wait == WAIT_OBJECT_0) break;
+    if (watching && wait == WAIT_OBJECT_0 + 1) {
+      updates.Arm();
+      WatchUpdate(app);
+    }
     MSG message;
     while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
       if (message.message == WM_QUIT) {
@@ -291,16 +358,57 @@ int RunApplication() {
   SetEvent(quit);
   hook_thread.join();
   capture_thread.join();
-  app.store.Stop();
-  DropPendingClipboard(app);
-  g_app = nullptr;
-  app.overlay.reset();
-  app.compositor.Shutdown();
-  DestroyWindow(app.controller);
   CloseHandle(quit);
   CloseHandle(trigger);
-  CloseHandle(instance);
   return 0;
+}
+
+// With `takeover`, a copy already running in this session hands over to this one, as after an update.
+int RunApplication(bool takeover) {
+  HANDLE instance = CreateMutexW(nullptr, TRUE, kAppMutexName);
+  if (instance == nullptr) return 1;
+  const bool replacing = GetLastError() == ERROR_ALREADY_EXISTS;
+  if (replacing && !takeover) {
+    CloseHandle(instance);
+    return 0;
+  }
+
+  DisablePowerThrottling();
+  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+
+  WNDCLASSW window_class{};
+  window_class.lpfnWndProc = ControllerProc;
+  window_class.hInstance = GetModuleHandleW(nullptr);
+  window_class.lpszClassName = kControllerClass;
+  RegisterClassW(&window_class);
+
+  App app;
+  int result = 1;
+  // A hidden top-level window: unlike a message-only window, it receives display change broadcasts.
+  app.controller = CreateWindowExW(WS_EX_TOOLWINDOW, kControllerClass, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
+                                   window_class.hInstance, nullptr);
+  if (app.controller != nullptr && app.compositor.Initialize()) {
+    app.store.Start(app.controller);
+    app.overlay = std::make_unique<Overlay>(app.controller, app.compositor, app.store);
+    g_app = &app;
+    app.overlay->Warmup();
+    app.store.Warmup();
+    // The old copy is asked to go only once this one is ready, so screenshots pause just while it exits.
+    DWORD handed = WAIT_OBJECT_0;
+    if (replacing) {
+      RequestQuit();
+      handed = WaitAnswering(instance, kTakeoverWaitMs);
+    }
+    if (handed == WAIT_OBJECT_0 || handed == WAIT_ABANDONED) result = Serve(app);
+    app.store.Stop();
+    DropPendingClipboard(app);
+    g_app = nullptr;
+    app.overlay.reset();
+    app.compositor.Shutdown();
+  }
+  if (app.controller != nullptr) DestroyWindow(app.controller);
+  CloseHandle(instance);
+  return result;
 }
 
 // The words after the program's name. None of this program's own arguments is quoted, and splitting them here keeps
@@ -347,21 +455,24 @@ int Dispatch() {
   const std::vector<std::wstring> arguments = Arguments();
   const bool quiet = Find(arguments, L"--quiet") >= 0;
   if (Find(arguments, L"--service") >= 0) return RunService();
-  if (Find(arguments, L"--run") >= 0) return RunApplication();
+  if (Find(arguments, L"--run") >= 0) return RunApplication(Find(arguments, L"--takeover") >= 0);
+  if (Find(arguments, L"--apply-update") >= 0) return RunApplyUpdate();
   if (const int at = Find(arguments, L"--elevated"); at >= 0) return RunElevatedSteps(arguments, at);
   if (Find(arguments, L"--install") >= 0) return quiet ? RunQuietSetup(SetupAction::kInstall) : RunWindow(SetupWindowMode::kInstall);
-  if (Find(arguments, L"--uninstall") >= 0) {
-    if (quiet) return RunQuietSetup(SetupAction::kUninstall);
-    if (HandOffToTemporaryCopy()) return 0;
-    const int result = RunWindow(SetupWindowMode::kUninstall);
-    RemoveTemporaryCopyAtExit();
-    return result;
-  }
   if (Find(arguments, L"--quit") >= 0) {
     RequestQuit();
     return 0;
   }
-  return RunWindow(IsInstalledCopy() ? SetupWindowMode::kAbout : SetupWindowMode::kInstall);
+  // The uninstall and About windows run from a copy in %TEMP%, which removes itself when they close.
+  const bool uninstall = Find(arguments, L"--uninstall") >= 0;
+  if (uninstall && quiet) return RunQuietSetup(SetupAction::kUninstall);
+  if (uninstall || Find(arguments, L"--about") >= 0 || IsInstalledCopy()) {
+    if (HandOffToTemporaryCopy(uninstall ? L"--uninstall" : L"--about")) return 0;
+    const int result = RunWindow(uninstall ? SetupWindowMode::kUninstall : SetupWindowMode::kAbout);
+    RemoveTemporaryCopyAtExit();
+    return result;
+  }
+  return RunWindow(SetupWindowMode::kInstall);
 }
 
 }  // namespace

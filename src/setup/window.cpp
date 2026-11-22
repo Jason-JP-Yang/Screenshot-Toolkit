@@ -7,6 +7,7 @@
 #include "sstk/graphics/compositor.h"
 #include "sstk/service/service.h"
 #include "sstk/setup/installer.h"
+#include "sstk/update/state.h"
 #include "sstk/version.h"
 
 #include <dwmapi.h>
@@ -100,11 +101,12 @@ TextLine RenderTitle(int pixels, uint32_t color) {
 
 // The fallback when no service answers: the application then runs without UI Access.
 void LaunchDirectly() {
-  const std::wstring self = ExecutablePath();
-  std::wstring command_line = L"\"" + self + L"\" --run";
+  const std::wstring installed = InstalledExecutablePath();
+  const std::wstring image = GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES ? installed : ExecutablePath();
+  std::wstring command_line = L"\"" + image + L"\" --run";
   STARTUPINFOW startup{sizeof(startup)};
   PROCESS_INFORMATION process{};
-  if (CreateProcessW(self.c_str(), command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+  if (CreateProcessW(image.c_str(), command_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
   }
@@ -120,7 +122,8 @@ class SetupWindow {
   int Run();
 
  private:
-  enum class Phase { kIdle, kWaiting, kWorking, kFinishing, kDone, kBusy };
+  // kUpdating: the About window shows an update under way, whoever started it.
+  enum class Phase { kIdle, kWaiting, kWorking, kFinishing, kDone, kBusy, kUpdating };
 
   // Two layers, so that text changes cross-fade.
   struct Slot {
@@ -140,6 +143,8 @@ class SetupWindow {
   struct ButtonVisuals {
     RECT rect{};
     ComPtr<IDCompositionVisual> root;
+    ComPtr<IDCompositionEffectGroup> root_effect;
+    AnimFloat shown;
     ComPtr<IDCompositionScaleTransform> scale;
     ComPtr<IDCompositionRectangleClip> clip;
     ComPtr<IDCompositionVisual> face[2];
@@ -176,7 +181,6 @@ class SetupWindow {
   float Px(float dip) const { return std::round(dip * scale_); }
   int button_count() const { return mode_ == SetupWindowMode::kAbout ? 2 : 1; }
   bool Interactive() const { return phase_ == Phase::kIdle || phase_ == Phase::kDone; }
-  bool Busy() const { return !Interactive(); }
   SetupAction action() const { return mode_ == SetupWindowMode::kUninstall ? SetupAction::kUninstall : SetupAction::kInstall; }
   IDCompositionDevice* device() const { return compositor_.device(); }
   float ButtonWidth(int index) const { return static_cast<float>(buttons_visual_[index].rect.right - buttons_visual_[index].rect.left); }
@@ -212,6 +216,12 @@ class SetupWindow {
   void ShowFailure(int code);
   void RunAboutAction(bool restart);
   void RefreshStatus(bool animate);
+  void HideButton(int index, bool hidden);
+  void CheckForUpdates();
+  void BeginUpdateView(DWORD baseline);
+  void PollStatus();
+  void ShowUpdate(const UpdateStatus& status);
+  bool CanClose() const { return phase_ == Phase::kIdle || phase_ == Phase::kDone || phase_ == Phase::kUpdating; }
 
   SetupWindowMode mode_;
   HWND window_ = nullptr;
@@ -245,6 +255,12 @@ class SetupWindow {
   int pressed_ = -1;
   int focus_ = 0;
   bool focus_shown_ = false;
+  bool hidden_[2] = {};
+  bool running_ = false;
+  // An update the About window follows: the state sequence it started after, when, and the outcome waiting to show.
+  DWORD watched_sequence_ = 0;
+  double update_started_ = 0.0;
+  UpdateStatus update_result_;
   bool tracking_ = false;
   std::thread worker_;
 };
@@ -306,9 +322,10 @@ int SetupWindow::Run() {
       buttons_[0] = {config::kSetupUninstall, Look::kDanger};
       break;
     case SetupWindowMode::kAbout:
-      buttons_[0] = {config::kSetupRestart, Look::kPrimary};
-      buttons_[1] = {config::kSetupQuit, Look::kSecondary};
-      line_text_[1] = IsApplicationRunning() ? config::kSetupRunning : config::kSetupStopped;
+      running_ = IsApplicationRunning();
+      buttons_[0] = {config::kSetupCheckUpdates, Look::kPrimary};
+      buttons_[1] = {running_ ? config::kSetupQuit : config::kSetupRestart, Look::kSecondary};
+      line_text_[1] = running_ ? config::kSetupRunning : config::kSetupStopped;
       SetTimer(window_, kStatusTimer, kStatusPollMs, nullptr);
       break;
   }
@@ -316,6 +333,7 @@ int SetupWindow::Run() {
   FitWindow(&work, nullptr);
   ShowWindow(window_, SW_SHOWNORMAL);
   SetForegroundWindow(window_);
+  PollStatus();
 
   MSG message;
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -478,6 +496,9 @@ void SetupWindow::BuildButton(int index, const RECT& rect) {
   b.root->SetOffsetX(static_cast<float>(rect.left));
   b.root->SetOffsetY(static_cast<float>(rect.top));
   b.root->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  b.root_effect = compositor_.CreateEffectGroup();
+  b.root->SetEffect(b.root_effect.Get());
+  b.shown.Bind(b.root_effect.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
   b.scale = compositor_.CreateScale();
   b.scale->SetCenterX(w * 0.5f);
   b.scale->SetCenterY(h * 0.5f);
@@ -543,7 +564,8 @@ void SetupWindow::BuildButton(int index, const RECT& rect) {
   b.fill_right.Snap(bar ? progress_ * w : 0.0f);
   b.veil_alpha.Snap(0.0f);
   b.press.Snap(1.0f);
-  b.ring_alpha.Snap(focus_shown_ && focus_ == index && Interactive() ? 1.0f : 0.0f);
+  b.ring_alpha.Snap(focus_shown_ && focus_ == index && Interactive() && !hidden_[index] ? 1.0f : 0.0f);
+  b.shown.Snap(hidden_[index] ? 0.0f : 1.0f);
   b.top.Snap(bar ? bar_top : 0.0f);
   b.bottom.Snap(bar ? bar_top + thickness : h);
   b.radius.Snap(bar ? thickness * 0.5f : h * 0.5f);
@@ -621,9 +643,18 @@ void SetupWindow::SetProgress(float fraction) {
 
 int SetupWindow::HitTest(POINT point) const {
   for (int i = 0; i < button_count(); ++i) {
-    if (PtInRect(&buttons_visual_[i].rect, point)) return i;
+    if (!hidden_[i] && PtInRect(&buttons_visual_[i].rect, point)) return i;
   }
   return -1;
+}
+
+void SetupWindow::HideButton(int index, bool hidden) {
+  if (hidden_[index] == hidden) return;
+  hidden_[index] = hidden;
+  if (hidden && focus_ == index) focus_ = 0;
+  if (hidden && hover_ == index) SetHover(-1);
+  buttons_visual_[index].shown.To(device(), compositor_.Now(), hidden ? 0.0f : 1.0f, config::kSetupFade);
+  compositor_.Commit();
 }
 
 void SetupWindow::SetHover(int index) {
@@ -642,7 +673,7 @@ void SetupWindow::ShowFocus(bool shown) {
   focus_shown_ = shown;
   const TimeBase now = compositor_.Now();
   for (int i = 0; i < button_count(); ++i) {
-    buttons_visual_[i].ring_alpha.To(device(), now, shown && i == focus_ && Interactive() ? 1.0f : 0.0f, config::kSetupHover);
+    buttons_visual_[i].ring_alpha.To(device(), now, shown && i == focus_ && Interactive() && !hidden_[i] ? 1.0f : 0.0f, config::kSetupHover);
   }
   compositor_.Commit();
 }
@@ -650,7 +681,11 @@ void SetupWindow::ShowFocus(bool shown) {
 void SetupWindow::Activate(int index) {
   if (!Interactive() || index < 0 || index >= button_count()) return;
   if (mode_ == SetupWindowMode::kAbout) {
-    RunAboutAction(index == 0);
+    if (index == 0) {
+      CheckForUpdates();
+    } else {
+      RunAboutAction(!running_);
+    }
   } else if (phase_ == Phase::kDone) {
     DestroyWindow(window_);
   } else {
@@ -747,6 +782,22 @@ void SetupWindow::Finish() {
 void SetupWindow::OnFinishTimer() {
   KillTimer(window_, kFinishTimer);
   if (phase_ != Phase::kFinishing) return;
+  if (mode_ == SetupWindowMode::kAbout) {
+    phase_ = Phase::kIdle;
+    std::wstring headline = std::wstring(L"Version ") + SSTK_VERSION_WIDE;
+    if (update_result_.state == UpdateState::kUpdated) {
+      headline = std::wstring(config::kSetupUpdatedTo) + L" " + update_result_.target;
+    } else if (update_result_.state == UpdateState::kUpToDate) {
+      headline = config::kSetupUpToDate;
+    } else if (update_result_.state == UpdateState::kFailed) {
+      headline = update_result_.message.empty() ? std::wstring(config::kSetupUpdateFailed) : update_result_.message;
+    }
+    SetLine(0, headline, true);
+    UnfoldFromBar(config::kSetupCheckUpdates, Look::kPrimary);
+    HideButton(1, false);
+    RefreshStatus(true);
+    return;
+  }
   const bool uninstalling = mode_ == SetupWindowMode::kUninstall;
   if (succeeded_) {
     phase_ = Phase::kDone;
@@ -785,7 +836,78 @@ void SetupWindow::RunAboutAction(bool restart) {
 }
 
 void SetupWindow::RefreshStatus(bool animate) {
-  SetLine(1, IsApplicationRunning() ? config::kSetupRunning : config::kSetupStopped, animate);
+  running_ = IsApplicationRunning();
+  SetLine(1, running_ ? config::kSetupRunning : config::kSetupStopped, animate);
+  if (phase_ == Phase::kIdle) SetButton(1, running_ ? config::kSetupQuit : config::kSetupRestart, Look::kSecondary, false);
+}
+
+void SetupWindow::CheckForUpdates() {
+  UpdateStatus status;
+  ReadUpdateStatus(&status);
+  if (!AskServiceToCheck()) {
+    SetLine(0, config::kSetupNoService, true);
+    return;
+  }
+  BeginUpdateView(status.sequence);
+}
+
+// The check button folds into a bar, and the second button steps aside until the update is over.
+void SetupWindow::BeginUpdateView(DWORD baseline) {
+  phase_ = Phase::kUpdating;
+  watched_sequence_ = baseline;
+  update_started_ = NowSeconds();
+  SetHover(-1);
+  ShowFocus(false);
+  HideButton(1, true);
+  FoldIntoBar();
+  SetLine(0, config::kSetupChecking, true);
+}
+
+void SetupWindow::PollStatus() {
+  if (mode_ != SetupWindowMode::kAbout) return;
+  UpdateStatus status;
+  const bool known = ReadUpdateStatus(&status);
+  // An update the service began by itself shows here too.
+  if (phase_ == Phase::kIdle && known &&
+      (status.state == UpdateState::kChecking || status.state == UpdateState::kDownloading || status.state == UpdateState::kInstalling)) {
+    BeginUpdateView(status.sequence - 1);
+  }
+  if (phase_ == Phase::kIdle || phase_ == Phase::kUpdating) RefreshStatus(true);
+  if (phase_ == Phase::kUpdating && known) ShowUpdate(status);
+}
+
+void SetupWindow::ShowUpdate(const UpdateStatus& status) {
+  const std::wstring target = L" " + status.target;
+  switch (status.state) {
+    case UpdateState::kChecking:
+      SetLine(0, config::kSetupChecking, true);
+      SetProgress(0.1f);
+      return;
+    case UpdateState::kDownloading:
+      SetLine(0, config::kSetupDownloading + target, true);
+      SetProgress(0.1f + 0.75f * static_cast<float>(std::min<DWORD>(status.progress, 1000)) / 1000.0f);
+      return;
+    case UpdateState::kReady:
+      // Someone is looking at this window, so this is no moment to wait for: it goes in now.
+      AskServiceToApplyUpdate();
+      SetLine(0, config::kSetupUpdating + target, true);
+      SetProgress(0.88f);
+      return;
+    case UpdateState::kInstalling:
+      SetLine(0, config::kSetupUpdating + target, true);
+      SetProgress(0.92f);
+      return;
+    default:
+      break;
+  }
+  // An outcome, once it is newer than what was there before and the bar has been up for a moment.
+  if (status.sequence <= watched_sequence_ || NowSeconds() - update_started_ < config::kSetupStepMinimum * 2.0) return;
+  update_result_ = status;
+  phase_ = Phase::kFinishing;
+  succeeded_ = status.state == UpdateState::kUpdated || status.state == UpdateState::kUpToDate;
+  if (succeeded_) SetProgress(1.0f);
+  const double wait = (succeeded_ ? SpringSettleTime(config::kSetupProgress) * 0.6 : 0.0) + config::kSetupFinishHold;
+  SetTimer(window_, kFinishTimer, static_cast<UINT>(wait * 1000.0), nullptr);
 }
 
 LRESULT CALLBACK SetupWindow::Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -885,8 +1007,8 @@ LRESULT SetupWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
         OnFinishTimer();
       } else if (wparam == kPaceTimer) {
         Pace();
-      } else if (wparam == kStatusTimer && phase_ == Phase::kIdle) {
-        RefreshStatus(true);
+      } else if (wparam == kStatusTimer) {
+        PollStatus();
       }
       return 0;
     case WM_SETTINGCHANGE:
@@ -909,7 +1031,7 @@ LRESULT SetupWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
       return 0;
     }
     case WM_CLOSE:
-      if (!Busy()) DestroyWindow(window_);  // Setup under way cannot be left.
+      if (CanClose()) DestroyWindow(window_);  // Setup under way cannot be left; an update goes on without the window.
       return 0;
     case WM_DESTROY:
       KillTimer(window_, kStatusTimer);
