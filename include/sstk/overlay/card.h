@@ -12,6 +12,11 @@
 // A scrolling screenshot is one more such bitmap. It starts where the scrolled area sits in the
 // screenshot and reaches past it, so the card shows it by moving its window over the plane too.
 // So is a window read by itself, which lies where the window does and may reach past the screen.
+//
+// Past the screen only such a picture has anything to show, so it is drawn there twice: once to fade in and out with
+// the others, and once beneath the screen's own copy at full strength. A view moving out past the screen then never
+// finds blank plane, and a region switch that needs to go there first comes back within the screen, crosses it, and
+// only then goes out into the picture it is heading for, revealing what lies past the screen rather than fading it in.
 #pragma once
 
 #include "sstk/capture/capture.h"
@@ -152,6 +157,7 @@ class Card {
     ComPtr<IDCompositionVisual> visual;
     ComPtr<IDCompositionEffectGroup> effect;
     AnimFloat alpha;
+    ComPtr<IDCompositionVisual> rim;  // The same picture beneath the screen's copy, for one that reaches past it.
     double retire_at = 0.0;
   };
 
@@ -182,6 +188,10 @@ class Card {
   void BuildCaches(const Image& frame, bool with_base);
   void SetCrisp(size_t index, Image pixels);
   void PopOption();
+  RectF Screen() const;            // The plane the screen's own pictures cover.
+  RectF Valid(int index) const;    // Where the picture an option shows has something to show.
+  bool OwnPicture(int index) const;
+  bool MoveThrough(const RectF& rect, const RectF& source, const SpringSpec& spec, const TimeBase& now);
   void ShowCrisp(int index, const TimeBase& now, double delay, const SpringSpec& spec);
   void BuildShadowVisuals(const CardShadow& shadow, IDCompositionClip* clip);
   IDCompositionDevice* device() const { return compositor_.device(); }
@@ -212,6 +222,7 @@ class Card {
   ComPtr<IDCompositionVisual> plane_;
   ComPtr<IDCompositionVisual> plane_scaled_;
   ComPtr<IDCompositionScaleTransform> plane_scale_;
+  ComPtr<IDCompositionVisual> rims_;  // Beneath everything else on the plane.
   ComPtr<IDCompositionVisual> full_visual_;
   ComPtr<IDCompositionSurface> full_surface_;
   ComPtr<IDCompositionVisual> base_visual_;

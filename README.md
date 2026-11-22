@@ -408,6 +408,8 @@ The flash is on screen about 4 ms after the key press. Copying a 2560×1600 moni
 
 Everything you see is a DirectComposition visual. Spring motion has an exact formula, so each animated value is handed to DWM once as a chain of curve segments, and DWM plays it at the display's refresh rate. The process sleeps while things move, and CPU load can't make an animation stutter. Values that follow the pointer, such as a thumbnail being dragged, are updated once per frame instead.
 
+A thumbnail is a moving window over the whole screenshot, so switching regions is one camera move. Past the screen's edge only a window read by itself or a scrolling screenshot has anything to show, and a copy of it lies there at full strength beneath the screen's own picture. A switch that has to reach past the edge first comes back within the screen, crosses it, and then goes out, all on one spring through those stops. The view never finds empty space, and what lies past the edge slides in with the moving edge instead of fading in.
+
 The program draws with WARP, a software device that only passes finished pixels to DirectComposition, while DWM composes them on the GPU. On an RTX 4060 laptop this makes creating the device about ten times faster than using the graphics driver (8 to 18 ms instead of 100 to 200 ms) and saves about 80 MB of committed memory.
 
 <details>
