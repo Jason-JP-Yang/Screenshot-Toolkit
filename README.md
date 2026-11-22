@@ -115,7 +115,7 @@ The default build's settings live in headers under `include/sstk/config/`. Chang
 
 ## Releases
 
-The version number is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. Every build is named `vX.Y.Z[-dev]-<commit>-beta`, as in `v0.2.0-dev-1a2b3c4d-beta`: the first eight characters of the commit it was built from, and `dev` unless that commit is the one tagged `vX.Y.Z`. `beta` stays until a later version drops it. The name shows in the setup window, in Settings > Apps, and in the file's properties.
+The version number is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. Every build is named `vX.Y.Z[-dev]-<commit>-beta`, as in `v0.2.0-dev-1a2b3c4d-beta`: the first eight characters of the commit it was built from, and `dev` unless that commit is the one tagged `vX.Y.Z`. `beta` stays until a later version drops it. The name shows in the setup window, in Settings > Apps, and in the file's properties. The setup window also shows when the build was made, as a full timestamp in UTC.
 
 To publish, tag the release commit first, so the build carries no `dev`, then run:
 

@@ -30,6 +30,7 @@ constexpr UINT kMsgFinished = WM_APP + 66;    // wParam: the steps' exit code.
 constexpr UINT kMsgActionDone = WM_APP + 67;  // An About window's restart or quit is over.
 constexpr UINT_PTR kStatusTimer = 1;
 constexpr UINT_PTR kFinishTimer = 2;
+constexpr UINT_PTR kPaceTimer = 3;
 constexpr UINT kStatusPollMs = 500;
 constexpr DWORD kRestartWaitMs = 8000;
 // Window attributes from newer SDKs: dark title bar, and the caption's colors on Windows 11.
@@ -202,8 +203,11 @@ class SetupWindow {
   void Activate(int index);
   void StartSetup();
   void BeginWorking();
-  void OnStep(int step, int count);
+  void ShowStep(int step);
+  void Pace();
+  void OnStep(int step);
   void OnFinished(int code);
+  void Finish();
   void OnFinishTimer();
   void ShowFailure(int code);
   void RunAboutAction(bool restart);
@@ -228,6 +232,12 @@ class SetupWindow {
   Phase phase_ = Phase::kIdle;
   bool bar_ = false;
   float progress_ = 0.0f;
+  // Steps are shown at a steady pace, behind the ones the elevated process has reported.
+  int step_count_ = 0;
+  int reported_step_ = -1;
+  int shown_step_ = -1;
+  double step_shown_at_ = 0.0;
+  bool has_result_ = false;
   bool succeeded_ = false;
   int last_code_ = 0;
   int exit_code_ = 0;
@@ -287,7 +297,7 @@ int SetupWindow::Run() {
   }
 
   line_text_[0] = std::wstring(L"Version ") + SSTK_VERSION_WIDE;
-  line_text_[1] = SSTK_VERSION_DATE;
+  line_text_[1] = kBuildTime;
   switch (mode_) {
     case SetupWindowMode::kInstall:
       buttons_[0] = {config::kSetupInstall, Look::kPrimary};
@@ -650,6 +660,10 @@ void SetupWindow::Activate(int index) {
 
 void SetupWindow::StartSetup() {
   phase_ = Phase::kWaiting;
+  step_count_ = SetupStepCount(action());
+  reported_step_ = -1;
+  shown_step_ = -1;
+  has_result_ = false;
   SetHover(-1);
   ShowFocus(false);
   if (worker_.joinable()) worker_.join();
@@ -675,14 +689,37 @@ void SetupWindow::BeginWorking() {
   phase_ = Phase::kWorking;
   FoldIntoBar();
   SetLine(0, mode_ == SetupWindowMode::kUninstall ? config::kSetupUninstalling : config::kSetupInstalling, true);
-  SetLine(1, SetupStepText(action(), 0), true);
+  ShowStep(0);
+  Pace();
 }
 
-void SetupWindow::OnStep(int step, int count) {
-  if (phase_ == Phase::kWaiting) BeginWorking();
-  if (phase_ != Phase::kWorking || count <= 0) return;
+void SetupWindow::ShowStep(int step) {
+  shown_step_ = step;
+  step_shown_at_ = NowSeconds();
   SetLine(1, SetupStepText(action(), step), true);
-  SetProgress((step + 0.6f) / count);
+  SetProgress((step + 0.6f) / std::max(step_count_, 1));
+}
+
+// Shows the next reported step, or the result, once the current step has been up long enough.
+void SetupWindow::Pace() {
+  KillTimer(window_, kPaceTimer);
+  if (phase_ != Phase::kWorking || (shown_step_ >= reported_step_ && !has_result_)) return;
+  const double wait = step_shown_at_ + config::kSetupStepMinimum - NowSeconds();
+  if (wait > 0.0) {
+    SetTimer(window_, kPaceTimer, static_cast<UINT>(std::ceil(wait * 1000.0)), nullptr);
+  } else if (shown_step_ < reported_step_) {
+    ShowStep(shown_step_ + 1);
+    Pace();
+  } else {
+    Finish();
+  }
+}
+
+void SetupWindow::OnStep(int step) {
+  if (phase_ == Phase::kWaiting) BeginWorking();
+  if (phase_ != Phase::kWorking) return;
+  reported_step_ = std::max(reported_step_, std::min(step, step_count_ - 1));
+  Pace();
 }
 
 void SetupWindow::OnFinished(int code) {
@@ -694,6 +731,12 @@ void SetupWindow::OnFinished(int code) {
     ShowFailure(code);
     return;
   }
+  has_result_ = true;
+  Pace();
+}
+
+void SetupWindow::Finish() {
+  const int code = last_code_;
   phase_ = Phase::kFinishing;
   succeeded_ = code == kSetupDone;
   if (succeeded_) SetProgress(1.0f);
@@ -707,7 +750,7 @@ void SetupWindow::OnFinishTimer() {
   const bool uninstalling = mode_ == SetupWindowMode::kUninstall;
   if (succeeded_) {
     phase_ = Phase::kDone;
-    SetLine(0, uninstalling ? config::kSetupUninstalled : config::kSetupInstalled, true);
+    SetLine(0, uninstalling ? std::wstring(config::kSetupUninstalled) : std::wstring(config::kSetupInstalled) + L" " + SSTK_VERSION_WIDE, true);
     SetLine(1, uninstalling ? config::kSetupUninstalledHint : config::kSetupInstalledHint, true);
     UnfoldFromBar(uninstalling ? config::kSetupClose : config::kSetupDone, uninstalling ? Look::kSecondary : Look::kPrimary);
   } else {
@@ -824,7 +867,7 @@ LRESULT SetupWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
       }
       return 0;
     case kMsgSetupStep:
-      OnStep(static_cast<int>(wparam), static_cast<int>(lparam));
+      OnStep(static_cast<int>(wparam));
       return 0;
     case kMsgStarted:
       if (wparam != 0 && phase_ == Phase::kWaiting) BeginWorking();
@@ -840,6 +883,8 @@ LRESULT SetupWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
     case WM_TIMER:
       if (wparam == kFinishTimer) {
         OnFinishTimer();
+      } else if (wparam == kPaceTimer) {
+        Pace();
       } else if (wparam == kStatusTimer && phase_ == Phase::kIdle) {
         RefreshStatus(true);
       }
@@ -869,6 +914,7 @@ LRESULT SetupWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam) {
     case WM_DESTROY:
       KillTimer(window_, kStatusTimer);
       KillTimer(window_, kFinishTimer);
+      KillTimer(window_, kPaceTimer);
       PostQuitMessage(0);
       return 0;
     default:

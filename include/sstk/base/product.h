@@ -14,6 +14,9 @@ inline constexpr wchar_t kServiceName[] = L"ScreenshotToolkit";
 inline constexpr wchar_t kAppUserModelId[] = L"JasonJPYang.ScreenshotToolkit";
 inline constexpr wchar_t kUninstallKey[] = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ScreenshotToolkit";
 
+// When this program was built, as "YYYY-MM-DD hh:mm:ss UTC". Written by scripts/version.cmake.
+extern const wchar_t kBuildTime[];
+
 std::wstring ExecutablePath();
 std::wstring InstallDirectory();  // Program Files\Screenshot Toolkit
 std::wstring InstalledExecutablePath();

@@ -120,6 +120,7 @@ inline constexpr float kSetupPressScale = 0.97f;
 inline constexpr SpringSpec kSetupMorph{0.44f, 0.86f};  // A button folding into its progress bar and back.
 inline constexpr SpringSpec kSetupProgress{0.55f, 1.0f};
 inline constexpr SpringSpec kSetupFade{0.26f, 1.0f};
-inline constexpr double kSetupFinishHold = 0.30;  // The full bar stays this long before it turns back into a button.
+inline constexpr double kSetupStepMinimum = 0.65;  // Each step shows at least this long, however fast it really was.
+inline constexpr double kSetupFinishHold = 0.30;   // The full bar stays this long before it turns back into a button.
 
 }  // namespace sstk::config

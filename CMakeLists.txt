@@ -16,13 +16,16 @@ set(SSTK_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(SSTK_DEFINITIONS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A00000F)
 set(SSTK_OPTIONS /W4 /permissive- /utf-8 /Zc:__cplusplus /Gy /Gw $<$<CONFIG:Release>:/O2 /GL /DNDEBUG>)
 
-# The version name, vX.Y.Z[-dev]-<commit>-beta, is written on every build and only touched when it changes.
+# The version name, vX.Y.Z[-dev]-<commit>-beta, and the build's UTC time are written on every build, each file only
+# when it changes.
 add_custom_target(sstk_version
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DVERSION=${PROJECT_VERSION} -DGIT=${GIT_EXECUTABLE}
-          -DOUTPUT=${SSTK_GENERATED}/sstk/version.h -P ${CMAKE_SOURCE_DIR}/scripts/version.cmake
-  BYPRODUCTS ${SSTK_GENERATED}/sstk/version.h
+          -DOUTPUT=${SSTK_GENERATED}/sstk/version.h -DTIME_OUTPUT=${SSTK_GENERATED}/build_time.cpp
+          -P ${CMAKE_SOURCE_DIR}/scripts/version.cmake
+  BYPRODUCTS ${SSTK_GENERATED}/sstk/version.h ${SSTK_GENERATED}/build_time.cpp
   VERBATIM
 )
+set_source_files_properties(${SSTK_GENERATED}/build_time.cpp PROPERTIES GENERATED TRUE)
 
 # The icon is drawn in code and baked into an .ico at build time.
 add_executable(sstk_iconbake src/brand/iconbake.cpp src/graphics/image.cpp)
@@ -68,6 +71,7 @@ add_executable(ScreenshotToolkit WIN32
   src/setup/window.cpp
   src/storage/store.cpp
   res/app.rc
+  ${SSTK_GENERATED}/build_time.cpp
 )
 add_dependencies(ScreenshotToolkit sstk_version sstk_icon)
 set_source_files_properties(res/app.rc PROPERTIES OBJECT_DEPENDS "${SSTK_GENERATED}/app.ico;${SSTK_GENERATED}/sstk/version.h")
