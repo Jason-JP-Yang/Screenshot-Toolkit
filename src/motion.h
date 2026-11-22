@@ -53,6 +53,9 @@ class AnimFloat {
   // Eases from where it is up to a peak, then falls back to zero on a spring, with no corner at either end.
   void Pulse(IDCompositionDevice* device, const TimeBase& now, float peak, double rise, const SpringSpec& fall);
 
+  // Hands sinks without a bias an animation built elsewhere, which runs until the next Snap or To.
+  void Play(IDCompositionDevice* device, IDCompositionAnimation* animation);
+
   float ValueAt(double time) const;
   float target() const { return target_; }
   double end_time() const { return end_time_; }
@@ -71,6 +74,11 @@ class AnimFloat {
 
   std::array<Sink, 8> sinks_{};
   int sink_count_ = 0;
+  // The last constant DirectComposition took, and whether an animation has replaced it since.
+  IDCompositionDevice* device_ = nullptr;
+  float constant_ = 0.0f;
+  bool constant_known_ = false;
+  bool animated_ = false;
   float target_ = 0.0f;
   float displacement_ = 0.0f;
   float initial_velocity_ = 0.0f;

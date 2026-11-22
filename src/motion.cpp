@@ -85,7 +85,29 @@ void AnimFloat::Snap(float value) {
   displacement_ = 0.0f;
   initial_velocity_ = 0.0f;
   start_time_ = end_time_ = 0.0;
-  for (int i = 0; i < sink_count_; ++i) sinks_[i].setter(sinks_[i].object, value + sinks_[i].bias, nullptr);
+  // DirectComposition drops a constant equal to the last one it took, or to the default before any, even once an
+  // animation has replaced it, and the property stays wherever that animation was. An animation holding still takes.
+  const bool dropped = animated_ && (!constant_known_ || value == constant_);
+  for (int i = 0; i < sink_count_; ++i) {
+    const Sink& sink = sinks_[i];
+    ComPtr<IDCompositionAnimation> hold;
+    if (dropped && SUCCEEDED(device_->CreateAnimation(&hold))) {
+      hold->AddCubic(0.0, value + sink.bias, 0.0f, 0.0f, 0.0f);
+      sink.setter(sink.object, 0.0f, hold.Get());
+    } else {
+      sink.setter(sink.object, value + sink.bias, nullptr);
+    }
+  }
+  if (dropped) return;
+  constant_ = value;
+  constant_known_ = true;
+  animated_ = false;
+}
+
+void AnimFloat::Play(IDCompositionDevice* device, IDCompositionAnimation* animation) {
+  device_ = device;
+  animated_ = true;
+  for (int i = 0; i < sink_count_; ++i) sinks_[i].setter(sinks_[i].object, 0.0f, animation);
 }
 
 void AnimFloat::To(IDCompositionDevice* device, const TimeBase& now, float target, const SpringSpec& spec, double delay) {
@@ -118,6 +140,8 @@ void AnimFloat::Start(IDCompositionDevice* device, const TimeBase& now, float le
   start_time_ = now.seconds + delay;
   const double duration = SpringSettleTime(spec);
   end_time_ = start_time_ + duration;
+  device_ = device;
+  animated_ = true;
 
   for (int i = 0; i < sink_count_; ++i) {
     const Sink& sink = sinks_[i];

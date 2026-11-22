@@ -341,7 +341,6 @@ void Capsule::MakePiece(Piece& piece, const Image& image, float y) {
   const RECT ink = InkBounds(image);
   piece.ink_offset = static_cast<float>(ink.left);
   piece.ink_width = static_cast<float>(ink.right - ink.left);
-  piece.alpha = AnimFloat{};
   piece.alpha.Bind(piece.effect.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
   piece.alpha.Snap(0.0f);
   status_layer_->AddVisual(piece.visual.Get(), FALSE, nullptr);
@@ -353,6 +352,7 @@ void Capsule::RemovePiece(Piece& piece) {
   if (piece.visual) status_layer_->RemoveVisual(piece.visual.Get());
   piece.visual.Reset();
   piece.effect.Reset();
+  piece.alpha = AnimFloat{};  // It must not reach for the effect just released.
 }
 
 void Capsule::BuildRecording() {
@@ -649,7 +649,7 @@ void Capsule::Breathe(const TimeBase& now) {
   breath->AddSinusoidal(config::kBreathDelay, (1.0f + config::kBreathLow) * 0.5f, (1.0f - config::kBreathLow) * 0.5f,
                         config::kBreathHertz, 90.0f);
   breath->End(config::kBreathDelay + 3600.0, 1.0f);
-  pill_effect_->SetOpacity(breath.Get());
+  pill_alpha_.Play(compositor_.device(), breath.Get());
   breath_start_ = now.seconds + config::kBreathDelay;
   breathing_ = true;
 }
