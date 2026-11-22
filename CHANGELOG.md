@@ -14,6 +14,8 @@ Built programs are kept per version in the local `release/` folder, created by `
 - Opened from Start, the program shows its About window, with **Quick Restart** and **Complete Quit**. A complete quit lasts until Quick Restart or the next sign-in.
 - `settings.ini` changes the gallery folder, the dwell time, whether shots show the thumbnails, and whether deleting goes to the Recycle Bin, without a rebuild.
 - Every build is named `vX.Y.Z[-dev]-<commit>-beta`, with `dev` unless it was built from the commit tagged for its version.
+- GitHub Actions builds, signs, and publishes releases, all as pre-releases. Each push to main publishes its newest commit as the one dev build, and each version tag is published with its section of this changelog and a link comparing it with the version before. Builds are signed with a self-signed certificate and timestamped.
+- The project is licensed under the Apache License 2.0.
 
 ### Changed
 

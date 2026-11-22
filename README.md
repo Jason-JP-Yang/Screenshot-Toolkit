@@ -115,15 +115,32 @@ The default build's settings live in headers under `include/sstk/config/`. Chang
 
 ## Releases
 
-The version number is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed. Every build is named `vX.Y.Z[-dev]-<commit>-beta`, as in `v0.2.0-dev-1a2b3c4d-beta`: the first eight characters of the commit it was built from, and `dev` unless that commit is the one tagged `vX.Y.Z`. `beta` stays until a later version drops it. The name shows in the setup window, in Settings > Apps, and in the file's properties. The setup window also shows when the build was made, as a full timestamp in UTC.
+The version number is set in `CMakeLists.txt`, and `CHANGELOG.md` records what changed, under `## Unreleased` until a version is published. Every build is named `vX.Y.Z[-dev]-<commit>-beta`, as in `v0.2.0-dev-1a2b3c4d-beta`: the first eight characters of the commit it was built from, and `dev` unless that commit is the one tagged `vX.Y.Z`. `beta` stays until a later version drops it. The name shows in the setup window, in Settings > Apps, and in the file's properties. The setup window also shows when the build was made, as a full timestamp in UTC.
 
-To publish, tag the release commit first, so the build carries no `dev`, then run:
+GitHub Actions publishes every release, all marked as pre-releases while the program is in beta. See `.github/workflows/release.yml`.
 
-```bash
-scripts\release.cmd
+- Each push to `main` publishes its newest commit as a dev build, with the changelog's Unreleased section and a link comparing it with the last version. The dev build before it is removed. When pushes come close together, only the newest is published.
+- Each `vX.Y.Z` tag is built from that tag and published with its section of the changelog and a link comparing it with the version before. A version already published stays as it is; running the workflow by hand with **rebuild** publishes every version again.
+
+Each release holds `ScreenshotToolkit-<name>.exe` and its SHA-256. To publish a version, move the Unreleased entries under a new `## X.Y.Z` heading, set the version in `CMakeLists.txt`, commit, tag the commit `vX.Y.Z`, and push both.
+
+`scripts\release.cmd` still builds Release locally and copies the program to `release\<version>\`, a folder git does not track. Tag first, so the build carries no `dev`.
+
+### Signing
+
+Releases are signed with a self-signed certificate and timestamped by `scripts/sign.ps1`. Windows does not trust a self-signed certificate: the signature shows that the file is unchanged and which certificate signed it, but SmartScreen can still call the publisher unknown when the file is downloaded.
+
+Without further setup, each build is signed with a certificate made for it alone. To sign every release with the same certificate, run this once on your own machine:
+
+```powershell
+powershell -File scripts\new-signing-cert.ps1
 ```
 
-This builds Release and copies the program to `release\<version>\`, a local folder git does not track.
+Then add the two values it writes as repository secrets, `SIGNING_PFX` and `SIGNING_PASSWORD`, under Settings > Secrets and variables > Actions. Importing its `signing.cer` into a machine's Trusted Root Certification Authorities makes that machine show the signature as valid.
+
+## License
+
+Apache License 2.0. See `LICENSE` and `NOTICE`.
 
 ## How it stays fast and light
 

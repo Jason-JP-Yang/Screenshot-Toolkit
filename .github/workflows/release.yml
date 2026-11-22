@@ -1,0 +1,166 @@
+# Builds, signs, and publishes Screenshot Toolkit as GitHub releases, every one marked as a pre-release.
+#   A push to main publishes its newest commit as a dev build, vX.Y.Z-dev-<commit>-beta, and removes the dev build
+#   published before it.
+#   Each vX.Y.Z tag without a release is built from that tag and published as vX.Y.Z-<commit>-beta. That covers tags
+#   pushed later and the versions released before this workflow. Run by hand with "rebuild", it publishes every
+#   version again, as after the signing certificate changes.
+# A run stops the one still going before it, so only the newest commit is ever released.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build and publish every version again
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: List what to publish
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          released=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')
+          entries=()
+          for tag in $(git tag --list 'v*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true); do
+            if [ "$REBUILD" = true ] || ! grep -qxF "$tag" <<< "$released"; then
+              entries+=("{\"kind\":\"version\",\"ref\":\"$tag\"}")
+            fi
+          done
+          head=$(git rev-parse HEAD)
+          if ! git tag --points-at "$head" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            entries+=("{\"kind\":\"dev\",\"ref\":\"$head\"}")
+          fi
+          joined=$(IFS=,; echo "${entries[*]-}")
+          echo "matrix={\"include\":[$joined]}" >> "$GITHUB_OUTPUT"
+          echo "count=${#entries[@]}" >> "$GITHUB_OUTPUT"
+          echo "To publish: ${entries[*]-nothing}"
+
+  publish:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    name: ${{ matrix.kind }} ${{ matrix.ref }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1  # Oldest first, so the releases are listed in order.
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KIND: ${{ matrix.kind }}
+      REF: ${{ matrix.ref }}
+    steps:
+      - name: Check out what is built
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+          path: source
+
+      # Scripts and the changelog always come from main, since older tags predate them.
+      - name: Check out the pipeline
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pipeline
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build
+        shell: pwsh
+        working-directory: source
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Name the build
+        id: name
+        shell: pwsh
+        working-directory: source
+        run: |
+          $sha = git rev-parse HEAD
+          if ($env:KIND -eq 'version') {
+            $tag = $env:REF
+            $name = "$tag-$($sha.Substring(0, 8))-beta"
+            $section = $tag.Substring(1)
+            $versions = @(git tag --list 'v*' --sort=v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' })
+            $index = [array]::IndexOf($versions, $tag)
+            $base = if ($index -gt 0) { $versions[$index - 1] } else { '' }
+          } else {
+            # The name the program itself carries, from the header the build wrote.
+            $name = (Select-String -Path build/generated/sstk/version.h -Pattern 'SSTK_VERSION_TEXT "([^"]+)"').Matches[0].Groups[1].Value
+            $tag = $name
+            $section = 'Unreleased'
+            $base = git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD
+          }
+          "sha=$sha", "tag=$tag", "name=$name", "section=$section", "base=$base" | Add-Content $env:GITHUB_OUTPUT
+          Write-Host "$name from $sha, compared with '$base'"
+
+      - name: Sign
+        shell: pwsh
+        env:
+          NAME: ${{ steps.name.outputs.name }}
+          SIGNING_PFX: ${{ secrets.SIGNING_PFX }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          $asset = "ScreenshotToolkit-$env:NAME.exe"
+          Copy-Item source/build/ScreenshotToolkit.exe $asset
+          powershell -NoProfile -ExecutionPolicy Bypass -File pipeline/scripts/sign.ps1 -Path $asset -Summary signature.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish
+        shell: pwsh
+        env:
+          SHA: ${{ steps.name.outputs.sha }}
+          TAG: ${{ steps.name.outputs.tag }}
+          NAME: ${{ steps.name.outputs.name }}
+          SECTION: ${{ steps.name.outputs.section }}
+          BASE: ${{ steps.name.outputs.base }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $asset = "ScreenshotToolkit-$env:NAME.exe"
+          "$((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant())  $asset" | Set-Content "$asset.sha256" -Encoding ascii
+          & pipeline/scripts/release-notes.ps1 -Changelog pipeline/CHANGELOG.md -Section $env:SECTION -Repository $repo `
+            -Head $env:TAG -Base $env:BASE -Asset $asset -Signature signature.md -Output notes.md
+          $title = "Screenshot Toolkit $env:NAME"
+
+          gh release view $env:TAG --repo $repo *> $null
+          $exists = $LASTEXITCODE -eq 0
+          if ($env:KIND -eq 'version') {
+            if ($exists) { gh release delete $env:TAG --repo $repo --yes }
+            gh release create $env:TAG $asset "$asset.sha256" --repo $repo --title $title --notes-file notes.md --prerelease --verify-tag
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            if ($exists) { gh release delete $env:TAG --repo $repo --cleanup-tag --yes }
+            gh release create $env:TAG $asset "$asset.sha256" --repo $repo --target $env:SHA --title $title --notes-file notes.md --prerelease
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Only the newest dev build stays.
+            $older = gh release list --repo $repo --limit 1000 --json tagName --jq '.[].tagName' | Where-Object { $_ -match '-dev-' -and $_ -ne $env:TAG }
+            foreach ($tag in $older) { gh release delete $tag --repo $repo --cleanup-tag --yes }
+          }
+          exit 0
