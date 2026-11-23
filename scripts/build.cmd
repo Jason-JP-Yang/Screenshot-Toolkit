@@ -1,9 +1,11 @@
 @echo off
 setlocal
-rem Configures and builds with the newest installed Visual Studio C++ toolset.
-rem Usage: scripts\build.cmd [Release|Debug]
+rem Configures and builds with the newest installed Visual Studio C++ toolset, the program or the target named.
+rem Usage: scripts\build.cmd [Release|Debug] [target]
 set "CONFIG=%~1"
 if "%CONFIG%"=="" set "CONFIG=Release"
+set "TARGET="
+if not "%~2"=="" set "TARGET=--target %~2"
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
@@ -22,5 +24,5 @@ call "%VSROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 
 for %%i in ("%~dp0..") do set "ROOT=%%~fi\"
 cmake -S "%ROOT%." -B "%ROOT%build\%CONFIG%" -G Ninja -DCMAKE_BUILD_TYPE=%CONFIG% -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >nul || exit /b 1
-cmake --build "%ROOT%build\%CONFIG%" || exit /b 1
+cmake --build "%ROOT%build\%CONFIG%" %TARGET% || exit /b 1
 echo Built %ROOT%build\%CONFIG%\ScreenshotToolkit.exe
