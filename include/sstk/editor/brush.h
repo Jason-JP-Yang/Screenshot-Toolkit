@@ -41,7 +41,8 @@ void PaintStroke(const Stroke& stroke, const float* mask, int mask_stride, uint3
 // Whether any of its stamps comes within `reach` of a point.
 bool Touches(const Stroke& stroke, float x, float y, float reach);
 
-// How far from its center a stamp may leave a mark, wet ink bleeding past it included.
-inline float StampReach(const Stamp& stamp) { return stamp.radius * (1.0f + stamp.wet) + 2.0f; }
+// How far from its center a stamp may leave a mark: a soft or ragged edge, a pencil on its side, and wet ink bleeding
+// past it included.
+inline float StampReach(const Stamp& stamp) { return stamp.radius * (1.35f + 1.4f * stamp.wet) + 2.0f; }
 
 }  // namespace sstk
