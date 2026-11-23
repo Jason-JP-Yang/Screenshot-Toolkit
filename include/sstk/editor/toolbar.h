@@ -66,6 +66,7 @@ class MarkupToolbar {
     int shown_state = -1;
   };
 
+  Image ToolImage(Tool tool, bool percent) const;  // With its opacity printed on it below 100, when `percent`.
   void RenderTool(Slot& slot);
   void RenderBadge();
   void Morph(bool fold, const TimeBase& now, bool immediate);

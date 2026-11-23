@@ -257,17 +257,19 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   RenderBadge();
 }
 
-void MarkupToolbar::RenderTool(Slot& slot) {
-  const ToolBox& tools = Tools();
+Image MarkupToolbar::ToolImage(Tool tool, bool percent) const {
   ToolLook look{palette_.barrel, palette_.barrel_shade, palette_.barrel_edge, palette_.barrel_edge, -1, palette_.control_ink};
-  if (IsInk(slot.tool)) {
-    const ToolBox::Ink& ink = tools.inks[static_cast<size_t>(slot.tool)];
+  if (IsInk(tool)) {
+    const ToolBox::Ink& ink = Tools().inks[static_cast<size_t>(tool)];
     look.ink = ink.color;
-    const int percent = static_cast<int>(std::lround(ink.opacity * 100.0f));
-    look.percent = percent < 100 ? percent : -1;
+    const int shown = static_cast<int>(std::lround(ink.opacity * 100.0f));
+    if (percent && shown < 100) look.percent = shown;
   }
-  const Image art = RenderToolArt(slot.tool, static_cast<int>(Px(config::kToolArtWidth, scale_)), static_cast<int>(Px(config::kToolArtHeight, scale_)), scale_, look);
-  slot.art = compositor_.CreateSurface(art, false);
+  return RenderToolArt(tool, static_cast<int>(Px(config::kToolArtWidth, scale_)), static_cast<int>(Px(config::kToolArtHeight, scale_)), scale_, look);
+}
+
+void MarkupToolbar::RenderTool(Slot& slot) {
+  slot.art = compositor_.CreateSurface(ToolImage(slot.tool, true), false);
   slot.visual->SetContent(slot.art.Get());
 }
 
@@ -280,21 +282,20 @@ void MarkupToolbar::RenderBadge() {
   const uint32_t state = static_cast<uint32_t>(tool) | ink.color << 4 | static_cast<uint32_t>(std::lround(ink.opacity * 100.0f)) << 28;
   if (state == badge_state_) return;
   badge_state_ = state;
-  Slot& slot = slots_[static_cast<size_t>(tool)];
-  if (!slot.art) RenderTool(slot);
   const float size = static_cast<float>(button_rect_.right - button_rect_.left);
   const float unit = static_cast<float>(Px(config::kToolArtWidth, scale_)) / 26.0f;
   const float tip_x = 13.0f * unit;
   const float tip_y = 3.4f * unit;
-  const float k = 0.56f;
+  const float k = config::kMarkupButtonTool;
   const float cosine = -0.7071068f;
   const float sine = -0.7071068f;
-  const float to_x = size * 0.38f;
-  const float to_y = size * 0.63f;
+  const float to_x = size * 0.36f;
+  const float to_y = size * 0.66f;
   D2D_MATRIX_3X2_F place{k * cosine, k * sine, -k * sine, k * cosine, 0.0f, 0.0f};
   place._31 = to_x - (tip_x * place._11 + tip_y * place._21);
   place._32 = to_y - (tip_x * place._12 + tip_y * place._22);
-  badge_art_->SetContent(slot.art.Get());
+  // Drawn without its opacity, which the button has no room to show.
+  badge_art_->SetContent(compositor_.CreateSurface(ToolImage(tool, false), false).Get());
   badge_art_->SetTransform(place);
 
   // The stroke, drawn by the tool itself, waving in from the left to the point.
