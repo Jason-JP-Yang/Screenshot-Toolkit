@@ -49,6 +49,8 @@ class Compositor {
 
   TimeBase Now();
   void Commit();
+  // Sends uploads on their way, so that surfaces changed again and again while shown are composed as drawn.
+  void Flush();
 
   // Hands memory held for already released surfaces back to the system.
   void ReleaseUnusedMemory();

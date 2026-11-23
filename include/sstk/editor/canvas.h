@@ -53,9 +53,8 @@ class InkCanvas {
   void End();
   void Cancel();
 
-  // Parts of tiles changed since the last call, in the picture's pixels, and their pixels to upload.
+  // Parts of tiles changed since the last call, in the picture's pixels.
   std::vector<RECT> TakeChanges();
-  PixelView View(const RECT& area) const;
 
   CanvasSnapshot Snapshot() const;
 
@@ -65,7 +64,6 @@ class InkCanvas {
     std::vector<float> mask;
   };
 
-  int TileOf(int x, int y) const { return (y / kCanvasTile) * columns_ + x / kCanvasTile; }
   RECT TileRect(int index) const;  // In the picture's pixels.
   Image& Fresh(int index);
   Image& Writable(int index);

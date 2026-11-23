@@ -29,6 +29,7 @@ constexpr UINT kFrameMessage = WM_APP + 60;
 constexpr UINT_PTR kBeatTimer = 1;
 constexpr float kDegrees = 3.14159265f / 180.0f;
 constexpr int kUploadRows = 512;
+constexpr int kInkMargin = 2;  // Pixels of its neighbors around a tile of markup, enough to show one past its edges.
 
 LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   auto* editor = reinterpret_cast<Editor*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -250,9 +251,14 @@ void Editor::BuildVisuals() {
   sharp_effect_ = effect_of(sharp_.Get());
   inner_holder_->AddVisual(sharp_.Get(), FALSE, nullptr);
 
+  inside_ink_ = compositor_.CreateVisual();
+  outside_ink_ = compositor_.CreateVisual();
   inside_float_ = compositor_.CreateVisual();
   outside_float_ = compositor_.CreateVisual();
+  for (IDCompositionVisual* ink : {inside_ink_.Get(), outside_ink_.Get()}) ink->SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD);
+  inside_plane_->AddVisual(inside_ink_.Get(), FALSE, nullptr);
   inside_plane_->AddVisual(inside_float_.Get(), FALSE, nullptr);
+  outside_plane_->AddVisual(outside_ink_.Get(), FALSE, nullptr);
   outside_plane_->AddVisual(outside_float_.Get(), FALSE, nullptr);
 
   // The crop frame's handles sit just outside it, so that they never hide what is kept.
@@ -469,7 +475,10 @@ bool Editor::LoadSource(int index) {
   source.rect.bottom = source.rect.top + pixels.height();
   source.surface = compositor_.CreateVirtualSurface(pixels.width(), pixels.height(), true);
   if (!source.surface) return false;
-  UploadPicture(source, RECT{0, 0, pixels.width(), pixels.height()});
+  for (int row = 0; row < pixels.height(); row += kUploadRows) {
+    const int count = std::min(kUploadRows, pixels.height() - row);
+    compositor_.Upload(source.surface.Get(), POINT{0, row}, PixelView{pixels.data() + static_cast<ptrdiff_t>(row) * pixels.stride(), pixels.width(), count, pixels.stride()});
+  }
   const auto place = [&](ComPtr<IDCompositionVisual>& visual, ComPtr<IDCompositionEffectGroup>& effect, IDCompositionVisual* plane) {
     visual = compositor_.CreateVisual();
     visual->SetContent(source.surface.Get());
@@ -504,23 +513,49 @@ void Editor::MakeCanvas(int index) {
   Source& source = sources_[static_cast<size_t>(index)];
   canvas_ = std::make_unique<InkCanvas>(source.pixels, POINT{source.rect.left, source.rect.top});
   active_source_ = index;
-  // The markup goes into the picture's own surface, so a new canvas starts from the picture as it was taken.
-  if (!Empty(source.inked)) {
-    UploadPicture(source, source.inked);
-    source.inked = RECT{};
-  }
+  for (IDCompositionVisual* ink : {inside_ink_.Get(), outside_ink_.Get()}) ink->RemoveAllVisuals();
+  ink_tiles_.clear();
+  ink_tiles_.resize(static_cast<size_t>((canvas_->width() + kCanvasTile - 1) / kCanvasTile) * ((canvas_->height() + kCanvasTile - 1) / kCanvasTile));
   canvas_->Redraw(doc_.strokes, source.rect);
   FlushCanvas();
 }
 
-void Editor::UploadPicture(Source& source, const RECT& area) {
-  const Image& pixels = *source.pixels;
-  for (int row = area.top; row < area.bottom; row += kUploadRows) {
-    const int count = std::min(kUploadRows, static_cast<int>(area.bottom) - row);
-    compositor_.Upload(source.surface.Get(), POINT{area.left, row},
-                       PixelView{pixels.data() + static_cast<ptrdiff_t>(row) * pixels.stride() + static_cast<ptrdiff_t>(area.left) * 4, area.right - area.left, count,
-                                 pixels.stride()});
+void Editor::ShowInkTile(const CanvasSnapshot& snapshot, int index) {
+  const int width = snapshot.width();
+  const int height = snapshot.height();
+  const int columns = (width + kCanvasTile - 1) / kCanvasTile;
+  const int left = (index % columns) * kCanvasTile;
+  const int top = (index / columns) * kCanvasTile;
+  const int right = std::min(left + kCanvasTile, width);
+  const int bottom = std::min(top + kCanvasTile, height);
+  Image pixels = Image::Allocate(right - left + kInkMargin * 2, bottom - top + kInkMargin * 2);
+  if (!pixels) return;
+  for (int y = 0; y < pixels.height(); ++y) {
+    snapshot.Row(top - kInkMargin + y, left - kInkMargin, pixels.width(), reinterpret_cast<uint32_t*>(pixels.data() + static_cast<ptrdiff_t>(y) * pixels.stride()));
   }
+  InkTile& tile = ink_tiles_[static_cast<size_t>(index)];
+  if (tile.surface) {
+    compositor_.Upload(tile.surface.Get(), POINT{0, 0}, pixels);
+    return;
+  }
+  tile.surface = compositor_.CreateSurface(pixels, true);
+  if (!tile.surface) return;
+  // A pixel past each edge the picture has there, over the neighbor's own, so that no pixel falls between two tiles.
+  const D2D_RECT_F shown{static_cast<float>(kInkMargin - (left > 0 ? 1 : 0)), static_cast<float>(kInkMargin - (top > 0 ? 1 : 0)),
+                         static_cast<float>(kInkMargin + right - left + (right < width ? 1 : 0)),
+                         static_cast<float>(kInkMargin + bottom - top + (bottom < height ? 1 : 0))};
+  const POINT origin = snapshot.origin;
+  const auto place = [&](IDCompositionVisual* holder) {
+    ComPtr<IDCompositionVisual> visual = compositor_.CreateVisual();
+    visual->SetContent(tile.surface.Get());
+    visual->SetOffsetX(static_cast<float>(origin.x + left - kInkMargin));
+    visual->SetOffsetY(static_cast<float>(origin.y + top - kInkMargin));
+    visual->SetClip(shown);
+    holder->AddVisual(visual.Get(), FALSE, nullptr);
+    return visual;
+  };
+  tile.inside = place(inside_ink_.Get());
+  tile.outside = place(outside_ink_.Get());
 }
 
 void Editor::BindCapsule(const TimeBase& now) {
@@ -829,16 +864,28 @@ void Editor::PatchSharp(const RECT& plane) {
 }
 
 void Editor::FlushCanvas() {
-  if (!canvas_ || active_source_ < 0) return;
-  Source& source = sources_[static_cast<size_t>(active_source_)];
-  if (!source.surface) return;
+  if (!canvas_) return;
+  const std::vector<RECT> changes = canvas_->TakeChanges();
+  if (changes.empty()) return;
   const POINT origin = canvas_->origin();
-  for (const RECT& change : canvas_->TakeChanges()) {
-    const PixelView view = canvas_->View(change);
-    if (view.data != nullptr) compositor_.Upload(source.surface.Get(), POINT{change.left, change.top}, view);
-    source.inked = Union(source.inked, change);
+  const int width = canvas_->width();
+  const int height = canvas_->height();
+  const int columns = (width + kCanvasTile - 1) / kCanvasTile;
+  // Every tile whose pixels, or whose margin of its neighbors' pixels, changed.
+  std::vector<int> dirty;
+  for (const RECT& change : changes) {
+    const RECT reach = Intersect(RECT{change.left - kInkMargin, change.top - kInkMargin, change.right + kInkMargin, change.bottom + kInkMargin}, RECT{0, 0, width, height});
+    if (Empty(reach)) continue;
+    for (int row = reach.top / kCanvasTile; row <= (reach.bottom - 1) / kCanvasTile; ++row) {
+      for (int column = reach.left / kCanvasTile; column <= (reach.right - 1) / kCanvasTile; ++column) dirty.push_back(row * columns + column);
+    }
     PatchSharp(RECT{change.left + origin.x, change.top + origin.y, change.right + origin.x, change.bottom + origin.y});
   }
+  std::sort(dirty.begin(), dirty.end());
+  dirty.erase(std::unique(dirty.begin(), dirty.end()), dirty.end());
+  const CanvasSnapshot snapshot = canvas_->Snapshot();
+  for (const int index : dirty) ShowInkTile(snapshot, index);
+  compositor_.Flush();
 }
 
 void Editor::Commit(const EditDocument& before, const TimeBase& now) {

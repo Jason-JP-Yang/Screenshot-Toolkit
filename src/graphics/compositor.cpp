@@ -148,6 +148,8 @@ void Compositor::Commit() {
   if (FAILED(hr)) Trace("Commit failed: %08lx", hr);
 }
 
+void Compositor::Flush() { d3d_context_->Flush(); }
+
 void Compositor::ReleaseUnusedMemory() {
   // D3D destroys resources lazily, so without this the last surfaces stay committed until the next shot.
   d3d_context_->ClearState();

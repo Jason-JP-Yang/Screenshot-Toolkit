@@ -135,9 +135,7 @@ class Editor {
     std::shared_ptr<const Image> pixels;
     std::shared_ptr<const LongImage> packed;
     RECT rect{};  // Plane pixels.
-    // The picture with the markup laid into it, in one surface, which shows no seams however far it is enlarged.
     ComPtr<IDCompositionVirtualSurface> surface;
-    RECT inked{};  // What markup has changed in the surface, in the picture's pixels.
     ComPtr<IDCompositionVisual> inside;
     ComPtr<IDCompositionVisual> outside;
     ComPtr<IDCompositionEffectGroup> inside_effect;
@@ -170,7 +168,7 @@ class Editor {
   bool LoadSource(int index);
   void ShowSource(int index, const TimeBase& now, bool fade);
   void MakeCanvas(int index);
-  void UploadPicture(Source& source, const RECT& area);  // The picture as it was taken, in its pixels.
+  void ShowInkTile(const CanvasSnapshot& snapshot, int index);
   void BindCapsule(const TimeBase& now);
   int CapsuleIndex(int option) const;
 
@@ -331,6 +329,17 @@ class Editor {
   ComPtr<IDCompositionEffectGroup> flash_effect_;
   ComPtr<IDCompositionVisual> chrome_layer_;
   ComPtr<IDCompositionVisual> bin_layer_;
+  // The picture with its markup, over the picture as taken, in the canvas's tiles. A tile is drawn again whole, with a
+  // margin of its neighbors' pixels, whenever anything near it changes, and shows a pixel past its edges with hard
+  // edges, so that tiles enlarged and turned still meet without seams. A surface is never updated only in part.
+  struct InkTile {
+    ComPtr<IDCompositionSurface> surface;
+    ComPtr<IDCompositionVisual> inside;
+    ComPtr<IDCompositionVisual> outside;
+  };
+  std::vector<InkTile> ink_tiles_;  // By the canvas's tile index.
+  ComPtr<IDCompositionVisual> inside_ink_;
+  ComPtr<IDCompositionVisual> outside_ink_;
   ComPtr<IDCompositionVisual> inside_float_;
   ComPtr<IDCompositionVisual> outside_float_;
   ComPtr<IDCompositionSurface> sharp_surface_;

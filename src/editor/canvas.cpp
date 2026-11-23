@@ -236,15 +236,6 @@ std::vector<RECT> InkCanvas::TakeChanges() {
   return changes;
 }
 
-PixelView InkCanvas::View(const RECT& area) const {
-  const int index = TileOf(area.left, area.top);
-  const std::shared_ptr<Image>& tile = tiles_[static_cast<size_t>(index)];
-  if (!tile || !*tile) return PixelView{};
-  const RECT rect = TileRect(index);
-  return PixelView{tile->data() + static_cast<ptrdiff_t>(area.top - rect.top) * tile->stride() + static_cast<ptrdiff_t>(area.left - rect.left) * 4,
-                   area.right - area.left, area.bottom - area.top, tile->stride()};
-}
-
 CanvasSnapshot InkCanvas::Snapshot() const {
   CanvasSnapshot snapshot;
   snapshot.base = base_;
