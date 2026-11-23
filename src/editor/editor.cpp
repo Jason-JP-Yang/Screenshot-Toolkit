@@ -250,13 +250,9 @@ void Editor::BuildVisuals() {
   sharp_effect_ = effect_of(sharp_.Get());
   inner_holder_->AddVisual(sharp_.Get(), FALSE, nullptr);
 
-  inside_ink_ = compositor_.CreateVisual();
-  outside_ink_ = compositor_.CreateVisual();
   inside_float_ = compositor_.CreateVisual();
   outside_float_ = compositor_.CreateVisual();
-  inside_plane_->AddVisual(inside_ink_.Get(), FALSE, nullptr);
   inside_plane_->AddVisual(inside_float_.Get(), FALSE, nullptr);
-  outside_plane_->AddVisual(outside_ink_.Get(), FALSE, nullptr);
   outside_plane_->AddVisual(outside_float_.Get(), FALSE, nullptr);
 
   // The crop frame's handles sit just outside it, so that they never hide what is kept.
@@ -473,10 +469,7 @@ bool Editor::LoadSource(int index) {
   source.rect.bottom = source.rect.top + pixels.height();
   source.surface = compositor_.CreateVirtualSurface(pixels.width(), pixels.height(), true);
   if (!source.surface) return false;
-  for (int row = 0; row < pixels.height(); row += kUploadRows) {
-    const int count = std::min(kUploadRows, pixels.height() - row);
-    compositor_.Upload(source.surface.Get(), POINT{0, row}, PixelView{pixels.data() + static_cast<ptrdiff_t>(row) * pixels.stride(), pixels.width(), count, pixels.stride()});
-  }
+  UploadPicture(source, RECT{0, 0, pixels.width(), pixels.height()});
   const auto place = [&](ComPtr<IDCompositionVisual>& visual, ComPtr<IDCompositionEffectGroup>& effect, IDCompositionVisual* plane) {
     visual = compositor_.CreateVisual();
     visual->SetContent(source.surface.Get());
@@ -511,14 +504,23 @@ void Editor::MakeCanvas(int index) {
   Source& source = sources_[static_cast<size_t>(index)];
   canvas_ = std::make_unique<InkCanvas>(source.pixels, POINT{source.rect.left, source.rect.top});
   active_source_ = index;
-  ink_surface_ = compositor_.CreateVirtualSurface(canvas_->width(), canvas_->height(), false);
-  for (IDCompositionVisual* ink : {inside_ink_.Get(), outside_ink_.Get()}) {
-    ink->SetContent(ink_surface_.Get());
-    ink->SetOffsetX(static_cast<float>(source.rect.left));
-    ink->SetOffsetY(static_cast<float>(source.rect.top));
+  // The markup goes into the picture's own surface, so a new canvas starts from the picture as it was taken.
+  if (!Empty(source.inked)) {
+    UploadPicture(source, source.inked);
+    source.inked = RECT{};
   }
   canvas_->Redraw(doc_.strokes, source.rect);
   FlushCanvas();
+}
+
+void Editor::UploadPicture(Source& source, const RECT& area) {
+  const Image& pixels = *source.pixels;
+  for (int row = area.top; row < area.bottom; row += kUploadRows) {
+    const int count = std::min(kUploadRows, static_cast<int>(area.bottom) - row);
+    compositor_.Upload(source.surface.Get(), POINT{area.left, row},
+                       PixelView{pixels.data() + static_cast<ptrdiff_t>(row) * pixels.stride() + static_cast<ptrdiff_t>(area.left) * 4, area.right - area.left, count,
+                                 pixels.stride()});
+  }
 }
 
 void Editor::BindCapsule(const TimeBase& now) {
@@ -827,11 +829,14 @@ void Editor::PatchSharp(const RECT& plane) {
 }
 
 void Editor::FlushCanvas() {
-  if (!canvas_ || !ink_surface_) return;
+  if (!canvas_ || active_source_ < 0) return;
+  Source& source = sources_[static_cast<size_t>(active_source_)];
+  if (!source.surface) return;
   const POINT origin = canvas_->origin();
   for (const RECT& change : canvas_->TakeChanges()) {
     const PixelView view = canvas_->View(change);
-    if (view.data != nullptr) compositor_.Upload(ink_surface_.Get(), POINT{change.left, change.top}, view);
+    if (view.data != nullptr) compositor_.Upload(source.surface.Get(), POINT{change.left, change.top}, view);
+    source.inked = Union(source.inked, change);
     PatchSharp(RECT{change.left + origin.x, change.top + origin.y, change.right + origin.x, change.bottom + origin.y});
   }
 }

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
+#include <iterator>
 #include <vector>
 
 namespace sstk {
@@ -267,6 +268,9 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
   const uint32_t steel = config::kNibSteel;
   const uint32_t dark = 0x26272B;
   const uint32_t gold = 0xC9A24C;
+  // The opacity label sits in what a resting tool shows above the toolbar's bottom edge, clear of a clip.
+  float label_y = 52.0f;
+  float label_right = c + half - 1.6f;
   const auto cylinder = [&](float h) { return [&, h](float u, float) { return Cylinder(u, c, h); }; };
   const auto flat = [](float, float) { return 0.0f; };
   const auto linear = [](float y0, float y1, float h0, float h1) {
@@ -292,7 +296,8 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
   };
   // A pocket clip down the barrel's right side, ending in a ball.
   const auto clip = [&](float top, float length) {
-    const float x = c + 5.4f;
+    const float x = c + 6.2f;
+    label_right = x - 1.05f - 0.9f;
     const auto shape = [&, top, length](float u, float v) {
       return std::min(Box(u, v, x, top + length * 0.5f, 1.05f, length * 0.5f, 1.0f), std::hypot(u - x, v - (top + length)) - 1.6f);
     };
@@ -300,7 +305,6 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
     painter.Fill(steel, 1.0f, shape, [&](float u, float) { return 0.25f - 0.5f * std::fabs(u - x); });
   };
 
-  float label_y = 60.0f;
   switch (tool) {
     case Tool::kPen: {
       barrel(42.0f);
@@ -324,7 +328,7 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
       });
       painter.Fill(0x2E3034, 1.0f, [&](float u, float v) { return std::min(Segment(u, v, c, 7.8f, c, 16.6f) - 0.36f, std::hypot(u - c, v - 17.4f) - 1.05f); });
       painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.0f, 6.0f, nib_half); });
-      label_y = 64.0f;
+      label_y = 53.5f;
       break;
     }
     case Tool::kMonoline: {
@@ -341,13 +345,13 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
       painter.Fill(look.ink, 1.0f, [&](float u, float v) { return std::min(Box(u, v, c, 7.6f, 1.55f, 2.4f, 0.0f), std::hypot(u - c, v - 5.4f) - 1.55f); },
                    cylinder(1.55f));
       painter.Fill(0xFFFFFF, 0.5f, [&](float u, float v) { return std::hypot(u - (c - 0.6f), v - 5.2f) - 0.45f; });
-      label_y = 58.0f;
+      label_y = 50.0f;
       break;
     }
     case Tool::kHighlighter: {
       barrel(40.0f);
       // A window down the barrel shows the ink inside.
-      painter.Fill(look.ink, 0.42f, [&](float u, float v) { return Box(u, v, c - 0.8f, 61.0f, 5.6f, 10.0f, 2.6f); }, cylinder(half));
+      painter.Fill(look.ink, 0.42f, [&](float u, float v) { return Box(u, v, c - 0.8f, 67.0f, 5.6f, 9.5f, 2.6f); }, cylinder(half));
       band(40.0f, 46.0f, look.ink);
       ring(46.3f, 0.7f, dark, 0.3f);
       const auto shoulder = linear(29.0f, 40.0f, 7.2f, 9.6f);
@@ -357,7 +361,7 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
       const auto chisel = [&](float u, float v) { return std::max(Box(u, v, c, 19.5f, 7.0f, 10.0f, 0.0f), (10.0f + (u - (c - 7.0f)) * 0.55f) - v); };
       painter.Fill(look.ink, 1.0f, chisel, [&](float u, float v) { return Cylinder(u, c, 7.0f) * 0.7f - 0.10f * ArtNoise(u * 2.2f, v * 2.2f); });
       painter.Fill(0xFFFFFF, 0.26f, [&](float u, float v) { return std::max(chisel(u, v), v - (12.2f + (u - (c - 7.0f)) * 0.55f)); });
-      label_y = 78.0f;
+      label_y = 51.6f;
       break;
     }
     case Tool::kPencil: {
@@ -382,7 +386,7 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
       painter.Fill(dark, 0.14f, [&](float u, float v) { return std::max(paint(u, v), std::min(std::fabs(u - (c - 3.2f)), std::fabs(u - (c + 3.2f))) - 0.25f); });
       band(47.0f, 49.0f, look.ink);
       ring(51.2f, 0.6f, gold, 0.9f);
-      label_y = 62.0f;
+      label_y = 41.0f;
       break;
     }
     case Tool::kCrayon: {
@@ -407,7 +411,7 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
       painter.Fill(look.ink, 1.0f, [&](float u, float v) { return std::min(Taper(u, v, c, 8.0f, 17.6f, wax), Box(u, v, c, 8.2f, 3.6f, 1.2f, 1.2f)); },
                    [&](float u, float v) { return Cylinder(u, c, wax(v)) + 0.05f; });
       painter.Fill(0xFFFFFF, 0.28f, [&](float u, float v) { return Box(u, v, c, 7.6f, 3.0f, 0.6f, 0.6f); });
-      label_y = 76.0f;
+      label_y = 38.6f;
       break;
     }
     case Tool::kBrush: {
@@ -429,7 +433,7 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
                      return Cylinder(u, c, std::max(tuft(v), 0.8f)) + 0.14f * strands * dry - 0.08f * (1.0f - dry);
                    });
       painter.Fill(0xFFFFFF, 0.30f, [&](float u, float v) { return Segment(u, v, c - 1.2f, 7.0f, c - 3.2f, 22.0f) - 0.35f; });
-      label_y = 66.0f;
+      label_y = 52.0f;
       break;
     }
     case Tool::kEraser: {
@@ -483,9 +487,12 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
   if (look.percent >= 0 && look.percent < 100 && IsInk(tool)) {
     wchar_t text[8];
     swprintf_s(text, L"%d", look.percent);
-    const TextLine line = RenderText(text, std::max(static_cast<int>(std::lround(config::kToolLabelSize * scale)), 6), look.label);
+    const TextStyle style{config::kToolLabelFaces, static_cast<int>(std::size(config::kToolLabelFaces)), config::kToolLabelWeight, false,
+                          config::kToolLabelInk};
+    const TextLine line = RenderText(text, std::max(static_cast<int>(std::lround(config::kToolLabelSize * scale)), 7), look.label, style);
     const RECT ink = InkBounds(line.image);
-    const int x = static_cast<int>(std::lround(c * unit - static_cast<float>(ink.left + ink.right) * 0.5f));
+    const float center = std::min(c * unit, label_right * unit - static_cast<float>(ink.right - ink.left) * 0.5f);
+    const int x = static_cast<int>(std::lround(center - static_cast<float>(ink.left + ink.right) * 0.5f));
     const int y = static_cast<int>(std::lround(label_y * unit - static_cast<float>(ink.top + ink.bottom) * 0.5f));
     painter.Blend(line.image, x, y);
   }

@@ -112,7 +112,11 @@ inline constexpr float kRulerWidth = 80.0f;
 inline constexpr float kRulerSnap = 26.0f;  // A stroke starting this near the ruler's edge runs along it.
 inline constexpr float kEditorFontSize = 13.0f;
 inline constexpr float kRulerFontSize = 15.0f;
-inline constexpr float kToolLabelSize = 8.5f;
+// A tool's opacity, printed on its barrel below 100, in a heavy cut that reads at this small size.
+inline constexpr float kToolLabelSize = 10.5f;
+inline constexpr const wchar_t* kToolLabelFaces[] = {L"Segoe UI Variable Display", L"Segoe UI"};
+inline constexpr int kToolLabelWeight = 700;
+inline constexpr float kToolLabelInk = 0.85f;
 inline constexpr wchar_t kLabelCustom[] = L"Custom";
 inline constexpr wchar_t kLabelPixelEraser[] = L"Pixel Eraser";
 inline constexpr wchar_t kLabelObjectEraser[] = L"Object Eraser";

@@ -135,7 +135,9 @@ class Editor {
     std::shared_ptr<const Image> pixels;
     std::shared_ptr<const LongImage> packed;
     RECT rect{};  // Plane pixels.
+    // The picture with the markup laid into it, in one surface, which shows no seams however far it is enlarged.
     ComPtr<IDCompositionVirtualSurface> surface;
+    RECT inked{};  // What markup has changed in the surface, in the picture's pixels.
     ComPtr<IDCompositionVisual> inside;
     ComPtr<IDCompositionVisual> outside;
     ComPtr<IDCompositionEffectGroup> inside_effect;
@@ -168,6 +170,7 @@ class Editor {
   bool LoadSource(int index);
   void ShowSource(int index, const TimeBase& now, bool fade);
   void MakeCanvas(int index);
+  void UploadPicture(Source& source, const RECT& area);  // The picture as it was taken, in its pixels.
   void BindCapsule(const TimeBase& now);
   int CapsuleIndex(int option) const;
 
@@ -328,9 +331,6 @@ class Editor {
   ComPtr<IDCompositionEffectGroup> flash_effect_;
   ComPtr<IDCompositionVisual> chrome_layer_;
   ComPtr<IDCompositionVisual> bin_layer_;
-  ComPtr<IDCompositionVirtualSurface> ink_surface_;
-  ComPtr<IDCompositionVisual> inside_ink_;
-  ComPtr<IDCompositionVisual> outside_ink_;
   ComPtr<IDCompositionVisual> inside_float_;
   ComPtr<IDCompositionVisual> outside_float_;
   ComPtr<IDCompositionSurface> sharp_surface_;
