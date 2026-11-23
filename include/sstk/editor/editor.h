@@ -318,6 +318,8 @@ class Editor {
   ComPtr<IDCompositionEffectGroup> sharp_effect_;
   ComPtr<IDCompositionVisual> handles_;
   ComPtr<IDCompositionEffectGroup> handles_effect_;
+  // Kept here, as the tree shows a visual without keeping the object that its springs set alive.
+  std::vector<ComPtr<IDCompositionVisual>> handle_visuals_;
   ComPtr<IDCompositionVisual> lasso_;
   ComPtr<IDCompositionVisual> ruler_;
   ComPtr<IDCompositionVisual> ruler_band_;

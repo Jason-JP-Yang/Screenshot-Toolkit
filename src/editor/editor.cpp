@@ -274,6 +274,7 @@ void Editor::BuildVisuals() {
     ComPtr<IDCompositionVisual> visual = compositor_.CreateVisual();
     visual->SetContent(compositor_.CreateSurface(image, false).Get());
     handles_->AddVisual(visual.Get(), FALSE, nullptr);
+    handle_visuals_.push_back(visual);
     return visual;
   };
   const float line_width = std::max(std::round(config::kEditorFrameLine * scale_), 1.0f);
