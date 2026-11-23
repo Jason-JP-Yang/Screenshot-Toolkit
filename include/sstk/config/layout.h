@@ -64,6 +64,59 @@ inline constexpr float kBinTextGap = 7.5f;
 inline constexpr float kBinTextInset = 13.5f;
 inline constexpr wchar_t kBinLabel[] = L"Rubbish Bin";
 
+// The editing panel's controls along the top, and the space the picture is fitted into.
+inline constexpr float kEditorMargin = 16.0f;         // From the screen's edges to the controls.
+inline constexpr float kEditorButton = 40.0f;         // A round button, and each cell of a cluster.
+inline constexpr float kEditorIcon = 20.0f;
+inline constexpr float kEditorControlGap = 10.0f;
+inline constexpr float kEditorPictureTop = 22.0f;     // From the controls to the picture,
+inline constexpr float kEditorPictureSide = 40.0f;    // from the screen's sides,
+inline constexpr float kEditorPictureBottom = 22.0f;  // and from the toolbar.
+inline constexpr float kEditorCornerArm = 22.0f;      // The crop frame's handles.
+inline constexpr float kEditorEdgeArm = 30.0f;
+inline constexpr float kEditorHandleWidth = 4.0f;
+inline constexpr float kEditorFrameLine = 1.0f;
+inline constexpr float kEditorCornerReach = 26.0f;    // How near the pointer must be to take a handle.
+inline constexpr float kEditorEdgeReach = 16.0f;
+inline constexpr float kEditorMinCrop = 28.0f;        // The smallest crop, on screen.
+inline constexpr float kEditorPressSlop = 4.0f;
+inline constexpr float kEditorBrushCursorMin = 6.0f;
+
+// The markup toolbar along the bottom, and its popovers.
+inline constexpr float kToolbarHeight = 86.0f;
+inline constexpr float kToolbarRadius = 30.0f;
+inline constexpr float kToolbarPadding = 18.0f;
+inline constexpr float kToolCell = 38.0f;
+inline constexpr float kToolArtWidth = 26.0f;
+inline constexpr float kToolArtHeight = 92.0f;
+inline constexpr float kToolRest = 24.0f;    // From the toolbar's top to a resting tool's tip.
+inline constexpr float kToolRaise = 13.0f;   // The chosen tool stands this much higher,
+inline constexpr float kToolHover = 3.0f;    // and one under the pointer this much.
+inline constexpr float kSwatch = 26.0f;
+inline constexpr float kSwatchGap = 9.0f;
+inline constexpr float kSwatchRing = 2.0f;
+inline constexpr float kToolbarSection = 20.0f;  // Between the tools, the colors, and the button that folds the toolbar away.
+inline constexpr float kToolbarFold = 32.0f;
+inline constexpr float kMarkupButton = 44.0f;
+inline constexpr float kPopoverGap = 10.0f;
+inline constexpr float kPopoverRadius = 20.0f;
+inline constexpr float kPopoverPadding = 12.0f;
+inline constexpr float kWidthCell = 46.0f;
+inline constexpr float kOpacityTrack = 28.0f;
+inline constexpr float kOpacityThumb = 26.0f;
+inline constexpr float kModeHeight = 32.0f;
+inline constexpr float kGridCell = 20.0f;
+inline constexpr int kGridColumns = 12;
+inline constexpr int kGridRows = 10;
+inline constexpr float kRulerWidth = 80.0f;
+inline constexpr float kRulerSnap = 26.0f;  // A stroke starting this near the ruler's edge runs along it.
+inline constexpr float kEditorFontSize = 13.0f;
+inline constexpr float kRulerFontSize = 15.0f;
+inline constexpr float kToolLabelSize = 8.5f;
+inline constexpr wchar_t kLabelCustom[] = L"Custom";
+inline constexpr wchar_t kLabelPixelEraser[] = L"Pixel Eraser";
+inline constexpr wchar_t kLabelObjectEraser[] = L"Object Eraser";
+
 // Type, tried in order. Windows 11's display cut is tighter and cleaner, and older systems have only the static face.
 inline constexpr const wchar_t* kLabelFaces[] = {L"Segoe UI Variable Display Semib", L"Segoe UI Semibold"};
 inline constexpr float kLabelWeight = 0.92f;  // Below 1 thickens light text on a saturated body.

@@ -20,10 +20,16 @@ struct Chord {
 
 enum class MouseButton { kRight, kMiddle, kBack, kForward };  // Back and forward are side buttons 4 and 5.
 
-// Take a screenshot. Always active.
-inline constexpr Chord kCaptureChords[] = {
+struct CaptureChord {
+  DWORD key;
+  Modifiers modifiers;
+  bool opens_editor = false;  // The screenshot opens straight in the editing panel, to choose its part there.
+};
+
+// Take a screenshot. Always active, but while the editing panel is open, which has every key to itself.
+inline constexpr CaptureChord kCaptureChords[] = {
     {VK_SNAPSHOT, {}},
-    {'S', {.win = true, .shift = true}},
+    {'S', {.win = true, .shift = true}, true},
 };
 
 // Step the region selector. Active while a thumbnail with options is on screen.

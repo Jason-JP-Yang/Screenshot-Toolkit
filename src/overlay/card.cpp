@@ -319,11 +319,13 @@ bool Card::AttachWindows(std::vector<WindowShot>& shots, const TimeBase& now) {
       selection = selection || kept;
     }
   }
+  if (edited_.active) return false;
   if (selection && !ShowsLong(selected_)) ShowCrisp(selected_, now, 0.0, config::kMorphFade);
   return selection;
 }
 
 std::shared_ptr<const LongImage> Card::whole() const {
+  if (edited_.active) return edited_.picture;
   if (regions_[selected_].kind == RegionKind::kLong) return long_image_;
   const int source = CrispIndex(selected_);
   return source >= 0 && source < static_cast<int>(sources_.size()) ? sources_[source] : nullptr;
@@ -383,10 +385,122 @@ void Card::MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const Ti
   ring_alpha_.To(dc, now, 1.0f, config::kFade, decoration_delay);
   // A card narrower than two shadow corners casts a proportionally weaker shadow, and the corners overlap.
   const float slim = std::clamp(std::min(width, height) / (shadow_reach_ * 2.0f), 0.5f, 1.0f);
-  const float shadow_target = !shown ? 0.0f : (depth == 0 ? 1.0f : config::kBehindShadowAlpha) * slim;
-  shadow_alpha_.To(dc, now, shadow_target, config::kFade, decoration_delay);
+  shadow_target_ = !shown ? 0.0f : (depth == 0 ? 1.0f : config::kBehindShadowAlpha) * slim;
   resting_opacity_ = shown ? 1.0f - depth * config::kDeckOpacityPerLevel : 0.0f;
+  if (editing) {
+    shadow_alpha_.Snap(0.0f);
+    opacity_.Snap(0.0f);
+    return;
+  }
+  shadow_alpha_.To(dc, now, shadow_target_, config::kFade, decoration_delay);
   opacity_.To(dc, now, resting_opacity_, config::kFade);
+}
+
+void Card::PlaceAt(const RectF& rect, int depth, const TimeBase& now) {
+  const RectF source = SourceRect();
+  const float width = rect.width();
+  const float height = rect.height();
+  const float sx = width / source.width();
+  const float sy = height / source.height();
+  left_.Snap(rect.left);
+  top_.Snap(rect.top);
+  right_.Snap(rect.right);
+  bottom_.Snap(rect.bottom);
+  radius_.Snap(config::kCardRadius * scale_);
+  plane_x_.Snap(rect.left - source.left * sx);
+  plane_y_.Snap(rect.top - source.top * sy);
+  plane_sx_.Snap(sx);
+  plane_sy_.Snap(sy);
+  shadow_edge_w_.Snap(std::max(width - shadow_reach_ * 2.0f, 0.0f));
+  shadow_edge_h_.Snap(std::max(height - shadow_reach_ * 2.0f, 0.0f));
+  ring_alpha_.Snap(1.0f);
+  slide_.Snap(0.0f);
+  if (base_surface_) base_alpha_.Snap(1.0f);
+  for (auto& layer : crisp_layers_) {
+    if (layer->retire_at == 0.0) {
+      layer->alpha.Snap(1.0f);
+    } else {
+      layer->alpha.Snap(0.0f);
+      layer->retire_at = now.seconds;
+    }
+  }
+  shown_valid_ = Valid(selected_);
+  const bool shown = depth <= config::kDeckVisibleBehind;
+  const float slim = std::clamp(std::min(width, height) / (shadow_reach_ * 2.0f), 0.5f, 1.0f);
+  shadow_target_ = !shown ? 0.0f : (depth == 0 ? 1.0f : config::kBehindShadowAlpha) * slim;
+  resting_opacity_ = shown ? 1.0f - depth * config::kDeckOpacityPerLevel : 0.0f;
+  opacity_.Snap(editing ? 0.0f : resting_opacity_);
+  shadow_alpha_.Snap(editing ? 0.0f : shadow_target_);
+}
+
+void Card::Conceal() {
+  editing = true;
+  opacity_.Snap(0.0f);
+  shadow_alpha_.Snap(0.0f);
+}
+
+void Card::Reveal(const TimeBase& now) {
+  editing = false;
+  opacity_.Snap(resting_opacity_);
+  ring_alpha_.Snap(1.0f);
+  // The panel's picture has no shadow, so the card's comes in after it.
+  shadow_alpha_.Snap(0.0f);
+  shadow_alpha_.To(device(), now, shadow_target_, config::kFade);
+}
+
+void Card::SetEdited(SIZE size) {
+  edited_.active = true;
+  edited_.size = SIZE{std::max(size.cx, 1L), std::max(size.cy, 1L)};
+  edited_.pixels = Image();
+  edited_.surface.Reset();
+  edited_.picture.reset();
+}
+
+void Card::SetEditedThumbnail(Image thumbnail, const TimeBase& now) {
+  if (!edited_.active || !thumbnail) return;
+  edited_.surface = compositor_.CreateSurface(thumbnail, true);
+  edited_.pixels = std::move(thumbnail);
+  if (edited_.surface) ShowEdited(now, editing);
+}
+
+void Card::ClearEdited(const TimeBase& now) {
+  if (!edited_.active) return;
+  edited_ = Edited{};
+  ShowCrisp(selected_, now, 0.0, config::kMorphFade);
+}
+
+void Card::ShowEdited(const TimeBase& now, bool immediate) {
+  const SIZE size{edited_.pixels.width(), edited_.pixels.height()};
+  const D2D_MATRIX_3X2_F place{static_cast<float>(edited_.size.cx) / size.cx, 0.0f, 0.0f, static_cast<float>(edited_.size.cy) / size.cy, 0.0f, 0.0f};
+  auto layer = std::make_unique<CrispLayer>();
+  layer->visual = compositor_.CreateVisual();
+  layer->effect = compositor_.CreateEffectGroup();
+  layer->visual->SetContent(edited_.surface.Get());
+  layer->visual->SetEffect(layer->effect.Get());
+  layer->visual->SetTransform(place);
+  layer->alpha.Bind(layer->effect.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
+  layer->rim = compositor_.CreateVisual();
+  layer->rim->SetContent(edited_.surface.Get());
+  layer->rim->SetTransform(place);
+  rims_->AddVisual(layer->rim.Get(), FALSE, nullptr);
+  plane_scaled_->AddVisual(layer->visual.Get(), FALSE, nullptr);
+  if (immediate) {
+    layer->alpha.Snap(1.0f);
+  } else {
+    layer->alpha.Snap(0.0f);
+    layer->alpha.To(device(), now, 1.0f, config::kMorphFade);
+  }
+  for (auto& previous : crisp_layers_) {
+    if (previous->retire_at != 0.0) continue;
+    if (immediate) {
+      previous->alpha.Snap(0.0f);
+      previous->retire_at = now.seconds;
+    } else {
+      previous->alpha.To(device(), now, 0.0f, config::kMorphFade);
+      previous->retire_at = previous->alpha.end_time();
+    }
+  }
+  crisp_layers_.push_back(std::move(layer));
 }
 
 RectF Card::Screen() const {
@@ -395,12 +509,13 @@ RectF Card::Screen() const {
 }
 
 bool Card::OwnPicture(int index) const {
-  if (ShowsLong(index)) return true;
+  if (edited_.active || ShowsLong(index)) return true;
   const int crisp = CrispIndex(index);
   return crisp >= 0 && crisp < static_cast<int>(sources_.size()) && sources_[crisp] != nullptr;
 }
 
 RectF Card::Valid(int index) const {
+  if (edited_.active) return EditedRect();
   if (ShowsLong(index)) {
     const double stretch = 1.0 / long_.scale;
     return RectF{static_cast<float>(long_.area.left), static_cast<float>(long_.area.top + (long_.content_top - kLongOrigin) * stretch),
@@ -540,7 +655,7 @@ void Card::ShowCrisp(int index, const TimeBase& now, double delay, const SpringS
 }
 
 bool Card::CanSelect(int index) const {
-  if (hibernating_ || index < 0 || index >= static_cast<int>(regions_.size())) return false;
+  if (edited_.active || hibernating_ || index < 0 || index >= static_cast<int>(regions_.size())) return false;
   if (regions_[index].kind == RegionKind::kLong) return long_.surface != nullptr;
   const int crisp = CrispIndex(index);
   return crisp >= 0 && crisp < static_cast<int>(crisp_surfaces_.size()) && crisp_surfaces_[crisp];
@@ -560,11 +675,13 @@ bool Card::ShowsLong(int index) const {
 }
 
 SIZE Card::DisplaySize() const {
+  if (edited_.active) return ThumbnailSize(RECT{0, 0, edited_.size.cx, edited_.size.cy}, scale_);
   if (ShowsLong(selected_)) return SIZE{long_.view_width, std::max(long_.view_bottom - long_.view_top, 1)};
   return ThumbnailSize(regions_[selected_].rect, scale_);
 }
 
 RectF Card::SourceRect() const {
+  if (edited_.active) return EditedRect();
   if (ShowsLong(selected_)) {
     const double stretch = 1.0 / long_.scale;
     const double top = long_.area.top + (long_.view_top - kLongOrigin) * stretch;
@@ -705,6 +822,7 @@ void Card::KeepLong(const ScrollUpdate& update) {
   long_.done = true;
   long_.drawn = std::deque<std::vector<uint32_t>>{};
   long_image_ = update.image;
+  long_plane_ = update.image_rect;
 }
 
 void Card::DropLong(const TimeBase& now) {
@@ -760,6 +878,7 @@ RectF Card::RectAt(double time) const {
 RectF Card::target_rect() const { return RectF{left_.target(), top_.target(), right_.target(), bottom_.target()}; }
 
 const Image* Card::thumbnail() const {
+  if (edited_.active) return edited_.pixels ? &edited_.pixels : nullptr;
   if (ShowsLong(selected_)) return long_.pixels ? &long_.pixels : nullptr;
   const int crisp = CrispIndex(selected_);
   if (crisp < 0 || crisp >= static_cast<int>(crisp_pixels_.size()) || !crisp_pixels_[crisp]) return nullptr;

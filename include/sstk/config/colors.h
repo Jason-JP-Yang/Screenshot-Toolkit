@@ -43,6 +43,23 @@ inline constexpr float kFinishHintAlpha = 0.58f;
 inline constexpr uint32_t kCapsuleHairlineColor = 0xFFFFFF;
 inline constexpr float kCapsuleHairlineAlpha = 0.14f;
 
+// The selector's colors: over a screenshot, and in each theme of the editing panel.
+struct CapsuleStyle {
+  uint32_t glass;
+  uint32_t hairline;
+  float hairline_alpha;
+  uint32_t glyph;  // On the glass.
+  float glyph_alpha;
+  uint32_t pill;
+  uint32_t pill_glyph;
+  uint32_t hover;
+  float hover_alpha;
+  bool shortcuts;  // Whether the scroll option's name carries the keys that start it.
+};
+
+inline constexpr CapsuleStyle kCapsuleOnScreen{kGlassTint, kCapsuleHairlineColor, kCapsuleHairlineAlpha, kGlyphOnGlass, kGlyphOnGlassAlpha,
+                                               kPorcelain, kGlyphOnPorcelain, kHoverVeilColor, kHoverVeilAlpha, true};
+
 // Dragging.
 inline constexpr uint32_t kDropBlue = 0x0A84FF;
 
@@ -93,6 +110,66 @@ inline constexpr SetupPalette kSetupLight{
     0xE0DFDB, 0x16171A, 0x6B6C70,
 };
 
+// The editing panel, in each Windows app theme.
+struct EditorPalette {
+  uint32_t body;          // Behind the picture.
+  float outside_alpha;    // The picture past the crop, over the body.
+  uint32_t control;       // Round buttons and clusters.
+  uint32_t control_ink;
+  float disabled_alpha;   // Of the ink on a control with nothing to do.
+  uint32_t hover;
+  float hover_alpha;
+  uint32_t done;
+  uint32_t done_ink;
+  uint32_t frame;         // The crop frame and its handles,
+  uint32_t halo;          // and the soft edge that keeps them apart from the picture.
+  float halo_alpha;
+  uint32_t panel;         // The markup toolbar and its popovers.
+  uint32_t hairline;
+  float hairline_alpha;
+  uint32_t barrel;        // The tools' bodies.
+  uint32_t barrel_shade;
+  uint32_t barrel_edge;
+  uint32_t chosen;        // The chosen width in a popover, and the ink on it.
+  uint32_t chosen_ink;
+  uint32_t text;
+  float shield_alpha;     // Black over the other monitors.
+  CapsuleStyle capsule;
+};
+
+inline constexpr EditorPalette kEditorDark{
+    0x0E0F11, 0.30f,
+    0x232428, 0xF3F2EF, 0.30f, 0xFFFFFF, 0.08f,
+    0xF3F2EF, 0x16171A,
+    0xF3F2EF, 0x000000, 0.40f,
+    0x1D1E22, 0xFFFFFF, 0.10f,
+    0x34353B, 0x1B1C1F, 0x4A4B52,
+    0xF3F2EF, 0x16171A, 0xF3F2EF,
+    0.45f,
+    {0x232428, 0xFFFFFF, 0.10f, 0xFFFFFF, 0.70f, 0xF3F2EF, 0x16171A, 0xFFFFFF, 0.08f, false},
+};
+
+inline constexpr EditorPalette kEditorLight{
+    0xF3F2EF, 0.36f,
+    0xE4E3DF, 0x16171A, 0.30f, 0x000000, 0.06f,
+    0x16171A, 0xF3F2EF,
+    0x16171A, 0xFFFFFF, 0.60f,
+    0xFFFFFF, 0x000000, 0.08f,
+    0xFFFFFF, 0xCFCEC9, 0xBDBCB7,
+    0x16171A, 0xF3F2EF, 0x16171A,
+    0.25f,
+    {0xE4E3DF, 0x000000, 0.06f, 0x16171A, 0.62f, 0xFFFFFF, 0x16171A, 0x000000, 0.06f, false},
+};
+
+// Markup. The toolbar's five colors; the sixth swatch opens a grid of more.
+inline constexpr uint32_t kInkColors[] = {0x000000, 0x0A84FF, 0x30D158, 0xFFD60A, 0xFF453A};
+inline constexpr uint32_t kRulerBody = 0x2A2B30;
+inline constexpr float kRulerAlpha = 0.84f;
+inline constexpr uint32_t kRulerInk = 0xF3F2EF;
+inline constexpr uint32_t kPencilWood = 0xE9C793;
+inline constexpr uint32_t kNibSteel = 0xA9ADB4;
+inline constexpr uint32_t kEraserRubber = 0xF4A3B4;
+
 // Shadows are always neutral black. Blur and offset are in device independent pixels.
 struct ShadowSpec {
   float sigma;
@@ -111,5 +188,8 @@ inline constexpr ShadowSpec kCapsuleShadow{9.0f, 0.34f, 4.0f};
 // A thumbnail in the air.
 inline constexpr ShadowSpec kDragShadowWide{15.0f, 0.34f, 11.0f};
 inline constexpr ShadowSpec kDragShadowTight{3.5f, 0.16f, 2.5f};
+
+// The markup toolbar and its popovers.
+inline constexpr ShadowSpec kToolbarShadow{14.0f, 0.22f, 5.0f};
 
 }  // namespace sstk::config

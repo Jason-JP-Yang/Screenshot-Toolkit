@@ -14,6 +14,7 @@
 #include "sstk/capture/capture.h"
 #include "sstk/capture/hook.h"
 #include "sstk/config/core.h"
+#include "sstk/editor/jobs.h"
 #include "sstk/graphics/compositor.h"
 #include "sstk/overlay/dragdrop.h"
 #include "sstk/overlay/overlay.h"
@@ -279,6 +280,16 @@ LRESULT CALLBACK ControllerProc(HWND window, UINT message, WPARAM wparam, LPARAM
     case kMsgScrollMismatch:
       app->overlay->OnScrollMismatch(static_cast<uint64_t>(wparam));
       return 0;
+    case kMsgEditorKey:
+      app->overlay->OnEditorKey(static_cast<UINT>(wparam), lparam);
+      return 0;
+    case kMsgEditorWheel:
+      app->overlay->OnEditorWheel(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}, static_cast<short>(LOWORD(wparam)),
+                                  static_cast<LPARAM>(wparam >> 16));
+      return 0;
+    case kMsgEditorJob:
+      app->overlay->OnEditorJob(std::unique_ptr<EditorJobResult>(reinterpret_cast<EditorJobResult*>(lparam)));
+      return 0;
     case WM_TIMER:
       if (wparam == Overlay::kTickTimer) {
         app->overlay->OnTick();
@@ -329,11 +340,13 @@ DWORD WaitAnswering(HANDLE handle, DWORD timeout_ms) {
 // Captures until asked to quit: the hooks, the capture thread, and the message loop.
 int Serve(App& app) {
   HANDLE trigger = CreateEventW(nullptr, FALSE, FALSE, kTriggerEventName);
+  HANDLE edit = CreateEventW(nullptr, FALSE, FALSE, kEditTriggerEventName);
   HANDLE quit = CreateEventW(nullptr, TRUE, FALSE, kQuitEventName);
   // A copy taken over was asked to quit through this name. Whatever that left set is not meant for this one.
   if (quit != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) ResetEvent(quit);
-  if (trigger == nullptr || quit == nullptr) {
+  if (trigger == nullptr || edit == nullptr || quit == nullptr) {
     if (trigger != nullptr) CloseHandle(trigger);
+    if (edit != nullptr) CloseHandle(edit);
     if (quit != nullptr) CloseHandle(quit);
     return 1;
   }
@@ -343,7 +356,7 @@ int Serve(App& app) {
   WatchUpdate(app);
 
   std::thread hook_thread([&app, quit] { RunKeyboardHook(app.controller, quit); });
-  std::thread capture_thread([&app, trigger, quit] { RunCaptureLoop(app.controller, trigger, quit); });
+  std::thread capture_thread([&app, trigger, edit, quit] { RunCaptureLoop(app.controller, trigger, edit, quit); });
   Trace("application ready");
 
   const HANDLE waits[2] = {quit, updates.event()};
@@ -371,6 +384,7 @@ int Serve(App& app) {
   hook_thread.join();
   capture_thread.join();
   CloseHandle(quit);
+  CloseHandle(edit);
   CloseHandle(trigger);
   return 0;
 }

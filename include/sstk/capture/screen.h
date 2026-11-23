@@ -7,8 +7,9 @@
 
 namespace sstk {
 
-// kScroll offers a scrolling screenshot of the top app, and kLong is the one taken.
-enum class RegionKind { kFull, kApp, kZone, kNoTaskbar, kScroll, kLong };
+// kScroll offers a scrolling screenshot of the top app, and kLong is the one taken. kCustom is a part chosen by hand in
+// the editing panel, which offers it first.
+enum class RegionKind { kFull, kApp, kZone, kNoTaskbar, kScroll, kLong, kCustom };
 
 struct Region {
   RegionKind kind;

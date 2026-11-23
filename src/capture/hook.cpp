@@ -1,5 +1,6 @@
 #include "sstk/capture/hook.h"
 
+#include "sstk/config/core.h"
 #include "sstk/config/hooks.h"
 
 #include <psapi.h>
@@ -30,6 +31,8 @@ bool g_next_key_held = false;
 bool g_scroll_key_held = false;
 bool g_cancel_key_held = false;
 bool g_button_held[kMouseButtonCount] = {};
+bool g_editor_held[256] = {};  // Keys pressed for the editing panel, whose release is its too.
+std::atomic<ULONGLONG> g_editor_beat{0};
 
 bool IsHeld(int virtual_key) { return (GetAsyncKeyState(virtual_key) & 0x8000) != 0; }
 
@@ -49,7 +52,7 @@ void MaskWinKeyRelease() {
 // Opened by name on every press: the event only exists while the application is alive,
 // and a cached handle would keep signaling a dead instance after a restart.
 bool Capture(int chord) {
-  HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, kTriggerEventName);
+  HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, config::kCaptureChords[chord].opens_editor ? kEditTriggerEventName : kTriggerEventName);
   if (event == nullptr) return false;
   SetEvent(event);
   CloseHandle(event);
@@ -115,6 +118,38 @@ bool IsScrollChord() {
 
 bool IsDragging() { return Mode() == HookMode::kDrag; }
 
+// The panel has the keys only while it answers, so that a stalled one can never keep them from the system.
+bool EditorListening() {
+  return Mode() == HookMode::kEditor && GetTickCount64() - g_editor_beat.load(std::memory_order_relaxed) < config::kEditorKeyTimeoutMs;
+}
+
+// Keys pressed for the panel never reach the system, so their state is kept here.
+bool EditorHeld(int virtual_key) { return g_editor_held[virtual_key] || IsHeld(virtual_key); }
+
+LPARAM EditorFlags() {
+  LPARAM flags = 0;
+  if (EditorHeld(VK_CONTROL) || EditorHeld(VK_LCONTROL) || EditorHeld(VK_RCONTROL)) flags |= kEditorKeyControl;
+  if (EditorHeld(VK_SHIFT) || EditorHeld(VK_LSHIFT) || EditorHeld(VK_RSHIFT)) flags |= kEditorKeyShift;
+  if (EditorHeld(VK_MENU) || EditorHeld(VK_LMENU) || EditorHeld(VK_RMENU)) flags |= kEditorKeyAlt;
+  return flags;
+}
+
+// Returns true when the key is the panel's. A key already down when the panel opened is released to the system as usual.
+bool HandleEditorKey(DWORD virtual_key, bool is_down) {
+  if (virtual_key >= std::size(g_editor_held)) return false;
+  if (!is_down) {
+    if (!g_editor_held[virtual_key]) return false;
+    g_editor_held[virtual_key] = false;
+    PostMessageW(g_controller, kMsgEditorKey, virtual_key, EditorFlags());
+    return true;
+  }
+  if (!EditorListening()) return false;
+  const bool repeat = g_editor_held[virtual_key];
+  g_editor_held[virtual_key] = true;
+  PostMessageW(g_controller, kMsgEditorKey, virtual_key, EditorFlags() | kEditorKeyDown | (repeat ? kEditorKeyRepeat : 0));
+  return true;
+}
+
 WPARAM Stamp() { return static_cast<WPARAM>(NowSeconds() * 1e6); }
 
 bool IsModifier(DWORD virtual_key) {
@@ -150,7 +185,7 @@ bool IsButtonDown(WPARAM message) {
 // Returns true when the key event must not reach the rest of the system.
 bool HandleKey(DWORD virtual_key, bool is_down) {
   for (int i = 0; i < static_cast<int>(std::size(config::kCaptureChords)); ++i) {
-    const config::Chord& chord = config::kCaptureChords[i];
+    const config::CaptureChord& chord = config::kCaptureChords[i];
     if (virtual_key == chord.key) {
       return HandleChord(g_capture_held[i], is_down, AreHeld(chord.modifiers), IsScrolling() ? FinishScrolling : Capture, i);
     }
@@ -166,6 +201,7 @@ LRESULT CALLBACK KeyboardProc(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION) {
     const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
     const bool is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
+    if (HandleEditorKey(key->vkCode, is_down)) return 1;
     if (HandleKey(key->vkCode, is_down)) return 1;
     NoteKey(key->vkCode, is_down);
   }
@@ -205,6 +241,13 @@ bool HandleButton(WPARAM message, const MSLLHOOKSTRUCT& info) {
 LRESULT CALLBACK MouseProc(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION) {
     const auto& info = *reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam);
+    if ((wparam == WM_MOUSEWHEEL || wparam == WM_MOUSEHWHEEL) && EditorListening()) {
+      // Taken wherever the pointer is, as the window with the focus would otherwise scroll beneath the panel.
+      const LPARAM flags = EditorFlags() | (wparam == WM_MOUSEHWHEEL ? kEditorWheelHorizontal : 0);
+      const WPARAM packed = static_cast<WPARAM>(HIWORD(info.mouseData)) | static_cast<WPARAM>(flags) << 16;
+      PostMessageW(g_controller, kMsgEditorWheel, packed, MAKELPARAM(info.pt.x, info.pt.y));
+      return 1;
+    }
     if (wparam == WM_MOUSEWHEEL || wparam == WM_MOUSEHWHEEL) {
       // Reported, never taken: the scroll itself is what a scrolling screenshot records.
       if (wparam == WM_MOUSEWHEEL && IsScrolling()) PostMessageW(g_controller, kMsgScrollWheel, 0, MAKELPARAM(info.pt.x, info.pt.y));
@@ -284,6 +327,8 @@ void SetHookMode(HookMode mode) {
   const DWORD thread = g_hook_thread.load(std::memory_order_acquire);
   if (thread != 0) PostThreadMessageW(thread, kMsgSyncMouseHook, 0, 0);
 }
+
+void EditorHeartbeat() { g_editor_beat.store(GetTickCount64(), std::memory_order_relaxed); }
 
 void SetInputWatch(bool watch) {
   g_watch.store(watch, std::memory_order_relaxed);

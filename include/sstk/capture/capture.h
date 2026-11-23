@@ -17,6 +17,7 @@ struct CaptureResult {
   ScreenInfo screen;
   std::shared_ptr<const Image> frame;  // Null when the screen could not be read, e.g. on a secure desktop.
   SYSTEMTIME local_time{};
+  bool edit = false;  // Taken by the keys that open the editing panel.
 };
 
 // The own pictures of the windows a shot offers by themselves. They come a moment after the shot.
@@ -26,7 +27,8 @@ struct WindowShots {
 };
 
 // Blocks until quit_event is signaled, posting kMsgFlash and kMsgCaptured to the controller window, and kMsgWindowShots
-// once the windows are read by themselves. A kMsgFlash carries the monitor in wParam.
-void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE quit_event);
+// once the windows are read by themselves. A kMsgFlash carries the monitor in wParam. A shot set off by edit_event is
+// marked to open in the editing panel.
+void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE edit_event, HANDLE quit_event);
 
 }  // namespace sstk

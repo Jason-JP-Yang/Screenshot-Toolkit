@@ -102,18 +102,20 @@ class WindowGrabber {
 
 }  // namespace
 
-void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE quit_event) {
+void RunCaptureLoop(HWND controller, HANDLE trigger_event, HANDLE edit_event, HANDLE quit_event) {
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
   WindowGrabber grabber(controller);
-  const HANDLE waits[] = {trigger_event, quit_event};
+  const HANDLE waits[] = {trigger_event, edit_event, quit_event};
   uint64_t next_id = 1;
 
   for (;;) {
-    if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) return;
+    const DWORD woken = WaitForMultipleObjects(3, waits, FALSE, INFINITE);
+    if (woken != WAIT_OBJECT_0 && woken != WAIT_OBJECT_0 + 1) return;
 
     auto result = std::make_unique<CaptureResult>();
     result->id = next_id++;
     result->trigger_time = NowSeconds();
+    result->edit = woken == WAIT_OBJECT_0 + 1;
     GetLocalTime(&result->local_time);
 
     POINT cursor{};

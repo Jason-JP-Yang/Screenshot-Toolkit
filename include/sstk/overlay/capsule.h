@@ -3,6 +3,7 @@
 #pragma once
 
 #include "sstk/capture/screen.h"
+#include "sstk/config/colors.h"
 #include "sstk/graphics/compositor.h"
 #include "sstk/graphics/motion.h"
 #include "sstk/scroll/recorder.h"
@@ -14,7 +15,8 @@ namespace sstk {
 
 class Capsule {
  public:
-  Capsule(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor);
+  Capsule(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor,
+          const config::CapsuleStyle& style = config::kCapsuleOnScreen);
   ~Capsule();
   Capsule(const Capsule&) = delete;
   Capsule& operator=(const Capsule&) = delete;
@@ -25,6 +27,8 @@ class Capsule {
             const TimeBase& now);
 
   void MoveTo(float x, float y, const TimeBase& now);
+  // Keeps it centered on a point as its width changes, from now on.
+  void CenterOn(float center_x, float y, const TimeBase& now);
   void Select(int index, const TimeBase& now);
   void SetHover(int index, const TimeBase& now);  // In the recording state any index lights the whole capsule.
   void Hide(const TimeBase& now);
@@ -93,6 +97,7 @@ class Capsule {
   Compositor& compositor_;
   float scale_;
   SIZE monitor_;
+  config::CapsuleStyle style_;
   float height_;
   float pad_;
   float cell_;
@@ -148,6 +153,8 @@ class Capsule {
   float shadow_right_width_ = 0.0f;
   float target_x_ = 0.0f;
   float target_y_ = 0.0f;
+  bool centered_ = false;
+  float center_x_ = 0.0f;
 };
 
 }  // namespace sstk

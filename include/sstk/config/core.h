@@ -94,6 +94,17 @@ inline constexpr double kScrollTextMinShare = 0.15;     // Of the window, for a 
 inline constexpr unsigned kScrollDetectTimeoutMs = 1500;
 inline constexpr unsigned kScrollDetectRetryMs[] = {150, 350, 700, 1200};  // Some apps build what they tell only once asked.
 
+// The editing panel.
+inline constexpr double kEditorZoomStep = 1.2;     // Per wheel notch, and per Ctrl+ or Ctrl-.
+inline constexpr float kEditorMaxZoom = 8.0f;      // Screen pixels per picture pixel.
+inline constexpr float kEditorMaxFit = 2.0f;       // A small crop is enlarged no further than this to fill the space.
+inline constexpr float kEditorEdgeZoom = 1.6f;     // How fast a crop handle held against the edge widens the view, per second.
+inline constexpr float kEditorEdgeZone = 28.0f;    // How near the edge that starts, in device independent pixels.
+inline constexpr unsigned kEditorHeartbeatMs = 400;
+inline constexpr unsigned kEditorKeyTimeoutMs = 2000;  // Keys go back to the system once the panel has been silent this long.
+inline constexpr float kRulerStepDegrees = 5.0f;   // Per wheel notch over the ruler, and 1 with Shift.
+inline constexpr float kRulerSnapDegrees = 2.0f;   // To every 45 degrees.
+
 // Housekeeping.
 inline constexpr unsigned kTickIntervalMs = 40;
 inline constexpr int kTaskbarPollTicks = 3;

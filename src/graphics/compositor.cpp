@@ -83,18 +83,23 @@ ComPtr<IDCompositionVirtualSurface> Compositor::CreateVirtualSurface(int width, 
 }
 
 bool Compositor::Upload(IDCompositionSurface* surface, POINT at, const Image& image) {
-  if (surface == nullptr || !image) return false;
-  const RECT area{at.x, at.y, at.x + image.width(), at.y + image.height()};
+  if (!image) return false;
+  return Upload(surface, at, image.view());
+}
+
+bool Compositor::Upload(IDCompositionSurface* surface, POINT at, const PixelView& pixels) {
+  if (surface == nullptr || pixels.data == nullptr || pixels.width <= 0 || pixels.height <= 0) return false;
+  const RECT area{at.x, at.y, at.x + pixels.width, at.y + pixels.height};
   ComPtr<ID3D11Texture2D> texture;
   POINT offset{};
   if (FAILED(surface->BeginDraw(&area, IID_PPV_ARGS(&texture), &offset))) return false;
   const D3D11_BOX box{static_cast<UINT>(offset.x),
                       static_cast<UINT>(offset.y),
                       0,
-                      static_cast<UINT>(offset.x + image.width()),
-                      static_cast<UINT>(offset.y + image.height()),
+                      static_cast<UINT>(offset.x + pixels.width),
+                      static_cast<UINT>(offset.y + pixels.height),
                       1};
-  d3d_context_->UpdateSubresource(texture.Get(), 0, &box, image.data(), image.stride(), 0);
+  d3d_context_->UpdateSubresource(texture.Get(), 0, &box, pixels.data, static_cast<UINT>(pixels.stride), 0);
   texture.Reset();
   surface->EndDraw();
   return true;

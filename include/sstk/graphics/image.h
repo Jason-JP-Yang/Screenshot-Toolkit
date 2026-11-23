@@ -112,6 +112,7 @@ struct GlyphSpec {
   float left, top, right, bottom;  // Region in normalized monitor coordinates.
   GlyphGap gap;
   bool scroll = false;  // A chevron pointing down cut out of the region, for scrolling screenshots.
+  bool custom = false;  // The region's corners only, as a crop marks them, for a part chosen by hand.
 };
 
 // One option's glyph, centered on a cell. Color is 0xRRGGBB.

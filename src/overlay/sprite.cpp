@@ -114,9 +114,10 @@ D3DMATRIX QuadTransform(float left, float top, float width, float height, Vec p0
 }  // namespace
 
 DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float grab_x, float grab_y, float scale)
+    : DragSprite(compositor, thumbnail, grab_x, grab_y, scale, config::kCardRadius * scale, std::max(std::round(config::kCardBorder * scale), 1.0f)) {}
+
+DragSprite::DragSprite(Compositor& compositor, const Image& thumbnail, float grab_x, float grab_y, float scale, float radius, float border)
     : compositor_(compositor), grab_x_(grab_x + kMargin), grab_y_(grab_y + kMargin) {
-  const float radius = config::kCardRadius * scale;
-  const float border = std::max(std::round(config::kCardBorder * scale), 1.0f);
   const Image sprite = RenderSprite(thumbnail, radius, border, config::kCardBorderColor, kMargin);
   surface_ = compositor_.CreateSurface(sprite, false);
   width_ = static_cast<float>(sprite.width());

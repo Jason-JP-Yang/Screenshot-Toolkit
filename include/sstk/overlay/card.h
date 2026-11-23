@@ -33,6 +33,8 @@
 
 namespace sstk {
 
+struct EditDocument;
+
 struct RectF {
   float left, top, right, bottom;
   float width() const { return right - left; }
@@ -66,6 +68,22 @@ class Card {
   void BuildDerivedAssets(const TimeBase& now);
 
   void MoveTo(const RectF& rect, int depth, const SpringSpec& spec, const TimeBase& now, double delay, bool in_flight);
+
+  // The same at once, with every picture already faded in, for a card that comes out of the editing panel.
+  void PlaceAt(const RectF& rect, int depth, const TimeBase& now);
+
+  // Out of sight while the editing panel shows the screenshot, and back, exactly where the panel's picture came to rest.
+  void Conceal();
+  void Reveal(const TimeBase& now);
+
+  // The editing panel's picture in place of the options, until it is edited back to one of them: its size first, then
+  // its thumbnail and its pixels as they are made.
+  void SetEdited(SIZE size);
+  void SetEditedThumbnail(Image thumbnail, const TimeBase& now);
+  void SetEditedPicture(std::shared_ptr<const LongImage> picture) { edited_.picture = std::move(picture); }
+  void ClearEdited(const TimeBase& now);
+  bool edited() const { return edited_.active; }
+  bool edited_shown() const { return edited_.surface != nullptr; }
 
   // Crossfades to another region's thumbnail. MoveTo carries out the matching camera move.
   void Select(int index, const TimeBase& now);
@@ -145,6 +163,15 @@ class Card {
   int selected() const { return selected_; }
   IDCompositionSurface* frost() const { return frost_.Get(); }
 
+  // What the editing panel opens with: each option's own picture, and the scrolling screenshot with its place on the plane.
+  const std::vector<std::shared_ptr<const LongImage>>& pictures() const { return sources_; }
+  const std::shared_ptr<const LongImage>& long_image() const { return long_image_; }
+  const RECT& long_plane() const { return long_plane_; }
+
+  std::shared_ptr<EditDocument> edit;  // The markup and crop the editing panel left, to go on with next time.
+  uint64_t edit_version = 0;           // Of the picture being made from it.
+  bool editing = false;                // The editing panel has it, and it is out of sight.
+
   double expiry = 0.0;
   bool floating = false;  // Its sprite is still flying home, so the card can be neither grabbed nor dismissed.
   bool busy = false;      // A scrolling screenshot is recording or showing its outcome, which holds the card in place.
@@ -180,7 +207,17 @@ class Card {
     int drawn_top = 0;
   };
 
+  struct Edited {
+    bool active = false;
+    SIZE size{};  // Of the picture.
+    Image pixels;  // Its thumbnail.
+    ComPtr<IDCompositionSurface> surface;
+    std::shared_ptr<const LongImage> picture;
+  };
+
   void KeepDrawn(const ScrollPiece& piece);
+  void ShowEdited(const TimeBase& now, bool immediate);
+  RectF EditedRect() const { return RectF{0.0f, 0.0f, static_cast<float>(edited_.size.cx), static_cast<float>(edited_.size.cy)}; }
 
   int CrispIndex(int index) const;  // The scroll option borrows the app window's thumbnail.
   bool ShowsLong(int index) const;
@@ -255,8 +292,11 @@ class Card {
   Long long_;
   SIZE long_size_{};
   std::shared_ptr<const LongImage> long_image_;
+  RECT long_plane_{};
+  Edited edited_;
 
   float shadow_reach_ = 0.0f;
+  float shadow_target_ = 0.0f;
   bool hibernating_ = false;
   double full_release_at_ = 0.0;
   double exit_end_time_ = 0.0;

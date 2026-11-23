@@ -25,8 +25,9 @@ struct SpritePose {
 
 class DragSprite {
  public:
-  // The grabbed point is in pixels of the thumbnail.
+  // The grabbed point is in pixels of the thumbnail. A thumbnail's corners and border by default, or these, in its pixels.
   DragSprite(Compositor& compositor, const Image& thumbnail, float grab_x, float grab_y, float scale);
+  DragSprite(Compositor& compositor, const Image& thumbnail, float grab_x, float grab_y, float scale, float radius, float border);
   ~DragSprite();
   DragSprite(const DragSprite&) = delete;
   DragSprite& operator=(const DragSprite&) = delete;

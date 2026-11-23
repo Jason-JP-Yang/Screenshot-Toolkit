@@ -53,6 +53,14 @@ add_executable(ScreenshotToolkit WIN32
   src/capture/hook.cpp
   src/capture/screen.cpp
   src/capture/window.cpp
+  src/editor/art.cpp
+  src/editor/brush.cpp
+  src/editor/canvas.cpp
+  src/editor/chrome.cpp
+  src/editor/document.cpp
+  src/editor/editor.cpp
+  src/editor/jobs.cpp
+  src/editor/toolbar.cpp
   src/graphics/compositor.cpp
   src/graphics/image.cpp
   src/graphics/motion.cpp

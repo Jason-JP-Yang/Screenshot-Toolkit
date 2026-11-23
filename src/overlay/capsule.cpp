@@ -110,14 +110,15 @@ const wchar_t* LabelFor(RegionKind kind) {
     case RegionKind::kNoTaskbar: return config::kLabelNoTaskbar;
     case RegionKind::kLong:
     case RegionKind::kScroll: return config::kLabelScrolling;
+    case RegionKind::kCustom: return config::kLabelCustom;
   }
   return nullptr;
 }
 
 }  // namespace
 
-Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor)
-    : compositor_(compositor), scale_(scale), monitor_(monitor),
+Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor, const config::CapsuleStyle& style)
+    : compositor_(compositor), scale_(scale), monitor_(monitor), style_(style),
       height_(std::round((config::kSegmentHeight + config::kCapsulePadding * 2.0f) * scale)),
       pad_(std::round(config::kCapsulePadding * scale)), cell_(std::round(config::kSegmentWidth * scale)),
       segment_height_(std::round(config::kSegmentHeight * scale)), dot_(std::round(config::kRecordingDot * scale)) {
@@ -164,7 +165,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   SetClipRadii(frame_clip_.Get(), height_ * 0.5f, nullptr);
   root_->AddVisual(frame_.Get(), FALSE, nullptr);
 
-  ring_ = compositor_.CreateSolidVisual(Argb(config::kCapsuleHairlineColor, config::kCapsuleHairlineAlpha), wide, height_);
+  ring_ = compositor_.CreateSolidVisual(Argb(style_.hairline, style_.hairline_alpha), wide, height_);
   frame_->AddVisual(ring_.Get(), FALSE, nullptr);
 
   inner_ = compositor_.CreateVisual();
@@ -177,7 +178,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   SetClipRadii(inner_clip_.Get(), height_ * 0.5f - 1.0f, nullptr);
   frame_->AddVisual(inner_.Get(), FALSE, nullptr);
 
-  fallback_fill_ = compositor_.CreateSolidVisual(Argb(config::kGlassTint, 1.0f), wide, height_);
+  fallback_fill_ = compositor_.CreateSolidVisual(Argb(style_.glass, 1.0f), wide, height_);
   inner_->AddVisual(fallback_fill_.Get(), FALSE, nullptr);
   frost_ = compositor_.CreateVisual();
   inner_->AddVisual(frost_.Get(), FALSE, nullptr);
@@ -197,7 +198,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   veil_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
   veil_effect_ = compositor_.CreateEffectGroup();
   veil_->SetEffect(veil_effect_.Get());
-  veil_->AddVisual(compositor_.CreateSolidVisual(Argb(config::kHoverVeilColor, config::kHoverVeilAlpha), wide, height_).Get(), FALSE, nullptr);
+  veil_->AddVisual(compositor_.CreateSolidVisual(Argb(style_.hover, style_.hover_alpha), wide, height_).Get(), FALSE, nullptr);
   inner_->AddVisual(veil_.Get(), FALSE, nullptr);
 
   // Dark glyphs and labels live inside the pill's clip, so the sliding pill inverts each glyph exactly as it passes.
@@ -208,7 +209,7 @@ Capsule::Capsule(Compositor& compositor, IDCompositionVisual* parent, float scal
   pill_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
   pill_effect_ = compositor_.CreateEffectGroup();
   pill_->SetEffect(pill_effect_.Get());
-  pill_->AddVisual(compositor_.CreateSolidVisual(Argb(config::kPorcelain, 1.0f), wide, height_).Get(), FALSE, nullptr);
+  pill_->AddVisual(compositor_.CreateSolidVisual(Argb(style_.pill, 1.0f), wide, height_).Get(), FALSE, nullptr);
   dark_layer_ = compositor_.CreateVisual();
   pill_->AddVisual(dark_layer_.Get(), FALSE, nullptr);
   inner_->AddVisual(pill_.Get(), FALSE, nullptr);
@@ -285,17 +286,18 @@ std::unique_ptr<Capsule::Segment> Capsule::MakeSegment(const Region& region, con
   const float mw = static_cast<float>(monitor_.cx);
   const float mh = static_cast<float>(monitor_.cy);
   const bool scroll = region.kind == RegionKind::kScroll || region.kind == RegionKind::kLong;
-  const GlyphSpec spec{mw / mh, rect.left / mw, rect.top / mh, rect.right / mw, rect.bottom / mh,
-                       without_taskbar && !scroll ? taskbar_edge : GlyphGap::kNone, scroll};
+  GlyphSpec spec{mw / mh, rect.left / mw, rect.top / mh, rect.right / mw, rect.bottom / mh,
+                 without_taskbar && !scroll ? taskbar_edge : GlyphGap::kNone, scroll};
+  if (region.kind == RegionKind::kCustom) spec = GlyphSpec{mw / mh, 0.22f, 0.20f, 0.78f, 0.80f, GlyphGap::kNone, false, true};
   const int cell_w = static_cast<int>(cell_);
   const int cell_h = static_cast<int>(segment_height_);
-  const Image light = RenderGlyph(spec, cell_w, cell_h, scale_, config::kGlyphOnGlass, config::kGlyphOnGlassAlpha);
-  const Image dark = RenderGlyph(spec, cell_w, cell_h, scale_, config::kGlyphOnPorcelain, 1.0f);
+  const Image light = RenderGlyph(spec, cell_w, cell_h, scale_, style_.glyph, style_.glyph_alpha);
+  const Image dark = RenderGlyph(spec, cell_w, cell_h, scale_, style_.pill_glyph, 1.0f);
   const int font = static_cast<int>(std::lround(config::kCapsuleFontSize * scale_));
-  // The scroll option's name carries the chord that starts it.
-  const TextLine label = region.kind == RegionKind::kScroll
-                             ? ShortcutLine(LabelFor(region.kind), config::kGlyphOnPorcelain, config::kPorcelain, scale_)
-                             : RenderText(LabelFor(region.kind), font, config::kGlyphOnPorcelain);
+  // The scroll option's name carries the chord that starts it, where there is one.
+  const TextLine label = region.kind == RegionKind::kScroll && style_.shortcuts
+                             ? ShortcutLine(LabelFor(region.kind), style_.pill_glyph, style_.pill, scale_)
+                             : RenderText(LabelFor(region.kind), font, style_.pill_glyph);
 
   // Laid out by what is visibly drawn: the label ends as far from the pill's edge as the glyph starts from the other.
   const RECT ink = InkBounds(dark);
@@ -401,6 +403,15 @@ void Capsule::Arrange(const TimeBase& now, bool immediate) {
   const Segment& chosen = *segments_[selected_];
   const float left = chosen.x.target();
   const float right = left + chosen.active_width;
+  if (centered_) {
+    // The same spring as the width, so that both ends move as one about the center.
+    target_x_ = std::round(center_x_ - width * 0.5f);
+    if (immediate || !visible_) {
+      x_.Snap(target_x_);
+    } else {
+      x_.To(dc, now, target_x_, config::kCapsuleResize);
+    }
+  }
   if (immediate) {
     width_.Snap(width);
     pill_left_.Snap(left);
@@ -517,6 +528,12 @@ void Capsule::MoveTo(float x, float y, const TimeBase& now) {
   if (!visible_) return;
   x_.To(dc, now, x, config::kReflow);
   y_.To(dc, now, y, config::kReflow);
+}
+
+void Capsule::CenterOn(float center_x, float y, const TimeBase& now) {
+  centered_ = true;
+  center_x_ = center_x;
+  MoveTo(std::round(center_x - width_.target() * 0.5f), y, now);
 }
 
 void Capsule::Select(int index, const TimeBase& now) {

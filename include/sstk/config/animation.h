@@ -113,6 +113,28 @@ inline constexpr float kBinInsideImpulse = 2.2f;
 inline constexpr float kBinOutsideImpulse = -1.6f;
 inline constexpr float kBinGulpImpulse = 3.4f;
 
+// The editing panel: the picture opening out of the thumbnail or the screen, settling back into the deck, and every
+// change of view in between.
+inline constexpr SpringSpec kEditorOpen{0.50f, 0.90f};
+inline constexpr SpringSpec kEditorLand{0.46f, 0.92f};
+inline constexpr SpringSpec kEditorView{0.42f, 1.0f};
+inline constexpr SpringSpec kEditorZoom{0.20f, 1.0f};
+inline constexpr SpringSpec kEditorFade{0.24f, 1.0f};
+inline constexpr SpringSpec kEditorPress{0.16f, 0.90f};
+inline constexpr float kEditorPressScale = 0.92f;
+inline constexpr double kEditorChromeDelay = 0.12;
+inline constexpr double kEditorOutsideDelay = 0.10;
+inline constexpr double kEditorRefitDelay = 0.40;  // After a crop handle is let go, before the crop is fitted to the space.
+inline constexpr double kEditorSharpDelay = 0.05;  // After the view comes to rest, before it is sharpened.
+inline constexpr float kEditorChromeRise = 10.0f;
+inline constexpr SpringSpec kEditorToolbar{0.40f, 0.86f};
+inline constexpr SpringSpec kToolLift{0.30f, 0.72f};
+inline constexpr SpringSpec kPopover{0.26f, 0.84f};
+inline constexpr float kPopoverFrom = 0.94f;
+inline constexpr SpringSpec kEditorToBin{0.40f, 0.94f};
+inline constexpr float kEditorBinScale = 0.22f;  // Of the screen's height, the picture's height on its way into the bin.
+inline constexpr double kEditorBinPullDelay = 0.16;
+
 // The setup and About window.
 inline constexpr SpringSpec kSetupHover{0.20f, 1.0f};
 inline constexpr SpringSpec kSetupPress{0.18f, 0.90f};

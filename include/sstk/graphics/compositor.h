@@ -39,6 +39,7 @@ class Compositor {
 
   // Copies pixels into part of a surface, with their top-left corner at `at`.
   bool Upload(IDCompositionSurface* surface, POINT at, const Image& image);
+  bool Upload(IDCompositionSurface* surface, POINT at, const PixelView& pixels);
 
   // A shared 1x1 surface of a color that is stretched by the visual showing it. Colors are 0xAARRGGBB, straight alpha.
   IDCompositionSurface* SolidColor(uint32_t argb);

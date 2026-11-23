@@ -448,8 +448,21 @@ Image RenderGlyph(const GlyphSpec& glyph, int width, int height, float scale, ui
   const float fill_corner = 1.0f * scale;
   // The chevron's units shrink to fit a short screen.
   const float unit = std::min({scale, (fill_r - fill_l) / 10.0f, (fill_b - fill_t) / 6.6f});
+  const float arm_x = std::max(fill_hw * 0.62f, stroke * 1.6f);
+  const float arm_y = std::max(fill_hh * 0.62f, stroke * 1.6f);
   return RenderShape(width, height, color, [&](float px, float py) {
     const float outline = Outline(px, py, cx, cy, screen_w * 0.5f, screen_h * 0.5f, corner, stroke);
+    if (glyph.custom) {
+      float marks = 1e9f;
+      for (const float sx : {-1.0f, 1.0f}) {
+        for (const float sy : {-1.0f, 1.0f}) {
+          const float kx = fill_cx + sx * fill_hw;
+          const float ky = fill_cy + sy * fill_hh;
+          marks = std::min({marks, SegmentDistance(px, py, kx, ky, kx - sx * arm_x, ky), SegmentDistance(px, py, kx, ky, kx, ky - sy * arm_y)});
+        }
+      }
+      return std::max(outline, Coverage(marks - stroke * 0.55f)) * color_alpha;
+    }
     float fill = Coverage(RoundedBoxDistance(px, py, fill_cx, fill_cy, fill_hw, fill_hh, fill_corner));
     if (glyph.scroll && fill > 0.0f) {
       const float ux = (px - fill_cx) / unit;

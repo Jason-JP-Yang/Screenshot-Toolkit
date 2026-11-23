@@ -11,6 +11,7 @@ using Microsoft::WRL::ComPtr;
 namespace sstk {
 
 inline constexpr wchar_t kTriggerEventName[] = L"Local\\ScreenshotToolkit.Trigger";
+inline constexpr wchar_t kEditTriggerEventName[] = L"Local\\ScreenshotToolkit.EditTrigger";
 inline constexpr wchar_t kQuitEventName[] = L"Local\\ScreenshotToolkit.Quit";
 inline constexpr wchar_t kAppMutexName[] = L"Local\\ScreenshotToolkit.App";
 
@@ -34,7 +35,18 @@ enum Message : UINT {
   kMsgPointerInput,            // wParam: when, in microseconds of NowSeconds. lParam: where a button or wheel went, as two signed halves.
   kMsgKeyInput,                // wParam: when, in microseconds of NowSeconds.
   kMsgScrollMismatch,          // wParam: the shot whose app no longer shows what the shot did.
+  kMsgEditorKey,               // wParam: virtual key, lParam: kEditorKey* flags. The editing panel has every key while open.
+  kMsgEditorWheel,             // wParam: the delta in the low 16 bits, then kEditorKey* flags from bit 16. lParam: the point.
+  kMsgEditorJob,               // lParam: EditorJobResult*, ownership moves to the receiver
 };
+
+// What comes with a key or wheel turn held for the editing panel.
+inline constexpr LPARAM kEditorKeyDown = 1;
+inline constexpr LPARAM kEditorKeyRepeat = 2;
+inline constexpr LPARAM kEditorKeyControl = 4;
+inline constexpr LPARAM kEditorKeyShift = 8;
+inline constexpr LPARAM kEditorKeyAlt = 16;
+inline constexpr LPARAM kEditorWheelHorizontal = 32;
 
 // Monotonic seconds on the same clock DirectComposition uses for its timeline.
 double NowSeconds();

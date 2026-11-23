@@ -12,10 +12,15 @@ enum class HookMode {
   kScrollReady,  // As kSelector, and the scroll chord starts a scrolling screenshot.
   kScrolling,    // The scroll and capture chords finish the scrolling screenshot, and wheel turns are reported.
   kDrag,         // The cancel key and button call off the drag, without reaching the application under the pointer.
+  kEditor,       // Every key and wheel turn goes to the editing panel with kMsgEditorKey and kMsgEditorWheel, and to
+                 // nothing else, as long as the panel keeps calling EditorHeartbeat.
 };
 
 // Any mode but idle also hooks the mouse, which is why it is not left on: that hook wakes this process on every move.
 void SetHookMode(HookMode mode);
+
+// The editing panel is still answering. Should it stop, keys go back to the system after a moment.
+void EditorHeartbeat();
 
 // While watching, which hooks the mouse too, every key and button pressed and every wheel turned is reported with
 // kMsgKeyInput or kMsgPointerInput, but for the chords taken here and keys that only modify others.

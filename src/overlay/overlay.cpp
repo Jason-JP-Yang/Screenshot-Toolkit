@@ -87,6 +87,17 @@ class Deck {
   void Land(Card* card);
   void PollInsets(const TimeBase& now);
 
+  // The editing panel's card: made for a shot the panel took, laid out at once out of sight, shown where the panel's
+  // picture comes to rest, or taken away once it went into the bin.
+  Card* CardOf(const std::shared_ptr<Shot>& shot) const { return Find(shot); }
+  Card* AdoptShot(std::unique_ptr<CaptureResult> capture, std::shared_ptr<Shot> shot);
+  RectF Settle(Card* card);
+  void RevealCard(Card* card);
+  void RemoveCard(Card* card);
+  void ChooseRegion(Card* card, int region);
+  void EditorChanged();
+  float FlashLevel() const { return flash_alpha_.ValueAt(NowSeconds()); }
+
   void ShowBin();
   void HideBin();
   void GulpBin();
@@ -103,6 +114,7 @@ class Deck {
   enum class Press { kNone, kCard, kSwipe };
 
   float Dip(float value) const { return value * scale_; }
+  ComPtr<IDCompositionSurface> FrostFor(const CaptureResult& capture);
   void ApplyInsets(const TaskbarInsets& insets);
   RectF RectForSize(SIZE size) const;
   RectF RectBehind(const Card& card, const RectF& front, int depth) const;
@@ -176,6 +188,7 @@ class Deck {
   // meanwhile, lifted, swiped away, or opened, and the screenshot is kept all the same.
   std::shared_ptr<Shot> scroll_shot_;
   double outcome_until_ = 0.0;
+  std::shared_ptr<Shot> open_when_ready_;  // Pressed while its scrolling screenshot was being made.
 
   // What the input sink was last shaped around, so that an unchanged shape is not set again.
   bool sink_set_ = false;
@@ -297,7 +310,7 @@ void Deck::Flash() {
   compositor_.Commit();
 
   // Shown after the commit so that the first composed frame already contains the flash.
-  SetWindowPos(window_, HWND_TOPMOST, bounds_.left, bounds_.top, stage_width_, size_.cy,
+  SetWindowPos(window_, owner_.StageAfter(), bounds_.left, bounds_.top, stage_width_, size_.cy,
                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
   shown_ = true;
 }
@@ -373,7 +386,8 @@ void Deck::HideSink() {
 void Deck::UpdateSink() {
   if (dragging_) return;
   Card* top = front();
-  if (top == nullptr) {
+  // The editing panel takes every press on its monitor.
+  if (top == nullptr || owner_.EditorOver(monitor_)) {
     HideSink();
     return;
   }
@@ -404,7 +418,7 @@ void Deck::UpdateSink() {
 
   sink_origin_ = POINT{bounding.left, bounding.top};
   OffsetRgn(shape, -bounding.left, -bounding.top);
-  SetWindowPos(sink_, HWND_TOPMOST, bounds_.left + bounding.left, bounds_.top + bounding.top,
+  SetWindowPos(sink_, owner_.StageAfter(), bounds_.left + bounding.left, bounds_.top + bounding.top,
                bounding.right - bounding.left, bounding.bottom - bounding.top,
                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
   SetWindowRgn(sink_, shape, FALSE);  // The window takes ownership of the region.
@@ -417,7 +431,8 @@ void Deck::BindCapsuleToFront(const TimeBase& now) {
   }
   capsule_stale_ = false;
   Card* top = front();
-  if (top == nullptr) {
+  // An edited picture is changed in the editing panel, not here.
+  if (top == nullptr || top->edited() || top->editing) {
     capsule_->Hide(now);
     return;
   }
@@ -449,23 +464,7 @@ uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
   store_.Submit(shot, capture->screen.regions.front().rect);
 
   ApplyInsets(capture->screen.insets);
-  const float capsule_full = capsule_->frost_width();
-  const float left = static_cast<float>(insets_.left) + Dip(config::kEdgeMargin);
-  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
-  const float frost_top = box_top - Dip(config::kCapsuleGap) - capsule_->height();
-  RECT frost_rect{static_cast<LONG>(left), static_cast<LONG>(frost_top), static_cast<LONG>(left + capsule_full),
-                  static_cast<LONG>(frost_top + capsule_->height())};
-  RECT monitor_rect{0, 0, size_.cx, size_.cy};
-  IntersectRect(&frost_rect, &frost_rect, &monitor_rect);
-  ComPtr<IDCompositionSurface> frost;
-  if (!IsRectEmpty(&frost_rect)) {
-    uint32_t tint = config::kGlassTint;
-    uint32_t tint_bgr = (tint & 0xFF) << 16 | (tint & 0xFF00) | (tint >> 16);
-    Image frost_pixels = RenderFrost(*capture->frame, frost_rect, config::kFrostDownscale, tint_bgr, config::kGlassTintAlpha);
-    frost = compositor_.CreateSurface(frost_pixels, true);
-  }
-
-  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, *capture, scale_, std::move(frost),
+  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), shot, *capture, scale_, FrostFor(*capture),
                                      card_shadow_, shadow_clip_.Get(), now.seconds);
   Card* raw = card.get();
   raw->PlaceFullScreen();
@@ -486,6 +485,104 @@ uint64_t Deck::AddShot(std::unique_ptr<CaptureResult> capture) {
         (committed - capture->trigger_time) * 1000.0, (committed - started) * 1000.0, (NowSeconds() - committed) * 1000.0,
         capture->screen.regions.size());
   return shot->id;
+}
+
+ComPtr<IDCompositionSurface> Deck::FrostFor(const CaptureResult& capture) {
+  const float capsule_full = capsule_->frost_width();
+  const float left = static_cast<float>(insets_.left) + Dip(config::kEdgeMargin);
+  const float box_top = static_cast<float>(size_.cy - insets_.bottom) - Dip(config::kEdgeMargin) - Dip(config::kCardMaxHeight);
+  const float frost_top = box_top - Dip(config::kCapsuleGap) - capsule_->height();
+  RECT frost_rect{static_cast<LONG>(left), static_cast<LONG>(frost_top), static_cast<LONG>(left + capsule_full),
+                  static_cast<LONG>(frost_top + capsule_->height())};
+  RECT monitor_rect{0, 0, size_.cx, size_.cy};
+  IntersectRect(&frost_rect, &frost_rect, &monitor_rect);
+  ComPtr<IDCompositionSurface> frost;
+  if (!IsRectEmpty(&frost_rect) && capture.frame) {
+    uint32_t tint = config::kGlassTint;
+    uint32_t tint_bgr = (tint & 0xFF) << 16 | (tint & 0xFF00) | (tint >> 16);
+    Image frost_pixels = RenderFrost(*capture.frame, frost_rect, config::kFrostDownscale, tint_bgr, config::kGlassTintAlpha);
+    frost = compositor_.CreateSurface(frost_pixels, true);
+  }
+  return frost;
+}
+
+Card* Deck::AdoptShot(std::unique_ptr<CaptureResult> capture, std::shared_ptr<Shot> shot) {
+  if (!capture || !capture->frame || capture->screen.regions.empty()) return nullptr;
+  TimeBase now = compositor_.Now();
+  if (Card* previous = front(); previous != nullptr && hovering_) {
+    previous->expiry = std::max(previous->expiry, now.seconds + CurrentSettings().dwell_seconds);
+  }
+  if (outcome_until_ != 0.0) {
+    EndOutcome(now);
+  } else if (scroll_shot_ != nullptr) {
+    owner_.FinishScroll();
+  }
+  ApplyInsets(capture->screen.insets);
+  auto card = std::make_unique<Card>(compositor_, cards_layer_.Get(), std::move(shot), *capture, scale_, FrostFor(*capture), card_shadow_,
+                                     shadow_clip_.Get(), now.seconds);
+  Card* raw = card.get();
+  raw->PlaceFullScreen();
+  raw->Conceal();
+  raw->BuildDerivedAssets(now);
+  cards_.push_back(std::move(card));
+  EnsureShown();
+  return raw;
+}
+
+RectF Deck::Settle(Card* card) {
+  const TimeBase now = compositor_.Now();
+  Layout(config::kReflow, now);
+  const int count = static_cast<int>(cards_.size());
+  for (int i = 0; i < count; ++i) {
+    if (cards_[i].get() != card) continue;
+    const int depth = count - 1 - i;
+    const RectF rect = depth == 0 ? front_rect_ : RectBehind(*card, front_rect_, depth);
+    card->PlaceAt(rect, depth, now);
+    return rect;
+  }
+  return front_rect_;
+}
+
+void Deck::RevealCard(Card* card) {
+  if (!Holds(card)) return;
+  const TimeBase now = compositor_.Now();
+  card->Reveal(now);
+  card->expiry = now.seconds + CurrentSettings().dwell_seconds;
+  BindCapsuleToFront(now);
+  UpdateSink();
+}
+
+void Deck::RemoveCard(Card* card) {
+  const auto found = std::find_if(cards_.begin(), cards_.end(), [&](const auto& each) { return each.get() == card; });
+  if (found == cards_.end()) return;
+  cards_.erase(found);
+  const TimeBase now = compositor_.Now();
+  BindCapsuleToFront(now);
+  Layout(config::kReflow, now);
+  if (cards_.empty()) UpdateSink();
+}
+
+void Deck::ChooseRegion(Card* card, int region) {
+  if (!Holds(card)) return;
+  const TimeBase now = compositor_.Now();
+  const bool was_edited = card->edited();
+  card->ClearEdited(now);
+  const bool changed = region >= 0 && region != card->selected() && card->CanSelect(region);
+  if (changed) card->Select(region, now);
+  // A shot the panel took has not been saved yet, and one edited before is saved as it was edited.
+  if (changed || was_edited || card->shot()->requested_version == 0) SubmitSelection(*card);
+}
+
+void Deck::EditorChanged() {
+  const TimeBase now = compositor_.Now();
+  hovering_ = false;
+  tracking_leave_ = false;
+  capsule_->SetHover(-1, now);
+  BindCapsuleToFront(now);
+  UpdateSink();
+  if (shown_) {
+    SetWindowPos(window_, owner_.StageAfter(), bounds_.left, bounds_.top, stage_width_, size_.cy, SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE);
+  }
 }
 
 void Deck::Dismiss(size_t index, const TimeBase& now, float velocity) {
@@ -525,6 +622,13 @@ void Deck::SelectRegion(int index) {
 }
 
 void Deck::SubmitSelection(Card& card) {
+  if (card.edited()) {
+    // The edited picture is saved once it is made.
+    if (const std::shared_ptr<const LongImage> picture = card.whole(); picture != nullptr) {
+      store_.Submit(card.shot(), RECT{0, 0, picture->width(), picture->height()}, picture);
+    }
+    return;
+  }
   const Region& region = card.regions()[card.selected()];
   store_.Submit(card.shot(), region.kind == RegionKind::kLong ? card.long_rect() : region.rect, card.whole());
 }
@@ -610,7 +714,7 @@ void Deck::CancelPress() {
 
 bool Deck::HasOptions() const {
   const Card* top = front();
-  return top != nullptr && top->regions().size() >= 2;
+  return top != nullptr && !top->edited() && !top->editing && top->regions().size() >= 2;
 }
 
 bool Deck::Holds(const Card* card) const {
@@ -632,7 +736,7 @@ bool Deck::OfferScroll(uint64_t shot, ScrollHints& hints) {
 
 bool Deck::ScrollReady() const {
   const Card* top = front();
-  return top != nullptr && !top->busy && !top->floating && !dragging_ && press_ == Press::kNone &&
+  return top != nullptr && !top->busy && !top->floating && !top->edited() && !top->editing && !dragging_ && press_ == Press::kNone &&
          top->regions()[top->selected()].kind == RegionKind::kScroll;
 }
 
@@ -700,7 +804,7 @@ void Deck::EndScroll(const ScrollUpdate& update) {
     return;
   }
   // A press on the thumbnail finished it, and the thumbnail is already wanted, so there is no moment for the outcome.
-  if (card == front() && press_ == Press::kNone && capsule_->visible()) {
+  if (card == front() && press_ == Press::kNone && capsule_->visible() && open_when_ready_ != shot) {
     capsule_->ShowOutcome(update.outcome, now);
     outcome_until_ = now.seconds + config::kScrollResultSeconds;
     Layout(config::kMorph, now);
@@ -713,6 +817,10 @@ void Deck::EndScroll(const ScrollUpdate& update) {
     Layout(card == front() ? config::kMorph : config::kReflow, now);
   }
   compositor_.Commit();
+  if (open_when_ready_ == shot) {
+    open_when_ready_ = nullptr;
+    if (card == front() && press_ == Press::kNone && !card->busy) owner_.OpenEditor(*this, *card);
+  }
 }
 
 // The outcome has had its moment, and the card goes back to being an ordinary screenshot.
@@ -780,7 +888,8 @@ void Deck::Tick() {
   last_tick_ = now.seconds;
   for (size_t i = cards_.size(); i-- > 0;) {
     Card* card = cards_[i].get();
-    if (owner_.drag_held()) {
+    // Nothing leaves the deck while a thumbnail is held or the editing panel is open.
+    if (owner_.drag_held() || owner_.editor_ != nullptr) {
       card->expiry += elapsed;
       continue;
     }
@@ -832,7 +941,7 @@ RECT Deck::FreeArea() const {
 
 void Deck::EnsureShown() {
   if (shown_) return;
-  SetWindowPos(window_, HWND_TOPMOST, bounds_.left, bounds_.top, stage_width_, size_.cy,
+  SetWindowPos(window_, owner_.StageAfter(), bounds_.left, bounds_.top, stage_width_, size_.cy,
                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
   shown_ = true;
 }
@@ -1120,10 +1229,17 @@ void Deck::OnMouseLeave() {
   compositor_.Commit();
 }
 
-// The thumbnail goes at once, and the viewer opens the file once it is saved, as a scrolling screenshot may not be yet.
+// The thumbnail opens out into the editing panel. Should the panel not open, it goes at once, and the viewer opens the
+// file once it is saved, as a scrolling screenshot may not be yet.
 void Deck::OpenFront() {
   Card* top = front();
   if (top == nullptr) return;
+  // A scrolling screenshot still being made opens once it is.
+  if (top->busy) {
+    open_when_ready_ = top->shot();
+    return;
+  }
+  if (!top->floating && owner_.OpenEditor(*this, *top)) return;
   const std::shared_ptr<Shot> shot = top->shot();
   const TimeBase now = compositor_.Now();
   Dismiss(cards_.size() - 1, now, 0.0f);
@@ -1512,12 +1628,14 @@ Overlay::Overlay(HWND controller, Compositor& compositor, Store& store)
     : controller_(controller), compositor_(compositor), store_(store) {}
 
 Overlay::~Overlay() {
+  CloseEditor();
   CancelDrags();
   CancelScroll();
   guard_.reset();
   detector_.reset();
   file_drag_.reset();
   decks_.clear();
+  jobs_.reset();
 }
 
 Deck* Overlay::DeckFor(HMONITOR monitor) {
@@ -1550,6 +1668,7 @@ void Overlay::EnsureTicking() {
 void Overlay::OnFlash(HMONITOR monitor) {
   if (!compositor_.IsHealthy()) {
     // DWM restarted underneath us: every composition object is gone, so start over.
+    CloseEditor();
     CancelDrags();
     CancelScroll();
     decks_.clear();
@@ -1564,6 +1683,11 @@ void Overlay::OnFlash(HMONITOR monitor) {
 
 void Overlay::OnCaptured(std::unique_ptr<CaptureResult> capture) {
   if (!capture->frame || capture->screen.regions.empty()) return;
+  // The panel's keys open it with the shot, unless a thumbnail is in the air or a scrolling screenshot is running.
+  if (capture->edit && !editor_ && !session_ && !recorder_) {
+    OpenEditorFromCapture(std::move(capture));
+    return;
+  }
   if (Deck* deck = DeckFor(capture->screen.monitor); deck != nullptr) {
     const HWND app = capture->screen.app;
     const RECT bounds = capture->screen.bounds;
@@ -1585,7 +1709,9 @@ void Overlay::SyncHookMode() {
     SetInputWatch(watch);
   }
   HookMode mode = HookMode::kIdle;
-  if (session_ || std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->pressing(); })) {
+  if (editor_) {
+    mode = HookMode::kEditor;
+  } else if (session_ || std::any_of(decks_.begin(), decks_.end(), [](const auto& deck) { return deck->pressing(); })) {
     mode = HookMode::kDrag;
   } else if (recorder_) {
     mode = HookMode::kScrolling;
@@ -1614,12 +1740,14 @@ void Overlay::OnSelectorStep(int direction) {
 
 void Overlay::OnWindowShots(std::unique_ptr<WindowShots> shots) {
   for (auto& deck : decks_) {
-    if (deck->AttachWindows(*shots)) break;
+    if (deck->AttachWindows(*shots)) return;
   }
+  if (editor_ && editor_->capture_id() == shots->capture) editor_->AttachWindows(*shots);
 }
 
 void Overlay::OnPointerInput(double when, POINT point) {
-  // What the thumbnail and its selector take reaches no app.
+  // What the editing panel, the thumbnail, and its selector take reaches no app.
+  if (editor_) return;
   for (const auto& deck : decks_) {
     if (deck->Covers(point)) return;
   }
@@ -1656,9 +1784,14 @@ void Overlay::GuardScroll(const Card& card, const RECT& monitor) {
 }
 
 void Overlay::OnScrollAreas(std::unique_ptr<ScrollAreas> found) {
+  bool taken = false;
   for (auto& deck : decks_) {
-    if (deck->OfferScroll(found->shot, found->hints)) break;
+    if (deck->OfferScroll(found->shot, found->hints)) {
+      taken = true;
+      break;
+    }
   }
+  if (!taken && editor_ && editor_->shot() && editor_->shot()->id == found->shot) editor_->OfferScroll(found->hints);
   SyncHookMode();
 }
 
@@ -1819,7 +1952,8 @@ void Overlay::EndDrag(const FileDragOutcome& outcome) {
 void Overlay::OnTick() {
   // A finished recorder's thread may still be writing traces, and is let go once it has ended.
   retired_.erase(std::remove_if(retired_.begin(), retired_.end(), [](const auto& recorder) { return recorder->done(); }), retired_.end());
-  bool any_active = session_ != nullptr || !finishing_.empty() || pacer_.running() || recorder_ != nullptr || !retired_.empty();
+  if (editor_ && editor_->finished()) CloseEditor();
+  bool any_active = session_ != nullptr || !finishing_.empty() || pacer_.running() || recorder_ != nullptr || !retired_.empty() || editor_ != nullptr;
   const TimeBase now = compositor_.Now();
   for (auto& deck : decks_) {
     if (!deck->IsIdle()) {
@@ -1839,6 +1973,8 @@ void Overlay::OnTick() {
 }
 
 void Overlay::OnDisplayChange() {
+  scroll_after_editor_ = false;
+  CloseEditor();
   CancelDrags();
   CancelScroll();
   // Geometry is stale for every monitor, so everything on screen is dropped; files and clipboard are already safe.
@@ -1853,5 +1989,203 @@ void Overlay::OnDisplayChange() {
 }
 
 bool Overlay::IsIdle() const { return !active_; }
+
+bool Overlay::EditorOver(HMONITOR monitor) const { return editor_ != nullptr && editor_->monitor() == monitor && !editor_->finished(); }
+
+HWND Overlay::StageAfter() const {
+  return editor_ != nullptr && !editor_->finished() && editor_->window() != nullptr ? editor_->window() : HWND_TOPMOST;
+}
+
+Card* Overlay::EditorCard(Deck** owner) const {
+  if (!editor_shot_) return nullptr;
+  for (const auto& deck : decks_) {
+    if (Card* card = deck->CardOf(editor_shot_); card != nullptr) {
+      if (owner != nullptr) *owner = deck.get();
+      return card;
+    }
+  }
+  return nullptr;
+}
+
+bool Overlay::OpenEditor(Deck& deck, Card& card) {
+  if (editor_ || session_ || recorder_ || !compositor_.IsHealthy()) return false;
+  if (!jobs_) jobs_ = std::make_unique<EditorJobs>(controller_);
+  const TimeBase now = compositor_.Now();
+  EditorRequest request;
+  request.shot = card.shot();
+  request.regions = card.regions();
+  request.pictures = card.pictures();
+  request.long_image = card.long_image();
+  request.long_plane = card.long_plane();
+  request.insets = card.insets();
+  request.selected = card.selected();
+  request.document = card.edit;
+  request.from = card.RectAt(now.seconds);
+  request.from_view = card.edited() && card.edit ? RectF{} : card.SourceRect();
+  if (card.edited() && card.edit) {
+    const RECT turned = TurnRect(card.edit->crop, card.edit->turns);
+    request.from_view = RectF{static_cast<float>(turned.left), static_cast<float>(turned.top), static_cast<float>(turned.right), static_cast<float>(turned.bottom)};
+  }
+  request.from_radius = config::kCardRadius * deck.scale();
+  request.from_border = std::max(std::round(config::kCardBorder * deck.scale()), 1.0f);
+  if (const Image* thumbnail = card.thumbnail(); thumbnail != nullptr && *thumbnail) {
+    request.preview = CopyRect(*thumbnail, 0, 0, thumbnail->width(), thumbnail->height());
+  }
+  auto editor = std::make_unique<Editor>(*this, compositor_, store_, *jobs_, deck.monitor(), deck.bounds(), deck.scale());
+  if (!editor->ready()) return false;
+  deck.CancelPress();
+  editor_ = std::move(editor);
+  editor_shot_ = card.shot();
+  for (auto& each : decks_) each->EditorChanged();
+  editor_->Open(std::move(request));
+  EnsureTicking();
+  SyncHookMode();
+  Trace("editor: opened from a thumbnail");
+  return true;
+}
+
+void Overlay::OpenEditorFromCapture(std::unique_ptr<CaptureResult> capture) {
+  Deck* deck = DeckFor(capture->screen.monitor);
+  if (deck == nullptr || !compositor_.IsHealthy()) return;
+  if (!jobs_) jobs_ = std::make_unique<EditorJobs>(controller_);
+  auto shot = std::make_shared<Shot>();
+  shot->frame = capture->frame;
+  shot->local_time = capture->local_time;
+  shot->id = next_shot_id_++;
+
+  EditorRequest request;
+  request.shot = shot;
+  request.frame = capture->frame;
+  request.regions = capture->screen.regions;
+  request.insets = capture->screen.insets;
+  request.selected = 0;
+  request.choose = true;
+  const RECT& whole = capture->screen.regions.front().rect;
+  request.from = RectF{static_cast<float>(whole.left), static_cast<float>(whole.top), static_cast<float>(whole.right), static_cast<float>(whole.bottom)};
+  request.from_view = request.from;
+  request.flash = deck->FlashLevel();
+  const HWND app = capture->screen.app;
+  const RECT bounds = capture->screen.bounds;
+  request.capture = std::move(capture);
+
+  auto editor = std::make_unique<Editor>(*this, compositor_, store_, *jobs_, deck->monitor(), deck->bounds(), deck->scale());
+  if (!editor->ready()) return;
+  editor_ = std::move(editor);
+  editor_shot_ = shot;
+  for (auto& each : decks_) each->EditorChanged();
+  editor_->Open(std::move(request));
+  // The scrolling screenshot is looked for as for any shot, and offered in the panel.
+  if (app != nullptr) {
+    if (!detector_) detector_ = std::make_unique<ScrollDetector>(controller_);
+    detector_->Request(shot->id, app, bounds, deck->scale());
+  }
+  EnsureTicking();
+  SyncHookMode();
+  Trace("editor: opened from the capture keys");
+}
+
+void Overlay::CloseEditor() {
+  if (!editor_) return;
+  const bool scroll = scroll_after_editor_ && editor_->finished();
+  scroll_after_editor_ = false;
+  if (!editor_->finished()) editor_->Abort();
+  editor_.reset();
+  Deck* owner = nullptr;
+  Card* card = EditorCard(&owner);
+  if (card != nullptr && card->editing) owner->RevealCard(card);
+  editor_shot_ = nullptr;
+  for (auto& deck : decks_) deck->EditorChanged();
+  if (scroll && owner != nullptr && owner->ScrollReady()) StartScroll(*owner);
+  SyncHookMode();
+  compositor_.Commit();
+}
+
+EditorLanding Overlay::EditorLand(Editor& editor, const EditorOutcome& outcome) {
+  EditorLanding landing;
+  Deck* deck = nullptr;
+  Card* card = EditorCard(&deck);
+  if (card == nullptr) {
+    deck = DeckFor(editor.monitor());
+    if (deck == nullptr) return landing;
+    std::vector<WindowShot> shots = editor.TakeWindowShots();
+    card = deck->AdoptShot(editor.TakeCapture(), editor.shot());
+    if (card == nullptr) return landing;
+    if (!shots.empty()) card->AttachWindows(shots, compositor_.Now());
+    if (editor.scroll_offered()) card->OfferScroll(editor.scroll_hints());
+  }
+  int region = outcome.region;
+  if (outcome.end == EditorEnd::kScroll) {
+    for (size_t i = 0; i < card->regions().size(); ++i) {
+      if (card->regions()[i].kind == RegionKind::kScroll) region = static_cast<int>(i);
+    }
+  }
+  if (outcome.document) {
+    card->edit = outcome.document;
+    card->SetEdited(outcome.size);
+    ++card->edit_version;
+    store_.Expect(card->shot());
+  } else {
+    card->edit = nullptr;
+    deck->ChooseRegion(card, region);
+  }
+  landing.rect = deck->Settle(card);
+  landing.view = card->SourceRect();
+  landing.version = card->edit_version;
+  compositor_.Commit();
+  return landing;
+}
+
+void Overlay::EditorCovering(Editor&) {
+  Deck* deck = nullptr;
+  if (Card* card = EditorCard(&deck); card != nullptr) {
+    card->Conceal();
+    deck->EditorChanged();
+  }
+  compositor_.Commit();
+}
+
+void Overlay::EditorArrived(Editor&, const EditorOutcome& outcome) {
+  Deck* deck = nullptr;
+  if (Card* card = EditorCard(&deck); card != nullptr) deck->RevealCard(card);
+  // The recording starts once the panel has gone and let go of the keys, some of which it takes.
+  scroll_after_editor_ = outcome.end == EditorEnd::kScroll;
+}
+
+void Overlay::EditorDeleted(Editor& editor) {
+  Deck* deck = nullptr;
+  if (Card* card = EditorCard(&deck); card != nullptr) deck->RemoveCard(card);
+  if (editor.shot() && store_.Discard(editor.shot())) PostMessageW(controller_, kMsgClearClipboard, 0, 0);
+  editor_shot_ = nullptr;
+}
+
+void Overlay::OnEditorKey(UINT key, LPARAM flags) {
+  if (editor_) editor_->OnKey(key, flags);
+}
+
+void Overlay::OnEditorWheel(POINT point, int delta, LPARAM flags) {
+  if (editor_) editor_->OnWheel(point, delta, flags);
+}
+
+void Overlay::OnEditorJob(std::unique_ptr<EditorJobResult> result) {
+  if (result->kind == EditorJobResult::Kind::kSharp) {
+    if (editor_) editor_->OnJob(*result);
+    return;
+  }
+  const TimeBase now = compositor_.Now();
+  Card* card = nullptr;
+  for (const auto& deck : decks_) {
+    if ((card = deck->CardOf(result->shot)) != nullptr) break;
+  }
+  if (card == nullptr && session_ && session_->shot() == result->shot) card = session_->card();
+  const bool current = card == nullptr || card->edit_version == result->ticket;
+  if (result->kind == EditorJobResult::Kind::kThumbnail) {
+    if (card != nullptr && current) card->SetEditedThumbnail(std::move(result->pixels), now);
+    if (editor_ && editor_->shot() == result->shot) editor_->ThumbnailReady();
+  } else if (current && result->picture) {
+    if (card != nullptr) card->SetEditedPicture(result->picture);
+    store_.Submit(result->shot, RECT{0, 0, result->picture->width(), result->picture->height()}, result->picture);
+  }
+  compositor_.Commit();
+}
 
 }  // namespace sstk
