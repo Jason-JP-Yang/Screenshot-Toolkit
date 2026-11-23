@@ -45,8 +45,13 @@ $file = Split-Path $Asset -Leaf
 $hash = (Get-FileHash -Path $Asset -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $notes = New-Object System.Collections.Generic.List[string]
-$notes.Add('Pre-production beta.')
-$notes.Add('')
+if ($Name -match '-beta$') {
+  $notes.Add('Pre-production beta.')
+  $notes.Add('')
+} elseif ($Name -match '-dev-') {
+  $notes.Add('Development build from main, ahead of the next release.')
+  $notes.Add('')
+}
 $notes.AddRange($body)
 $notes.Add('')
 $notes.Add('---')

@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases"><img alt="Latest build" src="https://img.shields.io/github/v/release/Jason-JP-Yang/Screenshot-Toolkit?include_prereleases&sort=date&display_name=tag&style=flat-square&label=latest&color=16171a"></a>
+  <a href="https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Jason-JP-Yang/Screenshot-Toolkit?sort=semver&display_name=tag&style=flat-square&label=latest&color=16171a"></a>
   <a href="https://github.com/Jason-JP-Yang/Screenshot-Toolkit/actions/workflows/release.yml"><img alt="Release pipeline" src="https://img.shields.io/github/actions/workflow/status/Jason-JP-Yang/Screenshot-Toolkit/release.yml?branch=main&style=flat-square&label=build"></a>
   <img alt="Windows 10 and 11, 64-bit" src="https://img.shields.io/badge/Windows-10%20%C2%B7%2011%20x64-16171a?style=flat-square">
   <img alt="C++20, no dependencies" src="https://img.shields.io/badge/C%2B%2B20-no%20dependencies-16171a?style=flat-square">
@@ -49,7 +49,7 @@ You can leave it there and carry on. If you want only one window, change the reg
 
 ## Install
 
-1. Download `ScreenshotToolkit-<version>.exe` from the [releases page](https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases). The newest build is at the top. All builds are marked as pre-releases while the project is in beta.
+1. Download `ScreenshotToolkit-<version>.exe` from the [releases page](https://github.com/Jason-JP-Yang/Screenshot-Toolkit/releases), taking the release marked **Latest**. Builds marked as pre-releases are development builds of `main`, published ahead of the next release.
 2. Run it and choose **Quick Install**. Windows asks for administrator approval once.
 3. Press <kbd>PrtSc</kbd>.
 
@@ -319,7 +319,7 @@ Configuring also writes `compile_commands.json`, so clangd, VS Code, and CLion p
 2. `sstk_iconbake` is built and run. It draws the icon with the same code the program uses for its other graphics and writes `app.ico`, which `res/app.rc` embeds. There is no image file to keep in sync.
 3. The program is linked, with link-time code generation in Release builds. The graphics, imaging, shell, and networking DLLs are delay-loaded, so the service, which runs from the same executable, never loads them.
 
-Builds are named `vX.Y.Z[-dev]-<commit>-beta`, for example `v0.2.0-dev-1a2b3c4d-beta`. The `dev` part is dropped only when `HEAD` is exactly the commit tagged `vX.Y.Z`.
+Builds are named `vX.Y.Z[-dev]-<commit>`, for example `v1.0.0-dev-1a2b3c4d`. The `dev` part is dropped only when `HEAD` is exactly the commit tagged `vX.Y.Z`. Versions before 1.0.0 were betas and end in `-beta`.
 </details>
 
 ## Running a development build
@@ -467,10 +467,10 @@ There is no automated test suite yet. Most of the program sits between input hoo
 - **Changelog.** Add user-facing changes to `CHANGELOG.md` under `## Unreleased` as you make them.
 - **Versions.** The version is set in `project(... VERSION X.Y.Z)` in `CMakeLists.txt`. The build number is the count of commits leading to `HEAD`, and installed copies only ever move to a higher one.
 
-GitHub Actions publishes every release through `.github/workflows/release.yml`. While the project is in beta, all of them are marked as pre-releases.
+GitHub Actions publishes every release through `.github/workflows/release.yml`.
 
-- Every push to `main` publishes the newest commit as the current dev build, with the changelog's Unreleased section and a comparison link, and removes the previous dev build. When several pushes arrive close together, only the newest is published.
-- Every `vX.Y.Z` tag that has no release yet is built from that tag and published with its section of the changelog. Running the workflow by hand with **rebuild** checked publishes every version again, for example after the signing certificate changes.
+- Every push to `main` publishes the newest commit as the current dev build, a pre-release with the changelog's Unreleased section and a comparison link, and removes the previous dev build. When several pushes arrive close together, only the newest is published.
+- Every `vX.Y.Z` tag that has no release yet is built from that tag and published with its section of the changelog, as a full release marked as the latest. The 0.x betas stay pre-releases. Running the workflow by hand with **rebuild** checked publishes every version again, for example after the signing certificate changes.
 
 To release a version, move the Unreleased entries under a new `## X.Y.Z` heading, set the same version in `CMakeLists.txt`, commit, tag the commit `vX.Y.Z`, and push the branch and the tag. `scripts\release.cmd` builds the same thing locally into `release\<version>\`, which git ignores; tag first so the build name has no `dev`.
 

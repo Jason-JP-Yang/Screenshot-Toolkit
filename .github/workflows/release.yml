@@ -1,7 +1,8 @@
-# Builds, signs, and publishes Screenshot Toolkit as GitHub releases, every one marked as a pre-release.
-#   A push to main publishes its newest commit as a dev build, vX.Y.Z-dev-<commit>-beta, and removes the dev build
-#   published before it.
-#   Each vX.Y.Z tag without a release is built from that tag and published as vX.Y.Z-<commit>-beta. That covers tags
+# Builds, signs, and publishes Screenshot Toolkit as GitHub releases.
+#   A push to main publishes its newest commit as a dev build, vX.Y.Z-dev-<commit>, marked as a pre-release, and
+#   removes the dev build published before it.
+#   Each vX.Y.Z tag without a release is built from that tag and published as vX.Y.Z-<commit>, a full release marked
+#   as the latest. Versions before 1.0.0 were betas: they keep -beta at the end and stay pre-releases. That covers tags
 #   pushed later and the versions released before this workflow. Run by hand with "rebuild", it publishes every
 #   version again, as after the signing certificate changes.
 # A run stops the one still going before it, so only the newest commit is ever released.
@@ -121,7 +122,8 @@ jobs:
           $sha = git rev-parse HEAD
           if ($env:KIND -eq 'version') {
             $tag = $env:REF
-            $name = "$tag-$($sha.Substring(0, 8))-beta"
+            $name = "$tag-$($sha.Substring(0, 8))"
+            if ($tag -match '^v0\.') { $name += '-beta' }
             $section = $tag.Substring(1)
             $versions = @(git tag --list 'v*' --sort=v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' })
             $index = [array]::IndexOf($versions, $tag)
@@ -171,7 +173,8 @@ jobs:
           $exists = $LASTEXITCODE -eq 0
           if ($env:KIND -eq 'version') {
             if ($exists) { gh release delete $env:TAG --repo $repo --yes }
-            gh release create $env:TAG $asset "$asset.sha256" --repo $repo --title $title --notes-file notes.md --prerelease --verify-tag
+            $standing = if ($env:TAG -match '^v0\.') { '--prerelease' } else { '--latest' }
+            gh release create $env:TAG $asset "$asset.sha256" --repo $repo --title $title --notes-file notes.md $standing --verify-tag
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } else {
             if ($exists) { gh release delete $env:TAG --repo $repo --cleanup-tag --yes }
