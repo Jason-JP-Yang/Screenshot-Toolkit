@@ -2,6 +2,25 @@
 
 Built programs are kept per version in the local `release/` folder, created by `scripts\release.cmd`. Each version is also tagged in git as `vMajor.Minor.Patch`.
 
+## 1.0.0
+
+The first production release.
+
+### Added
+
+- An editing panel, over the whole monitor and above everything else, with the other monitors dimmed and nothing under it reachable while it is open. It follows the Windows light or dark app theme.
+- Clicking a thumbnail opens it in the panel, growing out of the thumbnail. **Done** settles the result back into the deck, where it is saved and copied; the close button pulls the shot into the rubbish bin.
+- Along the top: close, then reset, undo, and redo; the region selector, with **Custom** first; turn right, turn left, and **Done**. Choosing **Scrolling Screenshot** closes the panel into its thumbnail and starts recording.
+- Cropping by the frame's corners and edges. Dragged past the picture's edge, the picture shrinks to bring more of it within reach, in step with the handle, and the crop settles to fill the space a moment after it is let go. Changing the crop by hand makes the region **Custom**.
+- A markup toolbar with an ink pen, a monoline pen, a highlighter, a pencil, a crayon, and an ink brush, each with five widths, an opacity, five colors, and a grid of more; a pixel and an object eraser; a lasso that moves and recolors marks; and a ruler that strokes run along. A pen's pressure and tilt shape the marks; with a mouse, the ink pen and the brush thin with speed. Pencil and crayon take a paper grain fixed to the picture, and the ink brush bleeds when full, dries darker at its edges, and breaks into dry streaks as it runs out.
+- The toolbar folds into a round button in the nearer bottom corner, and can be dragged to rest along the bottom or the top, at the left, middle, or right, or standing along either side. The picture is fitted clear of it, and the place is kept for next time.
+- With the toolbar open, the wheel and Ctrl+Plus or Ctrl+Minus zoom the picture, up to eight times, without changing the crop.
+
+### Changed
+
+- Win+Shift+S opens the editing panel: the screen flashes, shrinks into the panel, and a region is chosen by dragging, by clicking a window, or with the selector. PrintScreen captures straight to a thumbnail as before.
+- Builds are named `vX.Y.Z[-dev]-<commit>`, without `-beta`. Each version is published as a full release, the newest marked as the latest; dev builds of main stay pre-releases.
+
 ## 0.3.1
 
 ### Changed

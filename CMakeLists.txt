@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ScreenshotToolkit VERSION 0.3.1 LANGUAGES CXX RC)
+project(ScreenshotToolkit VERSION 1.0.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,7 +16,7 @@ set(SSTK_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(SSTK_DEFINITIONS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A00000F)
 set(SSTK_OPTIONS /W4 /permissive- /utf-8 /Zc:__cplusplus /Gy /Gw $<$<CONFIG:Release>:/O2 /GL /DNDEBUG>)
 
-# The version name, vX.Y.Z[-dev]-<commit>-beta, and the build's UTC time are written on every build, each file only
+# The version name, vX.Y.Z[-dev]-<commit>, and the build's UTC time are written on every build, each file only
 # when it changes.
 add_custom_target(sstk_version
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DVERSION=${PROJECT_VERSION} -DGIT=${GIT_EXECUTABLE}
