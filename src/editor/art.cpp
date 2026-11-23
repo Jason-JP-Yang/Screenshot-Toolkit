@@ -509,11 +509,12 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
     const TextStyle style{config::kToolLabelFaces, static_cast<int>(std::size(config::kToolLabelFaces)), config::kToolLabelWeight, false,
                           config::kToolLabelInk};
     const TextLine line = RenderText(text, std::max(static_cast<int>(std::lround(config::kToolLabelSize * scale)), 7), look.label, style);
-    const RECT ink = InkBounds(line.image);
+    const Image label = TurnImage(line.image, 4 - look.label_turns);
+    const RECT ink = InkBounds(label);
     const float center = std::min(c * unit, label_right * unit - static_cast<float>(ink.right - ink.left) * 0.5f);
     const int x = static_cast<int>(std::lround(center - static_cast<float>(ink.left + ink.right) * 0.5f));
     const int y = static_cast<int>(std::lround(label_y * unit - static_cast<float>(ink.top + ink.bottom) * 0.5f));
-    painter.Blend(line.image, x, y);
+    painter.Blend(label, x, y);
   }
   return painter.Finish();
 }

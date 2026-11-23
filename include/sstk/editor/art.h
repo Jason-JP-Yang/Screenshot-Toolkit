@@ -23,6 +23,7 @@ struct ToolLook {
   uint32_t ink;     // The tool's color.
   int percent = -1;  // Its opacity, printed on the barrel below 100.
   uint32_t label;
+  int label_turns = 0;  // Quarter turns clockwise the tool will be shown turned by, which its label is turned back from.
 };
 
 // A tool standing upright, tip at the top. The bottom runs on past what the toolbar shows.

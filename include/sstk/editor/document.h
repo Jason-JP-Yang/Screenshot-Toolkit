@@ -81,6 +81,7 @@ struct ToolBox {
   bool object_eraser = false;
   uint32_t custom_color = 0x8E5CF7;
   bool custom_used = false;
+  int dock = 1;  // Where the markup toolbar was left, as a ToolbarDock.
 
   ToolBox();
   float WidthOf(Tool tool, int index) const;  // Device independent pixels.

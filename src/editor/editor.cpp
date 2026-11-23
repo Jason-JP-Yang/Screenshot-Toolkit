@@ -346,7 +346,7 @@ void Editor::BuildVisuals() {
   root_->AddVisual(chrome_layer_.Get(), FALSE, nullptr);
   capsule_ = std::make_unique<Capsule>(compositor_, chrome_layer_.Get(), scale_, size_, palette.capsule);
   chrome_ = std::make_unique<EditorChrome>(compositor_, chrome_layer_.Get(), scale_, size_, palette);
-  toolbar_ = std::make_unique<MarkupToolbar>(compositor_, chrome_layer_.Get(), scale_, size_, palette);
+  toolbar_ = std::make_unique<MarkupToolbar>(compositor_, chrome_layer_.Get(), scale_, size_, chrome_->bottom() + config::kToolbarDockGap * scale_, palette);
   bin_layer_ = compositor_.CreateVisual();
   root_->AddVisual(bin_layer_.Get(), FALSE, nullptr);
 
@@ -674,12 +674,31 @@ void Editor::Open(EditorRequest request) {
 }
 
 RectF Editor::Area() const {
-  const float top = chrome_->bottom() + config::kEditorPictureTop * scale_;
+  float top = chrome_->bottom() + config::kEditorPictureTop * scale_;
   const float side = config::kEditorPictureSide * scale_;
-  const float height = static_cast<float>(size_.cy);
-  float bottom = height - top;
-  if (phase_ != Phase::kChoosing && toolbar_->shown() && !toolbar_->folded()) bottom = toolbar_->top() - config::kEditorPictureBottom * scale_;
-  return RectF{side, top, static_cast<float>(size_.cx) - side, std::max(bottom, top + 1.0f)};
+  float left = side;
+  float right = static_cast<float>(size_.cx) - side;
+  float bottom = static_cast<float>(size_.cy) - top;
+  // The picture keeps clear of the toolbar, along whichever edge it rests.
+  if (phase_ != Phase::kChoosing && toolbar_->shown() && !toolbar_->folded()) {
+    const RECT panel = toolbar_->panel();
+    const float gap = config::kEditorPictureBottom * scale_;
+    switch (toolbar_->side()) {
+      case ToolbarSide::kTop:
+        top = std::max(top, static_cast<float>(panel.bottom) + gap);
+        break;
+      case ToolbarSide::kLeft:
+        left = std::max(left, static_cast<float>(panel.right) + gap);
+        break;
+      case ToolbarSide::kRight:
+        right = std::min(right, static_cast<float>(panel.left) - gap);
+        break;
+      default:
+        bottom = static_cast<float>(panel.top) - gap;
+        break;
+    }
+  }
+  return RectF{left, top, std::max(right, left + 1.0f), std::max(bottom, top + 1.0f)};
 }
 
 EditorView Editor::Fit(const RECT& crop, int turns, const RectF& area) const {
@@ -1533,7 +1552,7 @@ void Editor::Release(const Contact& contact) {
       if (chrome_->HitTest(point) == pressed_action_) Act(pressed_action_, now);
       break;
     case Drag::kToolbar:
-      toolbar_->Release();
+      HandleToolbar(toolbar_->Release(now), now);
       break;
     case Drag::kChoose: {
       drag_ = Drag::kNone;
@@ -1592,7 +1611,7 @@ void Editor::EndDrag(const TimeBase& now) {
       chrome_->Press(ChromeAction::kNone, now);
       break;
     case Drag::kToolbar:
-      toolbar_->Release();
+      HandleToolbar(toolbar_->Release(now), now);
       break;
     case Drag::kChoose:
       choose_hover_ = -1;
@@ -1666,6 +1685,7 @@ void Editor::HandleToolbar(ToolbarEvent event, const TimeBase& now) {
       break;
     case ToolbarEvent::kFolded:
     case ToolbarEvent::kUnfolded:
+    case ToolbarEvent::kDocked:
       Refit(config::kEditorToolbar, now);
       break;
     default:

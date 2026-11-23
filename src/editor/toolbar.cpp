@@ -73,8 +73,9 @@ Image RenderSample(Tool tool, float width, float scale, uint32_t color, int cell
 
 }  // namespace
 
-MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor, const config::EditorPalette& palette)
-    : compositor_(compositor), scale_(scale), monitor_(monitor), palette_(palette) {
+MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent, float scale, SIZE monitor, float ceiling,
+                             const config::EditorPalette& palette)
+    : compositor_(compositor), scale_(scale), monitor_(monitor), ceiling_(ceiling), palette_(palette) {
   layer_ = compositor_.CreateVisual();
   layer_->SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR);
   parent->AddVisual(layer_.Get(), FALSE, nullptr);
@@ -85,15 +86,29 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   const LONG swatch_gap = Px(config::kSwatchGap, scale);
   const LONG section = Px(config::kToolbarSection, scale);
   const LONG fold = Px(config::kToolbarFold, scale);
-  const LONG margin = Px(config::kEditorMargin, scale);
   height_ = static_cast<float>(Px(config::kToolbarHeight, scale));
   width_ = static_cast<float>(pad + cell * kToolCount + section + swatch * 3 + swatch_gap * 2 + section + fold + pad);
-  const LONG left = std::lround((static_cast<float>(monitor.cx) - width_) * 0.5f);
-  top_ = static_cast<float>(monitor.cy) - static_cast<float>(margin) - height_;
-  panel_ = RECT{left, static_cast<LONG>(top_), left + static_cast<LONG>(width_), static_cast<LONG>(top_ + height_)};
+  const float longest = std::max(width_, height_);
   const float radius = config::kToolbarRadius * scale;
   const LONG button = Px(config::kMarkupButton, scale);
-  button_rect_ = RECT{margin, monitor.cy - margin - button, margin + button, monitor.cy - margin};
+  dock_ = static_cast<ToolbarDock>(std::clamp(Tools().dock, 0, kToolbarDocks - 1));
+  if (!Fits(dock_)) dock_ = ToolbarDock::kBottom;
+  button_right_ = side() == ToolbarSide::kRight;
+  button_rect_ = ButtonRect(button_right_);
+
+  // Where a dragged toolbar will land.
+  landing_ = compositor_.CreateVisual();
+  landing_effect_ = compositor_.CreateEffectGroup();
+  landing_->SetEffect(landing_effect_.Get());
+  landing_clip_ = compositor_.CreateClip();
+  landing_clip_->SetLeft(0.0f);
+  landing_clip_->SetTop(0.0f);
+  landing_->SetClip(landing_clip_.Get());
+  landing_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  const float landing_alpha = std::min(palette.hover_alpha * config::kToolbarLandingShare, 1.0f);
+  landing_->AddVisual(compositor_.CreateSolidVisual(static_cast<uint32_t>(landing_alpha * 255.0f + 0.5f) << 24 | palette.hover, longest, longest).Get(), FALSE,
+                      nullptr);
+  layer_->AddVisual(landing_.Get(), FALSE, nullptr);
 
   root_ = compositor_.CreateVisual();
   root_effect_ = compositor_.CreateEffectGroup();
@@ -102,20 +117,22 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   shape_ = compositor_.CreateVisual();
   root_->AddVisual(shape_.Get(), FALSE, nullptr);
 
-  // Two shadows, the toolbar's and the button's, as the shape between them moves too fast to need one of its own.
+  // Two shadows, the toolbar's and the button's, as the shape between them moves too fast to need one of its own. The
+  // toolbar's is drawn for its dock.
   const config::ShadowSpec& cast = config::kToolbarShadow;
   const ShadowLayer layers[] = {{cast.sigma * scale, cast.alpha, cast.offset * scale}};
   const float shadow_pad = std::ceil(cast.sigma * 3.0f * scale + cast.offset * scale);
-  const auto shadow = [&](int w, int h, float r, ComPtr<IDCompositionVisual>& visual, ComPtr<IDCompositionEffectGroup>& effect) {
-    visual = ImageVisual(compositor_, RenderShadow(w, h, r, shadow_pad, layers, 1));
+  const auto shadow = [&](ComPtr<IDCompositionVisual>& visual, ComPtr<IDCompositionEffectGroup>& effect) {
+    visual = compositor_.CreateVisual();
     visual->SetOffsetX(-shadow_pad);
     visual->SetOffsetY(-shadow_pad);
     effect = compositor_.CreateEffectGroup();
     visual->SetEffect(effect.Get());
     shape_->AddVisual(visual.Get(), FALSE, nullptr);
   };
-  shadow(static_cast<int>(width_), static_cast<int>(height_), radius, wide_shadow_, wide_shadow_effect_);
-  shadow(button, button, static_cast<float>(button) * 0.5f, round_shadow_, round_shadow_effect_);
+  shadow(wide_shadow_, wide_shadow_effect_);
+  shadow(round_shadow_, round_shadow_effect_);
+  round_shadow_->SetContent(compositor_.CreateSurface(RenderShadow(button, button, static_cast<float>(button) * 0.5f, shadow_pad, layers, 1), false).Get());
 
   // A hairline between two clips that follow the shape, and the panel within.
   outer_ = compositor_.CreateVisual();
@@ -124,7 +141,7 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   outer_clip_->SetTop(0.0f);
   outer_->SetClip(outer_clip_.Get());
   outer_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
-  outer_->AddVisual(compositor_.CreateSolidVisual(static_cast<uint32_t>(palette.hairline_alpha * 255.0f + 0.5f) << 24 | palette.hairline, width_, height_).Get(),
+  outer_->AddVisual(compositor_.CreateSolidVisual(static_cast<uint32_t>(palette.hairline_alpha * 255.0f + 0.5f) << 24 | palette.hairline, longest, longest).Get(),
                     FALSE, nullptr);
   shape_->AddVisual(outer_.Get(), FALSE, nullptr);
   inner_ = compositor_.CreateVisual();
@@ -133,7 +150,7 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   inner_clip_->SetTop(1.0f);
   inner_->SetClip(inner_clip_.Get());
   inner_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
-  inner_->AddVisual(compositor_.CreateSolidVisual(0xFF000000u | palette.panel, width_, height_).Get(), FALSE, nullptr);
+  inner_->AddVisual(compositor_.CreateSolidVisual(0xFF000000u | palette.panel, longest, longest).Get(), FALSE, nullptr);
   outer_->AddVisual(inner_.Get(), FALSE, nullptr);
   contents_ = compositor_.CreateVisual();
   contents_effect_ = compositor_.CreateEffectGroup();
@@ -144,60 +161,40 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   tools_clip_ = compositor_.CreateClip();
   tools_clip_->SetLeft(1.0f);
   tools_clip_->SetTop(1.0f);
-  tools_clip_->SetRight(width_ - 1.0f);
-  tools_clip_->SetBottom(height_ - 1.0f);
   SetClipRadii(tools_clip_.Get(), radius - 1.0f, nullptr);
   tools_->SetClip(tools_clip_.Get());
   contents_->AddVisual(tools_.Get(), FALSE, nullptr);
 
-  const LONG art_width = Px(config::kToolArtWidth, scale);
   for (int i = 0; i < kToolCount; ++i) {
     Slot& slot = slots_[static_cast<size_t>(i)];
     slot.tool = static_cast<Tool>(i);
-    slot.rect = RECT{left + pad + cell * i, panel_.top, left + pad + cell * (i + 1), panel_.bottom};
+    slot.holder = compositor_.CreateVisual();
     slot.visual = compositor_.CreateVisual();
-    slot.visual->SetOffsetX(static_cast<float>(pad + cell * i + (cell - art_width) / 2));
-    tools_->AddVisual(slot.visual.Get(), FALSE, nullptr);
-    slot.lift.Bind(slot.visual.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY), static_cast<float>(Px(config::kToolRest, scale)));
-    slot.lift.Snap(0.0f);
-    RenderTool(slot);
+    slot.holder->AddVisual(slot.visual.Get(), FALSE, nullptr);
+    tools_->AddVisual(slot.holder.Get(), FALSE, nullptr);
+    slot.lift_x.Bind(slot.visual.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetX));
+    slot.lift_y.Bind(slot.visual.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY));
   }
 
-  const LONG swatches_left = pad + cell * kToolCount + section;
-  const LONG swatches_top = (static_cast<LONG>(height_) - (swatch * 2 + swatch_gap)) / 2;
   for (int i = 0; i < 6; ++i) {
     Swatch entry;
-    const LONG x = swatches_left + (i % 3) * (swatch + swatch_gap);
-    const LONG y = swatches_top + (i / 3) * (swatch + swatch_gap);
-    entry.rect = RECT{left + x, panel_.top + y, left + x + swatch, panel_.top + y + swatch};
     entry.hue = i == 5;
     entry.color = i < 5 ? config::kInkColors[i] : 0;
     entry.visual = compositor_.CreateVisual();
-    entry.visual->SetOffsetX(static_cast<float>(x));
-    entry.visual->SetOffsetY(static_cast<float>(y));
     contents_->AddVisual(entry.visual.Get(), FALSE, nullptr);
     swatches_.push_back(std::move(entry));
   }
   RenderSwatches();
 
-  const LONG fold_left = static_cast<LONG>(width_) - pad - fold;
-  const LONG fold_top = (static_cast<LONG>(height_) - fold) / 2;
-  fold_ = RECT{left + fold_left, panel_.top + fold_top, left + fold_left + fold, panel_.top + fold_top + fold};
-  ComPtr<IDCompositionVisual> fold_face = ImageVisual(compositor_, RenderBox(fold, fold, static_cast<float>(fold) * 0.5f, palette.control, 1.0f));
-  fold_face->SetOffsetX(static_cast<float>(fold_left));
-  fold_face->SetOffsetY(static_cast<float>(fold_top));
-  contents_->AddVisual(fold_face.Get(), FALSE, nullptr);
+  fold_face_ = ImageVisual(compositor_, RenderBox(fold, fold, static_cast<float>(fold) * 0.5f, palette.control, 1.0f));
+  contents_->AddVisual(fold_face_.Get(), FALSE, nullptr);
   fold_veil_ = ImageVisual(compositor_, RenderBox(fold, fold, static_cast<float>(fold) * 0.5f, palette.hover, 1.0f));
-  fold_veil_->SetOffsetX(static_cast<float>(fold_left));
-  fold_veil_->SetOffsetY(static_cast<float>(fold_top));
   fold_veil_effect_ = compositor_.CreateEffectGroup();
   fold_veil_->SetEffect(fold_veil_effect_.Get());
   contents_->AddVisual(fold_veil_.Get(), FALSE, nullptr);
   const int icon = static_cast<int>(Px(config::kEditorIcon, scale));
-  ComPtr<IDCompositionVisual> fold_icon = ImageVisual(compositor_, RenderEditorIcon(EditorIcon::kFold, icon, scale, palette.control_ink));
-  fold_icon->SetOffsetX(static_cast<float>(fold_left + (fold - icon) / 2));
-  fold_icon->SetOffsetY(static_cast<float>(fold_top + (fold - icon) / 2));
-  contents_->AddVisual(fold_icon.Get(), FALSE, nullptr);
+  fold_icon_ = ImageVisual(compositor_, RenderEditorIcon(EditorIcon::kFold, icon, scale, palette.control_ink));
+  contents_->AddVisual(fold_icon_.Get(), FALSE, nullptr);
 
   // Folded, the shape shows the tool in hand at a slant, the stroke it has just drawn trailing from its point.
   badge_ = compositor_.CreateVisual();
@@ -246,31 +243,228 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   popover_alpha_.Bind(popover_effect_.Get(), opacity);
   popover_pop_.Bind(popover_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleX));
   popover_pop_.Bind(popover_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleY));
+  landing_x_.Bind(landing_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetX));
+  landing_y_.Bind(landing_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY));
+  landing_w_.Bind(landing_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetRight));
+  landing_h_.Bind(landing_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetBottom));
+  landing_alpha_.Bind(landing_effect_.Get(), opacity);
   alpha_.Snap(0.0f);
   slide_.Snap(0.0f);
   fold_hover_.Snap(0.0f);
   badge_hover_.Snap(0.0f);
   popover_alpha_.Snap(0.0f);
   popover_pop_.Snap(1.0f);
+  landing_alpha_.Snap(0.0f);
+  Layout();
   Morph(false, TimeBase{}, true);
-  Lift(TimeBase{});
   RenderBadge();
 }
 
-Image MarkupToolbar::ToolImage(Tool tool, bool percent) const {
+Image MarkupToolbar::ToolImage(Tool tool, bool percent, int turns) const {
   ToolLook look{palette_.barrel, palette_.barrel_shade, palette_.barrel_edge, palette_.barrel_edge, -1, palette_.control_ink};
+  look.label_turns = turns;
   if (IsInk(tool)) {
     const ToolBox::Ink& ink = Tools().inks[static_cast<size_t>(tool)];
     look.ink = ink.color;
     const int shown = static_cast<int>(std::lround(ink.opacity * 100.0f));
     if (percent && shown < 100) look.percent = shown;
   }
-  return RenderToolArt(tool, static_cast<int>(Px(config::kToolArtWidth, scale_)), static_cast<int>(Px(config::kToolArtHeight, scale_)), scale_, look);
+  Image art = RenderToolArt(tool, static_cast<int>(Px(config::kToolArtWidth, scale_)), static_cast<int>(Px(config::kToolArtHeight, scale_)), scale_, look);
+  return turns == 0 ? std::move(art) : TurnImage(art, turns);
 }
 
 void MarkupToolbar::RenderTool(Slot& slot) {
-  slot.art = compositor_.CreateSurface(ToolImage(slot.tool, true), false);
+  slot.art = compositor_.CreateSurface(ToolImage(slot.tool, true, Turns()), false);
   slot.visual->SetContent(slot.art.Get());
+}
+
+ToolbarSide MarkupToolbar::side() const {
+  switch (dock_) {
+    case ToolbarDock::kTopLeft:
+    case ToolbarDock::kTop:
+    case ToolbarDock::kTopRight:
+      return ToolbarSide::kTop;
+    case ToolbarDock::kLeft:
+      return ToolbarSide::kLeft;
+    case ToolbarDock::kRight:
+      return ToolbarSide::kRight;
+    default:
+      return ToolbarSide::kBottom;
+  }
+}
+
+int MarkupToolbar::Turns() const {
+  switch (side()) {
+    case ToolbarSide::kTop:
+      return 2;
+    case ToolbarSide::kLeft:
+      return 1;
+    case ToolbarSide::kRight:
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+RECT MarkupToolbar::DockRect(ToolbarDock dock) const {
+  const LONG margin = Px(config::kEditorMargin, scale_);
+  const LONG w = std::lround(width_);
+  const LONG h = std::lround(height_);
+  const LONG top = std::lround(ceiling_);
+  const LONG bottom = monitor_.cy - margin;
+  const LONG middle = std::lround((static_cast<float>(monitor_.cx) - width_) * 0.5f);
+  const LONG upright = std::clamp(std::lround((static_cast<float>(top + bottom) - width_) * 0.5f), top, std::max(bottom - w, top));
+  switch (dock) {
+    case ToolbarDock::kBottomLeft:
+      return RECT{margin, bottom - h, margin + w, bottom};
+    case ToolbarDock::kBottomRight:
+      return RECT{monitor_.cx - margin - w, bottom - h, monitor_.cx - margin, bottom};
+    case ToolbarDock::kTopLeft:
+      return RECT{margin, top, margin + w, top + h};
+    case ToolbarDock::kTop:
+      return RECT{middle, top, middle + w, top + h};
+    case ToolbarDock::kTopRight:
+      return RECT{monitor_.cx - margin - w, top, monitor_.cx - margin, top + h};
+    case ToolbarDock::kLeft:
+      return RECT{margin, upright, margin + h, upright + w};
+    case ToolbarDock::kRight:
+      return RECT{monitor_.cx - margin - h, upright, monitor_.cx - margin, upright + w};
+    default:
+      return RECT{middle, bottom - h, middle + w, bottom};
+  }
+}
+
+// Standing up along a side needs the height of the toolbar's length below the controls; lying along an edge, the
+// places at either end need room apart from the middle.
+bool MarkupToolbar::Fits(ToolbarDock dock) const {
+  const LONG margin = Px(config::kEditorMargin, scale_);
+  if (Upright(dock)) return static_cast<float>(monitor_.cy - margin) - ceiling_ >= width_;
+  if (dock == ToolbarDock::kBottom || dock == ToolbarDock::kTop) return true;
+  return static_cast<float>(monitor_.cx - margin * 2) >= width_ * 1.4f;
+}
+
+ToolbarDock MarkupToolbar::NearestDock(POINT center) const {
+  ToolbarDock nearest = ToolbarDock::kBottom;
+  double best = 1e300;
+  for (int i = 0; i < kToolbarDocks; ++i) {
+    const auto dock = static_cast<ToolbarDock>(i);
+    if (!Fits(dock)) continue;
+    const RECT rect = DockRect(dock);
+    const double dx = (rect.left + rect.right) * 0.5 - center.x;
+    const double dy = (rect.top + rect.bottom) * 0.5 - center.y;
+    if (dx * dx + dy * dy < best) {
+      best = dx * dx + dy * dy;
+      nearest = dock;
+    }
+  }
+  return nearest;
+}
+
+RECT MarkupToolbar::ButtonRect(bool right) const {
+  const LONG margin = Px(config::kEditorMargin, scale_);
+  const LONG button = Px(config::kMarkupButton, scale_);
+  const LONG left = right ? monitor_.cx - margin - button : margin;
+  return RECT{left, monitor_.cy - margin - button, left + button, monitor_.cy - margin};
+}
+
+// Laid along an edge the tools stand side by side across the toolbar's depth, then the colors three by two, then the
+// button that folds it; standing along a side, the same from the top down, the colors two by three. The tools lie
+// turned to point away from the edge, their bodies running on past it.
+void MarkupToolbar::Layout() {
+  const int turns = Turns();
+  const bool upright = Upright(dock_);
+  panel_ = DockRect(dock_);
+  const LONG pw = panel_.right - panel_.left;
+  const LONG ph = panel_.bottom - panel_.top;
+  const bool turned = turns != laid_turns_;
+  const bool reshaped = (upright ? 1 : 0) != laid_upright_;
+  laid_turns_ = turns;
+  laid_upright_ = upright ? 1 : 0;
+
+  if (reshaped) {
+    tools_clip_->SetRight(static_cast<float>(pw - 1));
+    tools_clip_->SetBottom(static_cast<float>(ph - 1));
+    const config::ShadowSpec& cast = config::kToolbarShadow;
+    const ShadowLayer layers[] = {{cast.sigma * scale_, cast.alpha, cast.offset * scale_}};
+    const float shadow_pad = std::ceil(cast.sigma * 3.0f * scale_ + cast.offset * scale_);
+    wide_shadow_->SetContent(
+        compositor_.CreateSurface(RenderShadow(pw, ph, config::kToolbarRadius * scale_, shadow_pad, layers, 1), false).Get());
+  }
+
+  const LONG pad = Px(config::kToolbarPadding, scale_);
+  const LONG cell = Px(config::kToolCell, scale_);
+  const LONG swatch = Px(config::kSwatch, scale_);
+  const LONG swatch_gap = Px(config::kSwatchGap, scale_);
+  const LONG section = Px(config::kToolbarSection, scale_);
+  const LONG fold = Px(config::kToolbarFold, scale_);
+  const LONG art_w = Px(config::kToolArtWidth, scale_);
+  const LONG art_h = Px(config::kToolArtHeight, scale_);
+  const LONG rest = Px(config::kToolRest, scale_);
+  // Local (along, across) to the panel's own pixels, and to the screen's.
+  const auto local = [&](LONG along, LONG across) { return upright ? POINT{across, along} : POINT{along, across}; };
+  const auto on_screen = [&](POINT at, LONG w, LONG h) { return RECT{panel_.left + at.x, panel_.top + at.y, panel_.left + at.x + w, panel_.top + at.y + h}; };
+  const LONG depth = upright ? pw : ph;
+
+  for (int i = 0; i < kToolCount; ++i) {
+    Slot& slot = slots_[static_cast<size_t>(i)];
+    const LONG along = pad + cell * i;
+    const POINT corner = local(along, 0);
+    slot.rect = on_screen(corner, upright ? pw : cell, upright ? cell : ph);
+    const LONG centered = along + (cell - art_w) / 2;
+    POINT at{};
+    switch (turns) {
+      case 2:
+        at = POINT{centered, ph - rest - art_h};
+        break;
+      case 1:
+        at = POINT{pw - rest - art_h, centered};
+        break;
+      case 3:
+        at = POINT{rest, centered};
+        break;
+      default:
+        at = POINT{centered, rest};
+        break;
+    }
+    slot.holder->SetOffsetX(static_cast<float>(at.x));
+    slot.holder->SetOffsetY(static_cast<float>(at.y));
+    if (turned || !slot.art) RenderTool(slot);
+  }
+
+  const LONG colors = pad + cell * kToolCount + section;
+  const LONG first_across = (depth - (swatch * 2 + swatch_gap)) / 2;
+  for (int i = 0; i < 6; ++i) {
+    Swatch& entry = swatches_[static_cast<size_t>(i)];
+    const POINT at = local(colors + (i % 3) * (swatch + swatch_gap), first_across + (i / 3) * (swatch + swatch_gap));
+    entry.rect = on_screen(at, swatch, swatch);
+    entry.visual->SetOffsetX(static_cast<float>(at.x));
+    entry.visual->SetOffsetY(static_cast<float>(at.y));
+  }
+
+  const POINT button = local((upright ? ph : pw) - pad - fold, (depth - fold) / 2);
+  fold_ = on_screen(button, fold, fold);
+  for (IDCompositionVisual* visual : {fold_face_.Get(), fold_veil_.Get()}) {
+    visual->SetOffsetX(static_cast<float>(button.x));
+    visual->SetOffsetY(static_cast<float>(button.y));
+  }
+  const LONG icon = Px(config::kEditorIcon, scale_);
+  fold_icon_->SetOffsetX(static_cast<float>(button.x + (fold - icon) / 2));
+  fold_icon_->SetOffsetY(static_cast<float>(button.y + (fold - icon) / 2));
+  Lift(TimeBase{});
+}
+
+void MarkupToolbar::Land(ToolbarDock dock, const TimeBase& now) {
+  IDCompositionDevice* dc = compositor_.device();
+  const int turns = laid_turns_;
+  dock_ = dock;
+  Tools().dock = static_cast<int>(dock);
+  Layout();
+  // Turned another way, the contents and the shadow are laid out again unseen and come back once the shape has moved.
+  if (laid_turns_ != turns && dc != nullptr) {
+    contents_alpha_.Snap(0.0f);
+    wide_shadow_alpha_.Snap(0.0f);
+  }
+  Morph(false, now, false);
 }
 
 // The tool that lays down color, drawn at a slant with its point toward the lower left, and a short stroke of its
@@ -295,7 +489,7 @@ void MarkupToolbar::RenderBadge() {
   place._31 = to_x - (tip_x * place._11 + tip_y * place._21);
   place._32 = to_y - (tip_x * place._12 + tip_y * place._22);
   // Drawn without its opacity, which the button has no room to show.
-  badge_art_->SetContent(compositor_.CreateSurface(ToolImage(tool, false), false).Get());
+  badge_art_->SetContent(compositor_.CreateSurface(ToolImage(tool, false, 0), false).Get());
   badge_art_->SetTransform(place);
 
   // The stroke, drawn by the tool itself, waving in from the left to the point.
@@ -327,12 +521,14 @@ void MarkupToolbar::RenderBadge() {
   badge_line_->SetContent(compositor_.CreateSurface(line, false).Get());
 }
 
-// Between the toolbar, centered along the bottom, and the round button at the bottom left: the shape slides and
-// narrows to the left, its contents fading out first, or grows out from the left with them fading in after.
+// Between the toolbar at its dock and the round button in a bottom corner, or between two docks: the shape slides and
+// changes size, its contents fading out first, and grows back with them fading in after.
 void MarkupToolbar::Morph(bool fold, const TimeBase& now, bool immediate) {
   IDCompositionDevice* dc = compositor_.device();
   const RECT& to = fold ? button_rect_ : panel_;
   const float button = static_cast<float>(button_rect_.right - button_rect_.left);
+  const float panel_w = static_cast<float>(panel_.right - panel_.left);
+  const float panel_h = static_cast<float>(panel_.bottom - panel_.top);
   const auto set = [&](AnimFloat& value, float target, const SpringSpec& spec, double delay) {
     if (immediate || dc == nullptr) {
       value.Snap(target);
@@ -342,8 +538,8 @@ void MarkupToolbar::Morph(bool fold, const TimeBase& now, bool immediate) {
   };
   set(shape_x_, static_cast<float>(to.left), config::kEditorToolbar, 0.0);
   set(shape_y_, static_cast<float>(to.top), config::kEditorToolbar, 0.0);
-  set(shape_w_, fold ? button : width_, config::kEditorToolbar, 0.0);
-  set(shape_h_, fold ? button : height_, config::kEditorToolbar, 0.0);
+  set(shape_w_, fold ? button : panel_w, config::kEditorToolbar, 0.0);
+  set(shape_h_, fold ? button : panel_h, config::kEditorToolbar, 0.0);
   set(shape_r_, fold ? button * 0.5f : config::kToolbarRadius * scale_, config::kEditorToolbar, 0.0);
   if (fold) {
     set(contents_alpha_, 0.0f, config::kQuickFade, 0.0);
@@ -388,18 +584,25 @@ void MarkupToolbar::RenderSwatches() {
   }
 }
 
+// The chosen tool, and the one under the pointer, stand out from the edge the toolbar rests along.
 void MarkupToolbar::Lift(const TimeBase& now) {
   const Tool current = Tools().tool;
+  const int turns = Turns();
+  const float inward = turns == 1 || turns == 2 ? 1.0f : -1.0f;
+  const bool snap = now.seconds <= 0.0 || compositor_.device() == nullptr;
   for (size_t i = 0; i < slots_.size(); ++i) {
     Slot& slot = slots_[i];
     const bool chosen = slot.tool == Tool::kRuler ? ruler_ : slot.tool == current;
     const float raised = chosen ? config::kToolRaise * scale_ : (static_cast<int>(i) == hover_slot_ ? config::kToolHover * scale_ : 0.0f);
-    if (raised == slot.raised && now.seconds > 0.0) continue;
+    if (raised == slot.raised && !snap) continue;
     slot.raised = raised;
-    if (now.seconds <= 0.0 || compositor_.device() == nullptr) {
-      slot.lift.Snap(-raised);
+    AnimFloat& moving = turns % 2 == 1 ? slot.lift_x : slot.lift_y;
+    AnimFloat& still = turns % 2 == 1 ? slot.lift_y : slot.lift_x;
+    if (snap) {
+      moving.Snap(inward * raised);
+      still.Snap(0.0f);
     } else {
-      slot.lift.To(compositor_.device(), now, -raised, config::kToolLift);
+      moving.To(compositor_.device(), now, inward * raised, config::kToolLift);
     }
   }
 }
@@ -408,7 +611,8 @@ void MarkupToolbar::Show(const TimeBase& now, double delay) {
   if (shown_) return;
   shown_ = true;
   IDCompositionDevice* dc = compositor_.device();
-  if (alpha_.ValueAt(now.seconds) < 0.02f) slide_.Snap(24.0f * scale_);
+  const float away = side() == ToolbarSide::kTop && !folded_ ? -1.0f : 1.0f;
+  if (alpha_.ValueAt(now.seconds) < 0.02f) slide_.Snap(24.0f * scale_ * away);
   alpha_.To(dc, now, 1.0f, config::kEditorFade, delay);
   slide_.To(dc, now, 0.0f, config::kEditorToolbar, delay);
 }
@@ -417,11 +621,15 @@ void MarkupToolbar::Hide(const TimeBase& now) {
   shown_ = false;
   IDCompositionDevice* dc = compositor_.device();
   ClosePopover(now);
+  const float away = side() == ToolbarSide::kTop && !folded_ ? -1.0f : 1.0f;
   alpha_.To(dc, now, 0.0f, config::kEditorFade);
-  slide_.To(dc, now, 16.0f * scale_, config::kEditorFade);
+  slide_.To(dc, now, 16.0f * scale_ * away, config::kEditorFade);
   fold_hover_.To(dc, now, 0.0f, config::kQuickFade);
   badge_hover_.To(dc, now, 0.0f, config::kQuickFade);
+  landing_alpha_.To(dc, now, 0.0f, config::kQuickFade);
   hover_slot_ = -1;
+  pressing_ = false;
+  carrying_ = false;
 }
 
 void MarkupToolbar::Fold(bool fold, const TimeBase& now) {
@@ -429,7 +637,12 @@ void MarkupToolbar::Fold(bool fold, const TimeBase& now) {
   folded_ = fold;
   IDCompositionDevice* dc = compositor_.device();
   ClosePopover(now);
-  if (fold) RenderBadge();
+  // Folded, it goes to whichever bottom corner is nearer.
+  if (fold) {
+    button_right_ = panel_.left + panel_.right > monitor_.cx;
+    button_rect_ = ButtonRect(button_right_);
+    RenderBadge();
+  }
   Morph(fold, now, !shown_);
   fold_hover_.To(dc, now, 0.0f, config::kQuickFade);
   badge_hover_.To(dc, now, 0.0f, config::kQuickFade);
@@ -454,7 +667,8 @@ RECT MarkupToolbar::Inner(float left, float top, float width, float height) cons
   return RECT{x, y, x + Px(width, scale_), y + Px(height, scale_)};
 }
 
-void MarkupToolbar::OpenPopover(Popover kind, int anchor_x, const TimeBase& now) {
+// A popover opens on the side of the toolbar facing into the screen, beside what opened it.
+void MarkupToolbar::OpenPopover(Popover kind, POINT anchor, const TimeBase& now) {
   if (popover_ == kind) {
     ClosePopover(now);
     return;
@@ -470,8 +684,33 @@ void MarkupToolbar::OpenPopover(Popover kind, int anchor_x, const TimeBase& now)
   const LONG w = Px(width, scale_);
   const LONG h = Px(height, scale_);
   const LONG margin = Px(config::kEditorMargin, scale_);
-  const LONG x = std::clamp(static_cast<LONG>(anchor_x) - w / 2, margin, monitor_.cx - margin - w);
-  const LONG y = static_cast<LONG>(top_) - Px(config::kPopoverGap, scale_) - h;
+  const LONG gap = Px(config::kPopoverGap, scale_);
+  const LONG across_x = std::clamp(anchor.x - w / 2, margin, std::max(monitor_.cx - margin - w, margin));
+  const LONG across_y = std::clamp(anchor.y - h / 2, margin, std::max(monitor_.cy - margin - h, margin));
+  LONG x = across_x;
+  LONG y = panel_.top - gap - h;
+  float center_x = static_cast<float>(std::clamp(anchor.x - x, 0L, w));
+  float center_y = static_cast<float>(h);
+  switch (side()) {
+    case ToolbarSide::kTop:
+      y = panel_.bottom + gap;
+      center_y = 0.0f;
+      break;
+    case ToolbarSide::kLeft:
+      x = panel_.right + gap;
+      y = across_y;
+      center_x = 0.0f;
+      center_y = static_cast<float>(std::clamp(anchor.y - y, 0L, h));
+      break;
+    case ToolbarSide::kRight:
+      x = panel_.left - gap - w;
+      y = across_y;
+      center_x = static_cast<float>(w);
+      center_y = static_cast<float>(std::clamp(anchor.y - y, 0L, h));
+      break;
+    default:
+      break;
+  }
   popover_rect_ = RECT{x, y, x + w, y + h};
   for (int i = 0; i < 5; ++i) width_cells_[static_cast<size_t>(i)] = Inner(pad + config::kWidthCell * i, pad, config::kWidthCell, config::kWidthCell);
   const float row = pad + config::kWidthCell + config::kPopoverGap;
@@ -482,8 +721,8 @@ void MarkupToolbar::OpenPopover(Popover kind, int anchor_x, const TimeBase& now)
 
   popover_root_->SetOffsetX(static_cast<float>(x));
   popover_root_->SetOffsetY(static_cast<float>(y));
-  popover_scale_->SetCenterX(static_cast<float>(std::clamp(static_cast<LONG>(anchor_x) - x, 0L, w)));
-  popover_scale_->SetCenterY(static_cast<float>(h));
+  popover_scale_->SetCenterX(center_x);
+  popover_scale_->SetCenterY(center_y);
   RenderPopover();
   IDCompositionDevice* dc = compositor_.device();
   popover_alpha_.Snap(0.0f);
@@ -633,19 +872,23 @@ ToolbarEvent MarkupToolbar::Press(POINT point, const TimeBase& now) {
     }
     return ToolbarEvent::kNone;
   }
-  if (folded_) {
-    if (!PtInRect(&button_rect_, point)) return ToolbarEvent::kNone;
-    Fold(false, now);
-    return ToolbarEvent::kUnfolded;
-  }
-  if (!PtInRect(&panel_, point)) return ToolbarEvent::kNone;
+  // A press may go on to carry the toolbar, or the button, somewhere else. The button unfolds when let go unmoved.
+  const RECT& under = folded_ ? button_rect_ : panel_;
+  if (!PtInRect(&under, point)) return ToolbarEvent::kNone;
+  pressing_ = true;
+  carrying_ = false;
+  pressed_ = point;
+  last_point_ = point;
+  grab_ = POINT{point.x - under.left, point.y - under.top};
+  if (folded_) return ToolbarEvent::kNone;
   if (PtInRect(&fold_, point)) {
+    pressing_ = false;
     Fold(true, now);
     return ToolbarEvent::kFolded;
   }
   for (Slot& slot : slots_) {
     if (!PtInRect(&slot.rect, point)) continue;
-    const int center = (slot.rect.left + slot.rect.right) / 2;
+    const POINT center{(slot.rect.left + slot.rect.right) / 2, (slot.rect.top + slot.rect.bottom) / 2};
     if (slot.tool == Tool::kRuler) {
       ClosePopover(now);
       SetRuler(!ruler_, now);
@@ -666,7 +909,7 @@ ToolbarEvent MarkupToolbar::Press(POINT point, const TimeBase& now) {
   for (const Swatch& swatch : swatches_) {
     if (!PtInRect(&swatch.rect, point)) continue;
     if (swatch.hue) {
-      OpenPopover(Popover::kColors, (swatch.rect.left + swatch.rect.right) / 2, now);
+      OpenPopover(Popover::kColors, POINT{(swatch.rect.left + swatch.rect.right) / 2, (swatch.rect.top + swatch.rect.bottom) / 2}, now);
       return ToolbarEvent::kNone;
     }
     ClosePopover(now);
@@ -677,6 +920,47 @@ ToolbarEvent MarkupToolbar::Press(POINT point, const TimeBase& now) {
 }
 
 ToolbarEvent MarkupToolbar::Drag(POINT point, const TimeBase& now) {
+  if (pressing_ && !dragging_opacity_) {
+    last_point_ = point;
+    IDCompositionDevice* dc = compositor_.device();
+    const bool starting = !carrying_;
+    if (starting) {
+      const LONG slop = Px(config::kToolbarDragSlop, scale_);
+      if (std::abs(point.x - pressed_.x) <= slop && std::abs(point.y - pressed_.y) <= slop) return ToolbarEvent::kNone;
+      carrying_ = true;
+      ClosePopover(now);
+      hover_slot_ = -1;
+      Lift(now);
+      fold_hover_.To(dc, now, 0.0f, config::kQuickFade);
+      badge_hover_.To(dc, now, 0.0f, config::kQuickFade);
+      const float button = static_cast<float>(button_rect_.right - button_rect_.left);
+      SetClipRadii(landing_clip_.Get(), folded_ ? button * 0.5f : config::kToolbarRadius * scale_, nullptr);
+      landing_alpha_.To(dc, now, 1.0f, config::kQuickFade);
+    }
+    // It follows the pointer, and where it would land shows under it.
+    shape_x_.Snap(static_cast<float>(point.x - grab_.x));
+    shape_y_.Snap(static_cast<float>(point.y - grab_.y));
+    RECT target{};
+    if (folded_) {
+      target = ButtonRect(point.x * 2 > monitor_.cx);
+    } else {
+      const POINT center{point.x - grab_.x + (panel_.right - panel_.left) / 2, point.y - grab_.y + (panel_.bottom - panel_.top) / 2};
+      landing_dock_ = NearestDock(center);
+      target = DockRect(landing_dock_);
+    }
+    const auto place = [&](AnimFloat& value, LONG to) {
+      if (starting || dc == nullptr) {
+        value.Snap(static_cast<float>(to));
+      } else {
+        value.To(dc, now, static_cast<float>(to), config::kEditorToolbar);
+      }
+    };
+    place(landing_x_, target.left);
+    place(landing_y_, target.top);
+    place(landing_w_, target.right - target.left);
+    place(landing_h_, target.bottom - target.top);
+    return ToolbarEvent::kNone;
+  }
   if (!dragging_opacity_ || popover_ != Popover::kInk) return ToolbarEvent::kNone;
   const float track_w = static_cast<float>(track_.right - track_.left);
   const float track_h = static_cast<float>(track_.bottom - track_.top);
@@ -691,9 +975,32 @@ ToolbarEvent MarkupToolbar::Drag(POINT point, const TimeBase& now) {
   return ToolbarEvent::kInk;
 }
 
-void MarkupToolbar::Release() { dragging_opacity_ = false; }
+ToolbarEvent MarkupToolbar::Release(const TimeBase& now) {
+  dragging_opacity_ = false;
+  const bool pressing = pressing_;
+  const bool carrying = carrying_;
+  pressing_ = false;
+  carrying_ = false;
+  if (!pressing) return ToolbarEvent::kNone;
+  if (carrying) landing_alpha_.To(compositor_.device(), now, 0.0f, config::kQuickFade);
+  if (folded_) {
+    if (!carrying) {
+      Fold(false, now);
+      return ToolbarEvent::kUnfolded;
+    }
+    button_right_ = last_point_.x * 2 > monitor_.cx;
+    button_rect_ = ButtonRect(button_right_);
+    Morph(true, now, false);
+    return ToolbarEvent::kNone;
+  }
+  if (!carrying) return ToolbarEvent::kNone;
+  const bool moved = landing_dock_ != dock_;
+  Land(landing_dock_, now);
+  return moved ? ToolbarEvent::kDocked : ToolbarEvent::kNone;
+}
 
 void MarkupToolbar::Hover(POINT point, const TimeBase& now) {
+  if (carrying_) return;
   int over = -1;
   if (shown_ && !folded_ && PtInRect(&panel_, point)) {
     for (size_t i = 0; i < slots_.size(); ++i) {

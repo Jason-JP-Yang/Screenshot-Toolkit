@@ -56,6 +56,9 @@ Image Halve(const Image& source);
 // Exact copy of a rectangle, keeping alpha.
 Image CopyRect(const Image& source, int left, int top, int width, int height);
 
+// A copy turned clockwise by quarter turns.
+Image TurnImage(const Image& source, int quarters);
+
 // Area-weighted reduction of a source rectangle, made a few rows at a time from source rows given as they are needed.
 // The rectangle may have fractional edges.
 class Resampler {

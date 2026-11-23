@@ -222,6 +222,36 @@ Image CopyRect(const Image& source, int left, int top, int width, int height) {
   return result;
 }
 
+Image TurnImage(const Image& source, int quarters) {
+  quarters = ((quarters % 4) + 4) % 4;
+  if (!source) return Image();
+  const int w = source.width();
+  const int h = source.height();
+  if (quarters == 0) return CopyRect(source, 0, 0, w, h);
+  const bool sideways = quarters % 2 == 1;
+  Image result = Image::Allocate(sideways ? h : w, sideways ? w : h);
+  if (!result) return result;
+  for (int y = 0; y < h; ++y) {
+    const auto* row = reinterpret_cast<const uint32_t*>(source.data() + static_cast<ptrdiff_t>(y) * source.stride());
+    for (int x = 0; x < w; ++x) {
+      int to_x = x;
+      int to_y = y;
+      if (quarters == 1) {
+        to_x = h - 1 - y;
+        to_y = x;
+      } else if (quarters == 2) {
+        to_x = w - 1 - x;
+        to_y = h - 1 - y;
+      } else {
+        to_x = y;
+        to_y = w - 1 - x;
+      }
+      reinterpret_cast<uint32_t*>(result.data() + static_cast<ptrdiff_t>(to_y) * result.stride())[to_x] = row[x];
+    }
+  }
+  return result;
+}
+
 namespace {
 
 Resampler::Span MakeSpan(double start, double end, int limit) {

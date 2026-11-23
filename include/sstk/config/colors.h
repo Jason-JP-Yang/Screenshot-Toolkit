@@ -191,5 +191,7 @@ inline constexpr ShadowSpec kDragShadowTight{3.5f, 0.16f, 2.5f};
 
 // The markup toolbar and its popovers.
 inline constexpr ShadowSpec kToolbarShadow{14.0f, 0.22f, 5.0f};
+// Where a dragged toolbar will land, shown in the panel's hover color at this many times its alpha.
+inline constexpr float kToolbarLandingShare = 2.0f;
 
 }  // namespace sstk::config
