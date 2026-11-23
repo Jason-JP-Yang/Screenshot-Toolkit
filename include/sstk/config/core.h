@@ -98,8 +98,11 @@ inline constexpr unsigned kScrollDetectRetryMs[] = {150, 350, 700, 1200};  // So
 inline constexpr double kEditorZoomStep = 1.2;     // Per wheel notch, and per Ctrl+ or Ctrl-.
 inline constexpr float kEditorMaxZoom = 8.0f;      // Screen pixels per picture pixel.
 inline constexpr float kEditorMaxFit = 2.0f;       // A small crop is enlarged no further than this to fill the space.
-inline constexpr float kEditorEdgeZoom = 1.6f;     // How fast a crop handle held against the edge widens the view, per second.
-inline constexpr float kEditorEdgeZone = 28.0f;    // How near the edge that starts, in device independent pixels.
+// A crop handle drawn out past the picture's space into the margin widens the view as it goes, so that by the screen's
+// edge the whole picture on that side is within reach. The handle stays under the pointer throughout, and the view
+// changes only as it moves.
+inline constexpr float kEditorEdgeInset = 12.0f;  // How near the screen's edge a handle may come, in device independent pixels.
+inline constexpr float kEditorEdgeEase = 1.6f;    // Above 1, the first part of the margin widens the view gently.
 inline constexpr unsigned kEditorHeartbeatMs = 400;
 inline constexpr unsigned kEditorKeyTimeoutMs = 2000;  // Keys go back to the system once the panel has been silent this long.
 inline constexpr float kRulerStepDegrees = 5.0f;   // Per wheel notch over the ruler, and 1 with Shift.

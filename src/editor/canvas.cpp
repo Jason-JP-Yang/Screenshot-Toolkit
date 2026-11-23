@@ -170,7 +170,7 @@ void InkCanvas::Extend(const Stroke& stroke, size_t first) {
   std::unordered_map<int, RECT> touched;
   for (size_t i = first; i < stroke.stamps.size(); ++i) {
     const Stamp& stamp = stroke.stamps[i];
-    const float reach = stamp.radius + 2.0f;
+    const float reach = StampReach(stamp);
     const RECT box = Intersect(RECT{static_cast<LONG>(std::floor(stamp.x - reach)) - origin_.x, static_cast<LONG>(std::floor(stamp.y - reach)) - origin_.y,
                                     static_cast<LONG>(std::ceil(stamp.x + reach)) - origin_.x, static_cast<LONG>(std::ceil(stamp.y + reach)) - origin_.y},
                                RECT{0, 0, width(), height()});

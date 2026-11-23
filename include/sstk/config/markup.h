@@ -41,7 +41,7 @@ inline constexpr BrushTuning kBrushTuning[] = {
     {0.07f, 1.00f, 1.00f, 0.0f, 0.00f, 0.0f},  // Highlighter: a chisel, multiplied into the picture.
     {0.16f, 0.55f, 0.55f, 1.4f, 0.70f, 0.0f},  // Pencil: graphite on grain, building up where it passes again.
     {0.18f, 0.70f, 0.85f, 2.6f, 0.85f, 0.0f},  // Crayon: wax that skips the grain's hollows.
-    {0.06f, 0.18f, 0.28f, 1.8f, 0.22f, 1.2f},  // Ink brush: wet, soft, and pooling at its edges.
+    {0.08f, 0.18f, 0.82f, 1.8f, 0.18f, 1.2f},  // Ink brush: wet, bleeding, and lighter as it runs dry.
 };
 inline constexpr BrushTuning kEraserTuning{0.10f, 1.00f, 1.00f, 0.0f, 0.00f, 0.0f};
 
@@ -49,7 +49,25 @@ inline constexpr float kNibAspect = 0.72f;
 inline constexpr float kNibAngleDegrees = -38.0f;
 inline constexpr float kChiselAspect = 0.30f;
 inline constexpr float kChiselAngleDegrees = 78.0f;
-inline constexpr float kBrushRim = 0.30f;  // How much darker the ink brush's edges dry.
+
+// The pencil: graphite drags into fine streaks along the stroke, and each mark sits a little differently.
+inline constexpr float kPencilStreak = 0.30f;   // How much the streaks decide where graphite takes, against the paper.
+inline constexpr float kPencilJitter = 0.10f;   // Of the radius: how far each mark wanders, and how much its size varies.
+// The crayon: wax skips the paper's hollows, smears along the stroke, and leaves flecks of paper showing.
+inline constexpr float kCrayonStreak = 0.38f;
+inline constexpr float kCrayonJitter = 0.14f;
+inline constexpr float kCrayonFlecks = 0.06f;   // The share of paper left as flecks.
+
+// The ink brush: a full brush pools dark and bleeds into the paper's fibers; as it runs out, and the faster it moves,
+// it goes lighter and breaks into dry bristle streaks.
+inline constexpr float kBrushRim = 0.26f;        // How much darker the ink dries at its edges.
+inline constexpr float kBrushBleed = 0.55f;      // Of the radius, how far a full, slow brush bleeds.
+inline constexpr float kBrushBleedInk = 0.30f;   // How dark the bleed is, against the mark.
+inline constexpr float kBrushLoad = 36.0f;       // Widths of stroke over which the brush gives up most of its ink.
+inline constexpr float kBrushLeast = 0.38f;      // What an empty brush still lays down.
+inline constexpr float kBrushDrySpeed = 900.0f;  // Device independent pixels a second where the brush starts to go dry,
+inline constexpr float kBrushDrySpan = 2600.0f;  // and over how much more speed it goes fully dry.
+inline constexpr float kBrushPool = 0.05f;       // How much more each overlapping mark adds, where the brush crosses or stops.
 
 // A mouse has no pressure: it presses this hard, and the ink pen and the brush thin with its speed instead.
 inline constexpr float kMousePressure = 0.62f;

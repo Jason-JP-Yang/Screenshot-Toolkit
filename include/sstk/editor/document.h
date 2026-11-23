@@ -36,7 +36,12 @@ struct Stamp {
   float aspect;  // The short axis over the long one.
   float angle;   // Radians, of the long axis.
   float alpha;
-  float cut;     // The paper's grain below this level is left bare, for the tools that show it.
+  float cut;      // The paper's grain below this level is left bare, for the tools that show it.
+  float heading;  // Radians, the way the stroke was going.
+  float along;    // How far along the stroke it lies, which lines up streaks from one mark to the next.
+  float wet;      // How far wet ink bleeds past the mark, as a share of its radius.
+  float dry;      // How much a fast brush breaks into bristle streaks.
+  uint32_t grain_seed;  // Varies the marks of one stroke from each other.
 };
 
 struct Stroke {

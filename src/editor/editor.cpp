@@ -1764,55 +1764,75 @@ void Editor::BeginCrop(int edges, POINT point, const TimeBase& now) {
   ClearSelection();
   // The view stops where its springs were heading, which is where the handles are measured from.
   ApplyView(view_, frame_, nullptr, now);
+  crop_start_ = crop_turned_;
+  crop_view_ = view_;
+  crop_frame_ = frame_;
   crop_grab_.x = ((edges & 1) ? frame_.left : (edges & 4) ? frame_.right : static_cast<float>(point.x)) - static_cast<float>(point.x);
   crop_grab_.y = ((edges & 2) ? frame_.top : (edges & 8) ? frame_.bottom : static_cast<float>(point.y)) - static_cast<float>(point.y);
   last_point_ = point;
   UpdateCursor(point);
-  WantFrames();
 }
 
+// The handle follows the pointer one for one, anywhere on the screen. Within the picture's space the view stays as it
+// was. Drawn on into the margin, the view narrows about the opposite side in step with the handle, so that by the
+// screen's edge the whole picture on that side has come within reach. Nothing changes while the pointer rests.
 void Editor::DragCrop(POINT point) {
   const RectF area = Area();
   const RECT bound = SourceTurned();
-  const float least = std::max(config::kEditorMinCrop * scale_ / view_.scale, 4.0f);
-  const float sx = std::clamp(static_cast<float>(point.x) + crop_grab_.x, area.left, area.right);
-  const float sy = std::clamp(static_cast<float>(point.y) + crop_grab_.y, area.top, area.bottom);
-  RectF crop = crop_turned_;
-  if (crop_edges_ & 1) crop.left = std::clamp((sx - view_.x) / view_.scale, static_cast<float>(bound.left), crop.right - least);
-  if (crop_edges_ & 4) crop.right = std::clamp((sx - view_.x) / view_.scale, crop.left + least, static_cast<float>(bound.right));
-  if (crop_edges_ & 2) crop.top = std::clamp((sy - view_.y) / view_.scale, static_cast<float>(bound.top), crop.bottom - least);
-  if (crop_edges_ & 8) crop.bottom = std::clamp((sy - view_.y) / view_.scale, crop.top + least, static_cast<float>(bound.bottom));
-  crop_turned_ = crop;
-  const RectF frame{view_.scale * crop.left + view_.x, view_.scale * crop.top + view_.y, view_.scale * crop.right + view_.x, view_.scale * crop.bottom + view_.y};
-  const TimeBase now = compositor_.Now();
-  ApplyView(view_, frame, nullptr, now);
-}
+  const float inset = config::kEditorEdgeInset * scale_;
+  const float width = static_cast<float>(size_.cx);
+  const float height = static_cast<float>(size_.cy);
+  const float hx = std::clamp(static_cast<float>(point.x) + crop_grab_.x, inset, width - inset);
+  const float hy = std::clamp(static_cast<float>(point.y) + crop_grab_.y, inset, height - inset);
+  const float s0 = crop_view_.scale;
+  const RectF& c0 = crop_start_;
+  const RectF& f0 = crop_frame_;
 
-// A handle held against the edge of the space widens the view about the opposite side, so that more of the picture
-// comes within reach, while the handle itself stays under the pointer.
-void Editor::EdgeZoom(float dt) {
-  const RectF area = Area();
-  const RECT bound = SourceTurned();
-  const float zone = config::kEditorEdgeZone * scale_;
-  const float gx = static_cast<float>(last_point_.x) + crop_grab_.x;
-  const float gy = static_cast<float>(last_point_.y) + crop_grab_.y;
-  float depth = 0.0f;
-  if ((crop_edges_ & 1) && crop_turned_.left > bound.left + 0.5f) depth = std::max(depth, area.left + zone - gx);
-  if ((crop_edges_ & 4) && crop_turned_.right < bound.right - 0.5f) depth = std::max(depth, gx - (area.right - zone));
-  if ((crop_edges_ & 2) && crop_turned_.top > bound.top + 0.5f) depth = std::max(depth, area.top + zone - gy);
-  if ((crop_edges_ & 8) && crop_turned_.bottom < bound.bottom - 0.5f) depth = std::max(depth, gy - (area.bottom - zone));
-  if (depth <= 0.0f) return;
-  const float least = std::min(area.width() / static_cast<float>(std::max(bound.right - bound.left, 1L)),
-                               area.height() / static_cast<float>(std::max(bound.bottom - bound.top, 1L)));
-  if (view_.scale <= least) return;
-  const float rate = config::kEditorEdgeZoom * std::min(depth / zone, 1.5f);
-  const float scale = std::max(view_.scale * std::exp(-rate * dt), least);
-  const float anchor_x = (crop_edges_ & 1) ? frame_.right : (crop_edges_ & 4) ? frame_.left : (frame_.left + frame_.right) * 0.5f;
-  const float turned_x = (crop_edges_ & 1) ? crop_turned_.right : (crop_edges_ & 4) ? crop_turned_.left : (crop_turned_.left + crop_turned_.right) * 0.5f;
-  const float anchor_y = (crop_edges_ & 2) ? frame_.bottom : (crop_edges_ & 8) ? frame_.top : (frame_.top + frame_.bottom) * 0.5f;
-  const float turned_y = (crop_edges_ & 2) ? crop_turned_.bottom : (crop_edges_ & 8) ? crop_turned_.top : (crop_turned_.top + crop_turned_.bottom) * 0.5f;
-  view_ = EditorView{scale, anchor_x - scale * turned_x, anchor_y - scale * turned_y};
-  DragCrop(last_point_);
+  // How far into the margin the handle has gone, and how small the view must be by its far end.
+  const auto narrowed = [&](float depth, float room, float anchor_screen, float limit, float anchor_turned, float far_turned) {
+    const float reach = std::fabs(far_turned - anchor_turned);
+    const float smallest = std::fabs(limit - anchor_screen) / std::max(reach, 1.0f);
+    if (smallest >= s0 || depth <= 0.0f || room <= 1.0f) return s0;
+    const float t = std::clamp(depth / room, 0.0f, 1.0f);
+    return s0 * std::pow(smallest / s0, std::pow(t, config::kEditorEdgeEase));
+  };
+  // The margin starts at the picture's space, or where the handle was taken if that was already past it.
+  const float right = std::max(area.right, f0.right);
+  const float left = std::min(area.left, f0.left);
+  const float bottom = std::max(area.bottom, f0.bottom);
+  const float top = std::min(area.top, f0.top);
+  float scale = s0;
+  if (crop_edges_ & 4) scale = std::min(scale, narrowed(hx - right, width - inset - right, f0.left, width - inset, c0.left, static_cast<float>(bound.right)));
+  if (crop_edges_ & 1) scale = std::min(scale, narrowed(left - hx, left - inset, f0.right, inset, c0.right, static_cast<float>(bound.left)));
+  if (crop_edges_ & 8) scale = std::min(scale, narrowed(hy - bottom, height - inset - bottom, f0.top, height - inset, c0.top, static_cast<float>(bound.bottom)));
+  if (crop_edges_ & 2) scale = std::min(scale, narrowed(top - hy, top - inset, f0.bottom, inset, c0.bottom, static_cast<float>(bound.top)));
+
+  // The opposite side stays where it was on screen, and an axis not being dragged stays centered.
+  EditorView view{scale, 0.0f, 0.0f};
+  if (crop_edges_ & 4) {
+    view.x = f0.left - scale * c0.left;
+  } else if (crop_edges_ & 1) {
+    view.x = f0.right - scale * c0.right;
+  } else {
+    view.x = (f0.left + f0.right) * 0.5f - scale * (c0.left + c0.right) * 0.5f;
+  }
+  if (crop_edges_ & 8) {
+    view.y = f0.top - scale * c0.top;
+  } else if (crop_edges_ & 2) {
+    view.y = f0.bottom - scale * c0.bottom;
+  } else {
+    view.y = (f0.top + f0.bottom) * 0.5f - scale * (c0.top + c0.bottom) * 0.5f;
+  }
+
+  const float least = std::max(config::kEditorMinCrop * scale_ / scale, 4.0f);
+  RectF crop = c0;
+  if (crop_edges_ & 1) crop.left = std::clamp((hx - view.x) / scale, static_cast<float>(bound.left), std::max(crop.right - least, static_cast<float>(bound.left)));
+  if (crop_edges_ & 4) crop.right = std::clamp((hx - view.x) / scale, std::min(crop.left + least, static_cast<float>(bound.right)), static_cast<float>(bound.right));
+  if (crop_edges_ & 2) crop.top = std::clamp((hy - view.y) / scale, static_cast<float>(bound.top), std::max(crop.bottom - least, static_cast<float>(bound.top)));
+  if (crop_edges_ & 8) crop.bottom = std::clamp((hy - view.y) / scale, std::min(crop.top + least, static_cast<float>(bound.bottom)), static_cast<float>(bound.bottom));
+  crop_turned_ = crop;
+  const RectF frame{scale * crop.left + view.x, scale * crop.top + view.y, scale * crop.right + view.x, scale * crop.bottom + view.y};
+  ApplyView(view, frame, nullptr, compositor_.Now());
 }
 
 void Editor::EndCrop(const TimeBase& now) {
@@ -2700,7 +2720,7 @@ void Editor::WantFrames() {
 }
 
 bool Editor::NeedsFrames() const {
-  return vanish_frames_ > 0 || covering_frames_ > 0 || live_ != nullptr || drag_ == Drag::kCrop || crop_gesture_ || refit_at_ > 0.0 || sharpen_at_ > 0.0 ||
+  return vanish_frames_ > 0 || covering_frames_ > 0 || live_ != nullptr || crop_gesture_ || refit_at_ > 0.0 || sharpen_at_ > 0.0 ||
          phase_ == Phase::kDeleting || phase_ == Phase::kLanding;
 }
 
@@ -2738,7 +2758,6 @@ void Editor::OnFrame() {
     if (live_->stamps.size() > first) canvas_->Extend(*live_, first);
     live_pending_ = false;
   }
-  if (drag_ == Drag::kCrop) EdgeZoom(dt);
   if (crop_gesture_ && drag_ != Drag::kPanCrop && touches_.size() < 2 && now.seconds >= crop_gesture_until_) CommitCropGesture(now);
   if (refit_at_ > 0.0 && now.seconds >= refit_at_ && drag_ == Drag::kNone) {
     refit_at_ = 0.0;

@@ -124,7 +124,7 @@ inline constexpr SpringSpec kEditorPress{0.16f, 0.90f};
 inline constexpr float kEditorPressScale = 0.92f;
 inline constexpr double kEditorChromeDelay = 0.12;
 inline constexpr double kEditorOutsideDelay = 0.10;
-inline constexpr double kEditorRefitDelay = 0.40;  // After a crop handle is let go, before the crop is fitted to the space.
+inline constexpr double kEditorRefitDelay = 0.10;  // After a crop handle is let go, before the crop is fitted to the space.
 inline constexpr double kEditorSharpDelay = 0.05;  // After the view comes to rest, before it is sharpened.
 inline constexpr float kEditorChromeRise = 10.0f;
 inline constexpr SpringSpec kEditorToolbar{0.40f, 0.86f};

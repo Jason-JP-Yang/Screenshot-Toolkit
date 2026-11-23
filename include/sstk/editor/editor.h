@@ -230,7 +230,6 @@ class Editor {
   void BeginCrop(int edges, POINT point, const TimeBase& now);
   void DragCrop(POINT point);
   void EndCrop(const TimeBase& now);
-  void EdgeZoom(float dt);
   void PanCrop(float dx, float dy);
   void ZoomCrop(float factor, POINT anchor, const TimeBase& now);
   void CommitCropGesture(const TimeBase& now);
@@ -410,6 +409,9 @@ class Editor {
   // Cropping.
   int crop_edges_ = 0;
   RectF crop_turned_{};
+  RectF crop_start_{};       // The turned crop, the view, and the frame as the handle was taken.
+  EditorView crop_view_{};
+  RectF crop_frame_{};
   PointF crop_grab_{};
   bool crop_gesture_ = false;
   double crop_gesture_until_ = 0.0;

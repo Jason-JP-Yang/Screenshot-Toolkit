@@ -92,23 +92,53 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   top_ = static_cast<float>(monitor.cy) - static_cast<float>(margin) - height_;
   panel_ = RECT{left, static_cast<LONG>(top_), left + static_cast<LONG>(width_), static_cast<LONG>(top_ + height_)};
   const float radius = config::kToolbarRadius * scale;
+  const LONG button = Px(config::kMarkupButton, scale);
+  button_rect_ = RECT{margin, monitor.cy - margin - button, margin + button, monitor.cy - margin};
 
   root_ = compositor_.CreateVisual();
   root_effect_ = compositor_.CreateEffectGroup();
   root_->SetEffect(root_effect_.Get());
-  root_->SetOffsetX(static_cast<float>(left));
   layer_->AddVisual(root_.Get(), FALSE, nullptr);
+  shape_ = compositor_.CreateVisual();
+  root_->AddVisual(shape_.Get(), FALSE, nullptr);
 
+  // Two shadows, the toolbar's and the button's, as the shape between them moves too fast to need one of its own.
   const config::ShadowSpec& cast = config::kToolbarShadow;
   const ShadowLayer layers[] = {{cast.sigma * scale, cast.alpha, cast.offset * scale}};
   const float shadow_pad = std::ceil(cast.sigma * 3.0f * scale + cast.offset * scale);
-  ComPtr<IDCompositionVisual> shadow = ImageVisual(compositor_, RenderShadow(static_cast<int>(width_), static_cast<int>(height_), radius, shadow_pad, layers, 1));
-  shadow->SetOffsetX(-shadow_pad);
-  shadow->SetOffsetY(-shadow_pad);
-  root_->AddVisual(shadow.Get(), FALSE, nullptr);
-  root_->AddVisual(ImageVisual(compositor_, RenderPanel(static_cast<int>(width_), static_cast<int>(height_), radius, palette.panel, palette.hairline,
-                                                       palette.hairline_alpha)).Get(),
-                   FALSE, nullptr);
+  const auto shadow = [&](int w, int h, float r, ComPtr<IDCompositionVisual>& visual, ComPtr<IDCompositionEffectGroup>& effect) {
+    visual = ImageVisual(compositor_, RenderShadow(w, h, r, shadow_pad, layers, 1));
+    visual->SetOffsetX(-shadow_pad);
+    visual->SetOffsetY(-shadow_pad);
+    effect = compositor_.CreateEffectGroup();
+    visual->SetEffect(effect.Get());
+    shape_->AddVisual(visual.Get(), FALSE, nullptr);
+  };
+  shadow(static_cast<int>(width_), static_cast<int>(height_), radius, wide_shadow_, wide_shadow_effect_);
+  shadow(button, button, static_cast<float>(button) * 0.5f, round_shadow_, round_shadow_effect_);
+
+  // A hairline between two clips that follow the shape, and the panel within.
+  outer_ = compositor_.CreateVisual();
+  outer_clip_ = compositor_.CreateClip();
+  outer_clip_->SetLeft(0.0f);
+  outer_clip_->SetTop(0.0f);
+  outer_->SetClip(outer_clip_.Get());
+  outer_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  outer_->AddVisual(compositor_.CreateSolidVisual(static_cast<uint32_t>(palette.hairline_alpha * 255.0f + 0.5f) << 24 | palette.hairline, width_, height_).Get(),
+                    FALSE, nullptr);
+  shape_->AddVisual(outer_.Get(), FALSE, nullptr);
+  inner_ = compositor_.CreateVisual();
+  inner_clip_ = compositor_.CreateClip();
+  inner_clip_->SetLeft(1.0f);
+  inner_clip_->SetTop(1.0f);
+  inner_->SetClip(inner_clip_.Get());
+  inner_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  inner_->AddVisual(compositor_.CreateSolidVisual(0xFF000000u | palette.panel, width_, height_).Get(), FALSE, nullptr);
+  outer_->AddVisual(inner_.Get(), FALSE, nullptr);
+  contents_ = compositor_.CreateVisual();
+  contents_effect_ = compositor_.CreateEffectGroup();
+  contents_->SetEffect(contents_effect_.Get());
+  inner_->AddVisual(contents_.Get(), FALSE, nullptr);
 
   tools_ = compositor_.CreateVisual();
   tools_clip_ = compositor_.CreateClip();
@@ -118,7 +148,7 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   tools_clip_->SetBottom(height_ - 1.0f);
   SetClipRadii(tools_clip_.Get(), radius - 1.0f, nullptr);
   tools_->SetClip(tools_clip_.Get());
-  root_->AddVisual(tools_.Get(), FALSE, nullptr);
+  contents_->AddVisual(tools_.Get(), FALSE, nullptr);
 
   const LONG art_width = Px(config::kToolArtWidth, scale);
   for (int i = 0; i < kToolCount; ++i) {
@@ -145,7 +175,7 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
     entry.visual = compositor_.CreateVisual();
     entry.visual->SetOffsetX(static_cast<float>(x));
     entry.visual->SetOffsetY(static_cast<float>(y));
-    root_->AddVisual(entry.visual.Get(), FALSE, nullptr);
+    contents_->AddVisual(entry.visual.Get(), FALSE, nullptr);
     swatches_.push_back(std::move(entry));
   }
   RenderSwatches();
@@ -156,46 +186,34 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   ComPtr<IDCompositionVisual> fold_face = ImageVisual(compositor_, RenderBox(fold, fold, static_cast<float>(fold) * 0.5f, palette.control, 1.0f));
   fold_face->SetOffsetX(static_cast<float>(fold_left));
   fold_face->SetOffsetY(static_cast<float>(fold_top));
-  root_->AddVisual(fold_face.Get(), FALSE, nullptr);
+  contents_->AddVisual(fold_face.Get(), FALSE, nullptr);
   fold_veil_ = ImageVisual(compositor_, RenderBox(fold, fold, static_cast<float>(fold) * 0.5f, palette.hover, 1.0f));
   fold_veil_->SetOffsetX(static_cast<float>(fold_left));
   fold_veil_->SetOffsetY(static_cast<float>(fold_top));
   fold_veil_effect_ = compositor_.CreateEffectGroup();
   fold_veil_->SetEffect(fold_veil_effect_.Get());
-  root_->AddVisual(fold_veil_.Get(), FALSE, nullptr);
+  contents_->AddVisual(fold_veil_.Get(), FALSE, nullptr);
   const int icon = static_cast<int>(Px(config::kEditorIcon, scale));
   ComPtr<IDCompositionVisual> fold_icon = ImageVisual(compositor_, RenderEditorIcon(EditorIcon::kFold, icon, scale, palette.control_ink));
   fold_icon->SetOffsetX(static_cast<float>(fold_left + (fold - icon) / 2));
   fold_icon->SetOffsetY(static_cast<float>(fold_top + (fold - icon) / 2));
-  root_->AddVisual(fold_icon.Get(), FALSE, nullptr);
+  contents_->AddVisual(fold_icon.Get(), FALSE, nullptr);
 
-  const LONG button = Px(config::kMarkupButton, scale);
-  button_rect_ = RECT{margin, monitor.cy - margin - button, margin + button, monitor.cy - margin};
-  button_ = compositor_.CreateVisual();
-  button_->SetOffsetX(static_cast<float>(button_rect_.left));
-  button_->SetOffsetY(static_cast<float>(button_rect_.top));
-  button_effect_ = compositor_.CreateEffectGroup();
-  button_->SetEffect(button_effect_.Get());
-  button_scale_ = compositor_.CreateScale();
-  button_scale_->SetCenterX(static_cast<float>(button) * 0.5f);
-  button_scale_->SetCenterY(static_cast<float>(button) * 0.5f);
-  button_->SetTransform(button_scale_.Get());
-  ComPtr<IDCompositionVisual> button_shadow;
-  {
-    const float pad_shadow = std::ceil(cast.sigma * 3.0f * scale + cast.offset * scale);
-    button_shadow = ImageVisual(compositor_, RenderShadow(button, button, static_cast<float>(button) * 0.5f, pad_shadow, layers, 1));
-    button_shadow->SetOffsetX(-pad_shadow);
-    button_shadow->SetOffsetY(-pad_shadow);
-  }
-  button_->AddVisual(button_shadow.Get(), FALSE, nullptr);
-  button_->AddVisual(ImageVisual(compositor_, RenderPanel(button, button, static_cast<float>(button) * 0.5f, palette.panel, palette.hairline,
-                                                         palette.hairline_alpha)).Get(),
-                     FALSE, nullptr);
-  ComPtr<IDCompositionVisual> button_icon = ImageVisual(compositor_, RenderEditorIcon(EditorIcon::kMarkup, icon, scale, palette.control_ink));
-  button_icon->SetOffsetX(static_cast<float>((button - icon) / 2));
-  button_icon->SetOffsetY(static_cast<float>((button - icon) / 2));
-  button_->AddVisual(button_icon.Get(), FALSE, nullptr);
-  layer_->AddVisual(button_.Get(), FALSE, nullptr);
+  // Folded, the shape shows the tool in hand at a slant, the stroke it has just drawn trailing from its point.
+  badge_ = compositor_.CreateVisual();
+  badge_effect_ = compositor_.CreateEffectGroup();
+  badge_->SetEffect(badge_effect_.Get());
+  badge_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  badge_line_ = compositor_.CreateVisual();
+  badge_art_ = compositor_.CreateVisual();
+  badge_art_->SetBorderMode(DCOMPOSITION_BORDER_MODE_SOFT);
+  badge_veil_ = ImageVisual(compositor_, RenderBox(button, button, static_cast<float>(button) * 0.5f, palette.hover, 1.0f));
+  badge_veil_effect_ = compositor_.CreateEffectGroup();
+  badge_veil_->SetEffect(badge_veil_effect_.Get());
+  badge_->AddVisual(badge_line_.Get(), FALSE, nullptr);
+  badge_->AddVisual(badge_art_.Get(), FALSE, nullptr);
+  badge_->AddVisual(badge_veil_.Get(), FALSE, nullptr);
+  inner_->AddVisual(badge_.Get(), FALSE, nullptr);
 
   popover_root_ = compositor_.CreateVisual();
   popover_effect_ = compositor_.CreateEffectGroup();
@@ -208,23 +226,35 @@ MarkupToolbar::MarkupToolbar(Compositor& compositor, IDCompositionVisual* parent
   popover_root_->AddVisual(knob_.Get(), FALSE, nullptr);
   layer_->AddVisual(popover_root_.Get(), FALSE, nullptr);
 
-  alpha_.Bind(root_effect_.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
-  slide_.Bind(root_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY), top_);
-  fold_hover_.Bind(fold_veil_effect_.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
-  button_alpha_.Bind(button_effect_.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
-  button_pop_.Bind(button_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleX));
-  button_pop_.Bind(button_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleY));
-  popover_alpha_.Bind(popover_effect_.Get(), SSTK_SETTER(IDCompositionEffectGroup, SetOpacity));
+  const auto opacity = SSTK_SETTER(IDCompositionEffectGroup, SetOpacity);
+  alpha_.Bind(root_effect_.Get(), opacity);
+  slide_.Bind(root_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY));
+  fold_hover_.Bind(fold_veil_effect_.Get(), opacity);
+  badge_hover_.Bind(badge_veil_effect_.Get(), opacity);
+  shape_x_.Bind(shape_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetX));
+  shape_y_.Bind(shape_.Get(), SSTK_SETTER(IDCompositionVisual, SetOffsetY));
+  shape_w_.Bind(outer_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetRight));
+  shape_w_.Bind(inner_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetRight), -1.0f);
+  shape_h_.Bind(outer_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetBottom));
+  shape_h_.Bind(inner_clip_.Get(), SSTK_SETTER(IDCompositionRectangleClip, SetBottom), -1.0f);
+  shape_r_.Bind(outer_clip_.Get(), SetClipRadii);
+  shape_r_.Bind(inner_clip_.Get(), SetClipRadii, -1.0f);
+  contents_alpha_.Bind(contents_effect_.Get(), opacity);
+  badge_alpha_.Bind(badge_effect_.Get(), opacity);
+  wide_shadow_alpha_.Bind(wide_shadow_effect_.Get(), opacity);
+  round_shadow_alpha_.Bind(round_shadow_effect_.Get(), opacity);
+  popover_alpha_.Bind(popover_effect_.Get(), opacity);
   popover_pop_.Bind(popover_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleX));
   popover_pop_.Bind(popover_scale_.Get(), SSTK_SETTER(IDCompositionScaleTransform, SetScaleY));
   alpha_.Snap(0.0f);
   slide_.Snap(0.0f);
   fold_hover_.Snap(0.0f);
-  button_alpha_.Snap(0.0f);
-  button_pop_.Snap(1.0f);
+  badge_hover_.Snap(0.0f);
   popover_alpha_.Snap(0.0f);
   popover_pop_.Snap(1.0f);
+  Morph(false, TimeBase{}, true);
   Lift(TimeBase{});
+  RenderBadge();
 }
 
 void MarkupToolbar::RenderTool(Slot& slot) {
@@ -237,7 +267,94 @@ void MarkupToolbar::RenderTool(Slot& slot) {
     look.percent = percent < 100 ? percent : -1;
   }
   const Image art = RenderToolArt(slot.tool, static_cast<int>(Px(config::kToolArtWidth, scale_)), static_cast<int>(Px(config::kToolArtHeight, scale_)), scale_, look);
-  slot.visual->SetContent(compositor_.CreateSurface(art, false).Get());
+  slot.art = compositor_.CreateSurface(art, false);
+  slot.visual->SetContent(slot.art.Get());
+}
+
+// The tool that lays down color, drawn at a slant with its point toward the lower left, and a short stroke of its
+// color trailing from the point.
+void MarkupToolbar::RenderBadge() {
+  const ToolBox& tools = Tools();
+  const Tool tool = InkTool();
+  const ToolBox::Ink& ink = tools.inks[static_cast<size_t>(tool)];
+  const uint32_t state = static_cast<uint32_t>(tool) | ink.color << 4 | static_cast<uint32_t>(std::lround(ink.opacity * 100.0f)) << 28;
+  if (state == badge_state_) return;
+  badge_state_ = state;
+  Slot& slot = slots_[static_cast<size_t>(tool)];
+  if (!slot.art) RenderTool(slot);
+  const float size = static_cast<float>(button_rect_.right - button_rect_.left);
+  const float unit = static_cast<float>(Px(config::kToolArtWidth, scale_)) / 26.0f;
+  const float tip_x = 13.0f * unit;
+  const float tip_y = 3.4f * unit;
+  const float k = 0.56f;
+  const float cosine = -0.7071068f;
+  const float sine = -0.7071068f;
+  const float to_x = size * 0.38f;
+  const float to_y = size * 0.63f;
+  D2D_MATRIX_3X2_F place{k * cosine, k * sine, -k * sine, k * cosine, 0.0f, 0.0f};
+  place._31 = to_x - (tip_x * place._11 + tip_y * place._21);
+  place._32 = to_y - (tip_x * place._12 + tip_y * place._22);
+  badge_art_->SetContent(slot.art.Get());
+  badge_art_->SetTransform(place);
+
+  // The stroke, drawn by the tool itself, waving in from the left to the point.
+  const int pixels = static_cast<int>(size);
+  Stroke stroke;
+  stroke.tool = tool;
+  stroke.color = ink.color;
+  stroke.opacity = std::max(ink.opacity, 0.6f);
+  stroke.width = std::min(tools.WidthOf(tool, ink.width), tool == Tool::kHighlighter ? 9.0f : 3.2f) * scale_;
+  stroke.scale = scale_;
+  stroke.seed = 3u;
+  for (int i = 0; i <= 40; ++i) {
+    const float t = static_cast<float>(i) / 40.0f;
+    InkPoint point{};
+    point.x = size * 0.10f + (to_x - size * 0.10f) * t;
+    point.y = to_y + size * 0.07f * std::sin(t * kTwoPi * 0.9f + 0.6f) * (1.0f - t * 0.6f);
+    point.pressure = 0.45f + 0.4f * t;
+    point.time = t * 0.25;
+    stroke.points.push_back(point);
+  }
+  StampTrail trail;
+  LayStamps(stroke, trail, true);
+  std::vector<float> mask(static_cast<size_t>(pixels) * pixels, 0.0f);
+  DrawStroke(stroke, RECT{0, 0, pixels, pixels}, mask.data(), pixels);
+  Image line = Image::Allocate(pixels, pixels);
+  if (!line) return;
+  std::fill_n(reinterpret_cast<uint32_t*>(line.data()), static_cast<size_t>(pixels) * pixels, 0u);
+  PaintStroke(stroke, mask.data(), pixels, reinterpret_cast<uint32_t*>(line.data()), pixels, pixels, pixels);
+  badge_line_->SetContent(compositor_.CreateSurface(line, false).Get());
+}
+
+// Between the toolbar, centered along the bottom, and the round button at the bottom left: the shape slides and
+// narrows to the left, its contents fading out first, or grows out from the left with them fading in after.
+void MarkupToolbar::Morph(bool fold, const TimeBase& now, bool immediate) {
+  IDCompositionDevice* dc = compositor_.device();
+  const RECT& to = fold ? button_rect_ : panel_;
+  const float button = static_cast<float>(button_rect_.right - button_rect_.left);
+  const auto set = [&](AnimFloat& value, float target, const SpringSpec& spec, double delay) {
+    if (immediate || dc == nullptr) {
+      value.Snap(target);
+    } else {
+      value.To(dc, now, target, spec, delay);
+    }
+  };
+  set(shape_x_, static_cast<float>(to.left), config::kEditorToolbar, 0.0);
+  set(shape_y_, static_cast<float>(to.top), config::kEditorToolbar, 0.0);
+  set(shape_w_, fold ? button : width_, config::kEditorToolbar, 0.0);
+  set(shape_h_, fold ? button : height_, config::kEditorToolbar, 0.0);
+  set(shape_r_, fold ? button * 0.5f : config::kToolbarRadius * scale_, config::kEditorToolbar, 0.0);
+  if (fold) {
+    set(contents_alpha_, 0.0f, config::kQuickFade, 0.0);
+    set(wide_shadow_alpha_, 0.0f, config::kQuickFade, 0.0);
+    set(badge_alpha_, 1.0f, config::kEditorFade, 0.16);
+    set(round_shadow_alpha_, 1.0f, config::kEditorFade, 0.22);
+  } else {
+    set(badge_alpha_, 0.0f, config::kQuickFade, 0.0);
+    set(round_shadow_alpha_, 0.0f, config::kQuickFade, 0.0);
+    set(contents_alpha_, 1.0f, config::kEditorFade, 0.12);
+    set(wide_shadow_alpha_, 1.0f, config::kEditorFade, 0.22);
+  }
 }
 
 Tool MarkupToolbar::InkTool() const {
@@ -290,12 +407,6 @@ void MarkupToolbar::Show(const TimeBase& now, double delay) {
   if (shown_) return;
   shown_ = true;
   IDCompositionDevice* dc = compositor_.device();
-  if (folded_) {
-    button_pop_.Snap(0.82f);
-    button_alpha_.To(dc, now, 1.0f, config::kEditorFade, delay);
-    button_pop_.To(dc, now, 1.0f, config::kToolLift, delay);
-    return;
-  }
   if (alpha_.ValueAt(now.seconds) < 0.02f) slide_.Snap(24.0f * scale_);
   alpha_.To(dc, now, 1.0f, config::kEditorFade, delay);
   slide_.To(dc, now, 0.0f, config::kEditorToolbar, delay);
@@ -307,30 +418,22 @@ void MarkupToolbar::Hide(const TimeBase& now) {
   ClosePopover(now);
   alpha_.To(dc, now, 0.0f, config::kEditorFade);
   slide_.To(dc, now, 16.0f * scale_, config::kEditorFade);
-  button_alpha_.To(dc, now, 0.0f, config::kEditorFade);
   fold_hover_.To(dc, now, 0.0f, config::kQuickFade);
+  badge_hover_.To(dc, now, 0.0f, config::kQuickFade);
   hover_slot_ = -1;
 }
 
 void MarkupToolbar::Fold(bool fold, const TimeBase& now) {
   if (fold == folded_) return;
   folded_ = fold;
-  if (!shown_) return;
   IDCompositionDevice* dc = compositor_.device();
   ClosePopover(now);
-  if (fold) {
-    alpha_.To(dc, now, 0.0f, config::kEditorFade);
-    slide_.To(dc, now, height_ + config::kEditorMargin * scale_, config::kEditorToolbar);
-    button_pop_.Snap(0.6f);
-    button_alpha_.To(dc, now, 1.0f, config::kEditorFade, 0.08);
-    button_pop_.To(dc, now, 1.0f, config::kToolLift, 0.08);
-  } else {
-    button_alpha_.To(dc, now, 0.0f, config::kQuickFade);
-    button_pop_.To(dc, now, 0.7f, config::kEditorFade);
-    alpha_.To(dc, now, 1.0f, config::kEditorFade);
-    slide_.To(dc, now, 0.0f, config::kEditorToolbar);
-  }
+  if (fold) RenderBadge();
+  Morph(fold, now, !shown_);
   fold_hover_.To(dc, now, 0.0f, config::kQuickFade);
+  badge_hover_.To(dc, now, 0.0f, config::kQuickFade);
+  hover_slot_ = -1;
+  Lift(now);
 }
 
 void MarkupToolbar::SetRuler(bool on, const TimeBase& now) {
@@ -602,12 +705,16 @@ void MarkupToolbar::Hover(POINT point, const TimeBase& now) {
   }
   const bool on_fold = shown_ && !folded_ && PtInRect(&fold_, point);
   fold_hover_.To(compositor_.device(), now, on_fold ? palette_.hover_alpha : 0.0f, config::kQuickFade);
+  const bool on_button = shown_ && folded_ && PtInRect(&button_rect_, point);
+  badge_hover_.To(compositor_.device(), now, on_button ? palette_.hover_alpha : 0.0f, config::kQuickFade);
 }
 
 void MarkupToolbar::Refresh(const TimeBase& now) {
   for (Slot& slot : slots_) {
     if (IsInk(slot.tool)) RenderTool(slot);
   }
+  badge_state_ = 0xFFFFFFFFu;
+  RenderBadge();
   RenderSwatches();
   RenderPopover();
   Lift(now);

@@ -53,6 +53,7 @@ class MarkupToolbar {
     Tool tool;
     RECT rect{};
     ComPtr<IDCompositionVisual> visual;
+    ComPtr<IDCompositionSurface> art;
     AnimFloat lift;
     float raised = 0.0f;
   };
@@ -66,6 +67,8 @@ class MarkupToolbar {
   };
 
   void RenderTool(Slot& slot);
+  void RenderBadge();
+  void Morph(bool fold, const TimeBase& now, bool immediate);
   void RenderSwatches();
   void Lift(const TimeBase& now);
   int ChosenSwatch() const;  // -1 for none, the swatch count for the grid's color.
@@ -81,19 +84,35 @@ class MarkupToolbar {
   SIZE monitor_;
   const config::EditorPalette& palette_;
 
+  // One shape that is the toolbar unfolded and the round button folded, and slides and narrows from one to the other.
   ComPtr<IDCompositionVisual> layer_;
   ComPtr<IDCompositionVisual> root_;
   ComPtr<IDCompositionEffectGroup> root_effect_;
+  ComPtr<IDCompositionVisual> shape_;
+  ComPtr<IDCompositionVisual> wide_shadow_;
+  ComPtr<IDCompositionEffectGroup> wide_shadow_effect_;
+  ComPtr<IDCompositionVisual> round_shadow_;
+  ComPtr<IDCompositionEffectGroup> round_shadow_effect_;
+  ComPtr<IDCompositionVisual> outer_;
+  ComPtr<IDCompositionRectangleClip> outer_clip_;
+  ComPtr<IDCompositionVisual> inner_;
+  ComPtr<IDCompositionRectangleClip> inner_clip_;
+  ComPtr<IDCompositionVisual> contents_;
+  ComPtr<IDCompositionEffectGroup> contents_effect_;
   ComPtr<IDCompositionVisual> tools_;
   ComPtr<IDCompositionRectangleClip> tools_clip_;
   ComPtr<IDCompositionVisual> fold_veil_;
   ComPtr<IDCompositionEffectGroup> fold_veil_effect_;
-  AnimFloat alpha_, slide_, fold_hover_;
-
-  ComPtr<IDCompositionVisual> button_;
-  ComPtr<IDCompositionEffectGroup> button_effect_;
-  ComPtr<IDCompositionScaleTransform> button_scale_;
-  AnimFloat button_alpha_, button_pop_;
+  ComPtr<IDCompositionVisual> badge_;
+  ComPtr<IDCompositionEffectGroup> badge_effect_;
+  ComPtr<IDCompositionVisual> badge_art_;
+  ComPtr<IDCompositionVisual> badge_line_;
+  ComPtr<IDCompositionVisual> badge_veil_;
+  ComPtr<IDCompositionEffectGroup> badge_veil_effect_;
+  AnimFloat alpha_, slide_, fold_hover_, badge_hover_;
+  AnimFloat shape_x_, shape_y_, shape_w_, shape_h_, shape_r_;
+  AnimFloat contents_alpha_, badge_alpha_, wide_shadow_alpha_, round_shadow_alpha_;
+  uint32_t badge_state_ = 0xFFFFFFFFu;
 
   ComPtr<IDCompositionVisual> popover_root_;
   ComPtr<IDCompositionEffectGroup> popover_effect_;

@@ -17,7 +17,7 @@ const config::BrushTuning& TuningOf(Tool tool) {
 
 // Some tools keep the strongest coverage a pixel got, so a stroke is even however often it crosses itself. The others
 // build up, as graphite and wet ink do.
-bool Builds(Tool tool) { return tool == Tool::kPencil || tool == Tool::kCrayon || tool == Tool::kBrush; }
+bool Builds(Tool tool) { return tool == Tool::kPencil || tool == Tool::kCrayon; }
 bool Multiplies(Tool tool) { return tool == Tool::kHighlighter || tool == Tool::kBrush; }
 
 float Smoothstep(float a, float b, float x) {
@@ -75,15 +75,25 @@ float Spacing(const Stroke& stroke, const StampTrail& trail, float pressure) {
   return std::max(TuningOf(stroke.tool).spacing * 2.0f * radius, 0.35f);
 }
 
-Stamp MakeStamp(const Stroke& stroke, const StampTrail& trail, float x, float y, float pressure, float tilt, float azimuth) {
+Stamp MakeStamp(const Stroke& stroke, const StampTrail& trail, float x, float y, float pressure, float tilt, float azimuth, float heading) {
   const config::BrushTuning& tuning = TuningOf(stroke.tool);
   const float p = stroke.mouse ? config::kMousePressure : std::clamp(pressure, 0.0f, 1.0f);
+  const uint32_t index = static_cast<uint32_t>(stroke.stamps.size());
   Stamp stamp{};
   stamp.x = x;
   stamp.y = y;
   stamp.radius = std::max(stroke.width * 0.5f * Share(stroke, trail, pressure), 0.4f);
   stamp.aspect = 1.0f;
   stamp.alpha = tuning.flow;
+  stamp.heading = heading;
+  stamp.along = trail.travelled;
+  stamp.grain_seed = stroke.seed * 2654435761u + index * 40503u;
+  // Pencil and crayon marks each sit a little differently, as no two touches of a lead or wax are alike.
+  const auto jitter = [&](float amount) {
+    stamp.x += (Lattice(static_cast<int>(index), 1, stroke.seed) - 0.5f) * 2.0f * amount * stamp.radius;
+    stamp.y += (Lattice(static_cast<int>(index), 2, stroke.seed) - 0.5f) * 2.0f * amount * stamp.radius;
+    stamp.radius *= 1.0f + (Lattice(static_cast<int>(index), 3, stroke.seed) - 0.5f) * 2.0f * amount;
+  };
   switch (stroke.tool) {
     case Tool::kPen:
       stamp.aspect = config::kNibAspect;
@@ -95,7 +105,8 @@ Stamp MakeStamp(const Stroke& stroke, const StampTrail& trail, float x, float y,
       break;
     case Tool::kPencil: {
       stamp.alpha = tuning.flow * (0.35f + 0.65f * p);
-      stamp.cut = tuning.grain_bite * (0.95f - 0.8f * p);
+      stamp.cut = tuning.grain_bite * (0.95f - 0.8f * p) + (Lattice(static_cast<int>(index), 4, stroke.seed) - 0.5f) * 0.06f;
+      jitter(config::kPencilJitter);
       // Laid over on its side, a pencil shades: a wider, fainter mark along the way it leans.
       const float side = std::clamp((tilt - 0.35f) / 0.65f, 0.0f, 1.0f);
       if (side > 0.0f && !stroke.mouse) {
@@ -107,11 +118,18 @@ Stamp MakeStamp(const Stroke& stroke, const StampTrail& trail, float x, float y,
       break;
     }
     case Tool::kCrayon:
-      stamp.cut = tuning.grain_bite * (0.9f - 0.55f * p);
+      stamp.cut = tuning.grain_bite * (0.9f - 0.55f * p) + (Lattice(static_cast<int>(index), 4, stroke.seed) - 0.5f) * 0.08f;
+      jitter(config::kCrayonJitter);
       break;
-    case Tool::kBrush:
-      stamp.alpha = tuning.flow * (0.6f + 0.4f * p);
+    case Tool::kBrush: {
+      // The brush gives up its ink as it goes, and moving fast it skips and goes dry; slow and full, it bleeds.
+      const float load = config::kBrushLeast + (1.0f - config::kBrushLeast) * std::exp(-trail.travelled / (config::kBrushLoad * stroke.width));
+      const float speed = trail.speed / std::max(stroke.scale, 0.1f);
+      stamp.dry = std::clamp((speed - config::kBrushDrySpeed) / config::kBrushDrySpan, 0.0f, 1.0f);
+      stamp.alpha = tuning.flow * load * (0.55f + 0.45f * p) * (1.0f - 0.35f * stamp.dry);
+      stamp.wet = config::kBrushBleed * load * (1.0f - stamp.dry) * (0.6f + 0.4f * p);
       break;
+    }
     default:
       break;
   }
@@ -148,10 +166,10 @@ size_t LayStamps(Stroke& stroke, StampTrail& trail, bool finished) {
   const size_t count = points.size();
   if (count == 0) return first;
 
-  const auto emit = [&](float x, float y, float pressure, float tilt, float azimuth) {
-    const Stamp stamp = MakeStamp(stroke, trail, x, y, pressure, tilt, azimuth);
+  const auto emit = [&](float x, float y, float pressure, float tilt, float azimuth, float heading) {
+    const Stamp stamp = MakeStamp(stroke, trail, x, y, pressure, tilt, azimuth, heading);
     stroke.stamps.push_back(stamp);
-    const float reach = stamp.radius + 2.0f;
+    const float reach = StampReach(stamp);
     const RECT box{static_cast<LONG>(std::floor(x - reach)), static_cast<LONG>(std::floor(y - reach)), static_cast<LONG>(std::ceil(x + reach)),
                    static_cast<LONG>(std::ceil(y + reach))};
     stroke.bounds = Union(stroke.bounds, box);
@@ -159,7 +177,8 @@ size_t LayStamps(Stroke& stroke, StampTrail& trail, bool finished) {
 
   if (!trail.started) {
     trail.started = true;
-    emit(points[0].x, points[0].y, points[0].pressure, points[0].tilt, points[0].azimuth);
+    const float heading = count > 1 ? std::atan2(points[1].y - points[0].y, points[1].x - points[0].x) : 0.0f;
+    emit(points[0].x, points[0].y, points[0].pressure, points[0].tilt, points[0].azimuth, heading);
   }
 
   // A span needs the point after it to know how it bends, so the last one waits for the stroke to go on or end.
@@ -181,6 +200,7 @@ size_t LayStamps(Stroke& stroke, StampTrail& trail, bool finished) {
     for (int i = 1; i <= pieces; ++i) {
       const PointF to = CatmullRom(a, b, c, d, static_cast<float>(i) / pieces);
       const float length = std::hypot(to.x - from.x, to.y - from.y);
+      const float heading = length > 0.0f ? std::atan2(to.y - from.y, to.x - from.x) : 0.0f;
       float along = 0.0f;
       for (;;) {
         const float t = (static_cast<float>(i - 1) + (length > 0.0f ? along / length : 0.0f)) / pieces;
@@ -196,7 +216,7 @@ size_t LayStamps(Stroke& stroke, StampTrail& trail, bool finished) {
         trail.carry = 0.0f;
         const float f = length > 0.0f ? along / length : 0.0f;
         emit(from.x + (to.x - from.x) * f, from.y + (to.y - from.y) * f, pressure, b.tilt + (c.tilt - b.tilt) * t,
-             b.azimuth + (c.azimuth - b.azimuth) * t);
+             b.azimuth + (c.azimuth - b.azimuth) * t, heading);
       }
       from = to;
     }
@@ -224,12 +244,14 @@ void RelayStamps(Stroke& stroke) {
 void DrawStamps(const Stroke& stroke, size_t first, size_t last, const RECT& area, float* mask, int stride) {
   const config::BrushTuning& tuning = TuningOf(stroke.tool);
   const bool builds = Builds(stroke.tool);
-  const float grain_size = std::max(tuning.grain * stroke.scale, 0.5f);
+  const bool pools = stroke.tool == Tool::kBrush;
+  const float unit = std::max(stroke.scale, 0.1f);
+  const float g = std::max(tuning.grain * stroke.scale, 0.5f);
   const uint32_t paper = 0x9E3779B9u * (static_cast<uint32_t>(stroke.tool) + 1u);
   last = std::min(last, stroke.stamps.size());
   for (size_t i = first; i < last; ++i) {
     const Stamp& stamp = stroke.stamps[i];
-    const float reach = stamp.radius + 1.5f;
+    const float reach = StampReach(stamp) - 0.5f;
     const int x0 = std::max(static_cast<int>(std::floor(stamp.x - reach)), static_cast<int>(area.left));
     const int x1 = std::min(static_cast<int>(std::ceil(stamp.x + reach)), static_cast<int>(area.right));
     const int y0 = std::max(static_cast<int>(std::floor(stamp.y - reach)), static_cast<int>(area.top));
@@ -237,6 +259,9 @@ void DrawStamps(const Stroke& stroke, size_t first, size_t last, const RECT& are
     if (x0 >= x1 || y0 >= y1) continue;
     const float cosine = std::cos(stamp.angle);
     const float sine = std::sin(stamp.angle);
+    const float hc = std::cos(stamp.heading);
+    const float hs = std::sin(stamp.heading);
+    const float offset = static_cast<float>(stroke.seed % 997u);
     for (int y = y0; y < y1; ++y) {
       float* row = mask + static_cast<ptrdiff_t>(y - area.top) * stride - area.left;
       const float py = static_cast<float>(y) + 0.5f;
@@ -246,6 +271,9 @@ void DrawStamps(const Stroke& stroke, size_t first, size_t last, const RECT& are
         const float dx = px - stamp.x;
         const float u = dx * cosine + dy * sine;
         const float v = dy * cosine - dx * sine;
+        // Along and across the stroke, which keeps streaks running with it from one mark to the next.
+        const float along = stamp.along + dx * hc + dy * hs;
+        const float across = dy * hc - dx * hs;
         float cover = 0.0f;
         switch (stroke.tool) {
           case Tool::kPen:
@@ -254,39 +282,65 @@ void DrawStamps(const Stroke& stroke, size_t first, size_t last, const RECT& are
           case Tool::kHighlighter:
             cover = std::clamp(0.5f - Chisel(u, v, stamp.radius, stamp.aspect), 0.0f, 1.0f);
             break;
-          case Tool::kPencil:
+          case Tool::kPencil: {
             cover = std::clamp(0.5f - Ellipse(u, v, stamp.radius, stamp.aspect) / std::max(1.0f, stamp.radius * 0.3f), 0.0f, 1.0f);
+            if (cover <= 0.0f) break;
+            // The paper's tooth in three sizes, fixed to the picture, and fine graphite streaks dragged along the stroke.
+            const float tooth = 0.5f * Noise(px / g, py / g, paper) + 0.3f * Noise(px / (g * 2.3f), py / (g * 2.3f), paper + 1u) +
+                                0.2f * Noise(px / (g * 0.55f), py / (g * 0.55f), paper + 2u);
+            const float streak = Noise(along / (4.0f * unit) + offset, across / (0.55f * unit), stroke.seed);
+            const float level = tooth * (1.0f - config::kPencilStreak) + streak * config::kPencilStreak;
+            cover *= Smoothstep(stamp.cut - 0.14f, stamp.cut + 0.14f, level);
             break;
+          }
           case Tool::kCrayon: {
-            const float rough = stamp.radius * (0.84f + 0.16f * Noise(px * 0.45f / stroke.scale, py * 0.45f / stroke.scale, paper + 3u));
+            // A ragged edge, wax taking only the paper's peaks, smears along the stroke, and flecks of paper left bare.
+            const float rough = stamp.radius * (0.82f + 0.18f * Noise(px * 0.45f / unit, py * 0.45f / unit, paper + 3u) +
+                                                0.08f * (Noise(px * 1.6f / unit, py * 1.6f / unit, paper + 4u) - 0.5f));
             cover = std::clamp(rough - std::sqrt(dx * dx + dy * dy) + 0.5f, 0.0f, 1.0f);
+            if (cover <= 0.0f) break;
+            const float tooth = 0.55f * Noise(px / g, py / g, paper) + 0.3f * Noise(px / (g * 2.6f), py / (g * 2.6f), paper + 1u) +
+                                0.15f * Noise(px / (g * 0.5f), py / (g * 0.5f), paper + 2u);
+            const float smear = Noise(along / (7.0f * unit) + offset, across / (0.7f * unit), stroke.seed + 11u);
+            const float level = tooth * (1.0f - config::kCrayonStreak) + smear * config::kCrayonStreak;
+            cover *= Smoothstep(stamp.cut - 0.06f, stamp.cut + 0.06f, level);
+            const float fleck = Lattice(static_cast<int>(std::floor(px / (1.3f * unit))), static_cast<int>(std::floor(py / (1.3f * unit))), paper + 5u);
+            if (fleck < config::kCrayonFlecks) cover *= 0.15f;
             break;
           }
           case Tool::kBrush: {
+            // The paper's fibers, crossing each other, along which wet ink creeps out past the mark.
+            const float fiber = 0.5f * Noise(px / (1.2f * unit), py / (4.5f * unit), paper + 7u) + 0.5f * Noise(px / (4.5f * unit), py / (1.2f * unit), paper + 8u);
             const float t = std::sqrt(dx * dx + dy * dy) / stamp.radius;
-            const float body = 1.0f - Smoothstep(0.6f, 1.0f, t);
-            const float rim = Smoothstep(0.55f, 0.9f, t) * (1.0f - Smoothstep(0.92f, 1.02f, t));
-            cover = std::clamp(body * (1.0f - config::kBrushRim) + rim * config::kBrushRim, 0.0f, 1.0f);
+            const float edge = 1.0f + (fiber - 0.5f) * 0.22f;
+            const float body = 1.0f - Smoothstep(0.62f * edge, edge, t);
+            const float rim = Smoothstep(0.55f * edge, 0.9f * edge, t) * (1.0f - Smoothstep(0.92f * edge, 1.02f * edge, t));
+            float core = std::clamp(body * (1.0f - config::kBrushRim) + rim * config::kBrushRim, 0.0f, 1.0f);
+            if (stamp.dry > 0.0f && core > 0.0f) {
+              const float bristle = Noise(along / (9.0f * unit) + offset, across / (0.85f * unit), stroke.seed + 21u);
+              core *= 1.0f - stamp.dry * Smoothstep(0.38f, 0.62f, bristle);
+            }
+            float bleed = 0.0f;
+            if (stamp.wet > 0.0f) {
+              const float spread = t - (fiber - 0.5f) * 0.7f * stamp.wet;
+              bleed = config::kBrushBleedInk * (1.0f - Smoothstep(0.85f, 1.0f + stamp.wet, spread));
+            }
+            cover = std::max(core, bleed);
+            if (cover > 0.0f) cover *= 1.0f - tuning.grain_bite * (1.0f - Grain(px, py, g, paper));
             break;
           }
           default:
             cover = std::clamp(stamp.radius - std::sqrt(dx * dx + dy * dy) + 0.5f, 0.0f, 1.0f);
             break;
         }
-        if (cover <= 0.0f) continue;
-        if (tuning.grain > 0.0f) {
-          const float grain = Grain(px, py, grain_size, paper);
-          if (stroke.tool == Tool::kBrush) {
-            cover *= 1.0f - tuning.grain_bite * (1.0f - grain);
-          } else {
-            const float soft = stroke.tool == Tool::kPencil ? 0.16f : 0.08f;
-            cover *= Smoothstep(stamp.cut - soft, stamp.cut + soft, grain);
-          }
-        }
         cover *= stamp.alpha;
         if (cover <= 0.0f) continue;
         float& m = row[x];
-        m = builds ? m + cover * (1.0f - m) : std::max(m, cover);
+        if (pools) {
+          m = std::max(m, cover) + config::kBrushPool * cover * (1.0f - m);
+        } else {
+          m = builds ? m + cover * (1.0f - m) : std::max(m, cover);
+        }
       }
     }
   }

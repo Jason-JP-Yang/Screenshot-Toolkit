@@ -139,34 +139,27 @@ float IconDistance(EditorIcon icon, float x, float y) {
       return std::min({arc, Segment(x, y, 4.4f, 7.8f, cx, 7.8f), Segment(x, y, cx, 15.0f, 8.4f, 15.0f), Head(x, y, 4.4f, 7.8f, -1.0f, 0.0f, 4.2f)}) - 0.95f;
     }
     case EditorIcon::kReset: {
+      // A circle drawn anticlockwise from the upper left all the way round to the top, where it turns into an arrow
+      // pointing left, back toward where it began.
       const float cx = 10.0f;
-      const float cy = 10.4f;
-      const float r = 6.0f;
-      const float gap_from = -112.0f;
-      const float gap_to = -62.0f;
-      const float a0 = gap_from * kPi / 180.0f;
-      const float a1 = gap_to * kPi / 180.0f;
-      const float x0 = cx + r * std::cos(a0);
-      const float y0 = cy + r * std::sin(a0);
-      const float x1 = cx + r * std::cos(a1);
-      const float y1 = cy + r * std::sin(a1);
-      const float arc = Arc(x, y, cx, cy, r, [&](float angle) { return angle < gap_from || angle > gap_to; }, x0, y0, x1, y1);
-      // Turning counterclockwise, the arrow points along (sin, -cos) where it ends.
-      return std::min(arc, Head(x, y, x0, y0, std::sin(a0), -std::cos(a0), 3.6f)) - 0.95f;
+      const float cy = 10.6f;
+      const float r = 6.3f;
+      const float tail = -132.0f * kPi / 180.0f;
+      const float tail_x = cx + r * std::cos(tail);
+      const float tail_y = cy + r * std::sin(tail);
+      const float arc = Arc(x, y, cx, cy, r, [](float angle) { return angle <= -132.0f || angle >= -90.0f; }, tail_x, tail_y, cx, cy - r);
+      return std::min(arc, Head(x, y, cx, cy - r, -1.0f, 0.0f, 3.1f)) - 0.92f;
     }
     case EditorIcon::kRotateRight:
     case EditorIcon::kRotateLeft: {
+      // A square, and an arrow that leaves its top edge and swings round its top corner to point down past it.
       if (icon == EditorIcon::kRotateLeft) x = 20.0f - x;
-      const float body = std::fabs(Box(x, y, 7.6f, 13.0f, 4.4f, 4.2f, 1.5f));
-      const float cx = 12.2f;
-      const float cy = 7.8f;
-      const float r = 4.6f;
-      const float end = -40.0f * kPi / 180.0f;
-      const float ex = cx + r * std::cos(end);
-      const float ey = cy + r * std::sin(end);
-      const float arc = Arc(x, y, cx, cy, r, [](float angle) { return angle <= -40.0f || angle >= 179.0f; }, cx - r, cy, ex, ey);
-      // Clockwise, along (-sin, cos).
-      return std::min({body, arc, Head(x, y, ex, ey, -std::sin(end), std::cos(end), 3.4f)}) - 0.9f;
+      const float body = std::fabs(Box(x, y, 7.2f, 13.4f, 4.2f, 4.2f, 2.0f));
+      const float cx = 11.4f;
+      const float cy = 9.2f;
+      const float r = 4.4f;
+      const float arc = Arc(x, y, cx, cy, r, [](float angle) { return angle <= 0.0f || angle >= 179.9f; }, cx - r, cy, cx + r, cy);
+      return std::min({body, arc, Head(x, y, cx + r, cy + 0.4f, 0.0f, 1.0f, 3.1f)}) - 0.92f;
     }
     case EditorIcon::kMarkup: {
       const float outline = std::min({Segment(x, y, 10.0f, 3.4f, 5.2f, 13.6f), Segment(x, y, 10.0f, 3.4f, 14.8f, 13.6f), Segment(x, y, 5.2f, 13.6f, 14.8f, 13.6f),
@@ -178,9 +171,30 @@ float IconDistance(EditorIcon icon, float x, float y) {
   return 1e9f;
 }
 
+// A lit cylinder: darker toward its sides, a broad sheen and a sharp glint left of center, and a faint light
+// reflected back along its right edge.
 float Cylinder(float u, float center, float half) {
   const float q = (u - center) / std::max(half, 0.5f);
-  return -0.26f * q * q + 0.16f * std::exp(-((q + 0.42f) / 0.24f) * ((q + 0.42f) / 0.24f));
+  const auto bump = [&](float at, float width) { return std::exp(-((q - at) / width) * ((q - at) / width)); };
+  return -0.28f * q * q + 0.14f * bump(-0.42f, 0.26f) + 0.30f * bump(-0.52f, 0.07f) + 0.06f * bump(0.80f, 0.08f);
+}
+
+float ArtHash(int x, int y) {
+  uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return static_cast<float>((h ^ (h >> 16)) & 0xFFFFFFu) / 16777216.0f;
+}
+
+float ArtNoise(float x, float y) {
+  const float fx = std::floor(x);
+  const float fy = std::floor(y);
+  const int ix = static_cast<int>(fx);
+  const int iy = static_cast<int>(fy);
+  const float tx = (x - fx) * (x - fx) * (3.0f - 2.0f * (x - fx));
+  const float ty = (y - fy) * (y - fy) * (3.0f - 2.0f * (y - fy));
+  const float top = ArtHash(ix, iy) + (ArtHash(ix + 1, iy) - ArtHash(ix, iy)) * tx;
+  const float bottom = ArtHash(ix, iy + 1) + (ArtHash(ix + 1, iy + 1) - ArtHash(ix, iy + 1)) * tx;
+  return top + (bottom - top) * ty;
 }
 
 uint32_t Toward(uint32_t from, uint32_t to, float share) {
@@ -243,12 +257,21 @@ Image RenderPanel(int width, int height, float radius, uint32_t fill, uint32_t h
 }
 
 Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLook& look) {
-  Painter painter(width, height, scale);
-  const float c = static_cast<float>(width) / scale * 0.5f;
-  const float bottom = static_cast<float>(height) / scale + 20.0f;
+  // Drawn 26 units wide whatever the size, the barrel 19.2 of them.
+  const float unit = static_cast<float>(width) / 26.0f;
+  Painter painter(width, height, unit);
+  const float c = 13.0f;
+  const float bottom = static_cast<float>(height) / unit + 20.0f;
   const float half = 9.6f;
   const bool outlined = Brightness(look.barrel) > 0.6f;
+  const uint32_t steel = config::kNibSteel;
+  const uint32_t dark = 0x26272B;
+  const uint32_t gold = 0xC9A24C;
   const auto cylinder = [&](float h) { return [&, h](float u, float) { return Cylinder(u, c, h); }; };
+  const auto flat = [](float, float) { return 0.0f; };
+  const auto linear = [](float y0, float y1, float h0, float h1) {
+    return [=](float y) { return h0 + (std::clamp(y, y0, y1) - y0) / (y1 - y0) * (h1 - h0); };
+  };
 
   // Painted twice where the body is light, the first time a little larger in the edge color, which keeps it apart
   // from a light toolbar.
@@ -259,114 +282,199 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
   const auto barrel = [&](float top) {
     body(look.barrel, [&, top](float u, float v) { return Box(u, v, c, (top + bottom) * 0.5f, half, (bottom - top) * 0.5f, 2.2f); }, cylinder(half));
   };
-  const auto band = [&](float top, float bottom_edge, uint32_t color) {
-    painter.Fill(color, 1.0f, [&, top, bottom_edge](float u, float v) { return Box(u, v, c, (top + bottom_edge) * 0.5f, half, (bottom_edge - top) * 0.5f, 0.0f); },
-                 cylinder(half));
+  const auto band = [&](float top, float bottom_edge, uint32_t color, float h = 9.6f) {
+    painter.Fill(color, 1.0f, [&, top, bottom_edge, h](float u, float v) { return Box(u, v, c, (top + bottom_edge) * 0.5f, h, (bottom_edge - top) * 0.5f, 0.0f); },
+                 cylinder(h));
+  };
+  // A thin line around the barrel, darker or lighter, as a seam or a groove.
+  const auto ring = [&](float at, float thickness, uint32_t color, float alpha, float h = 9.6f) {
+    painter.Fill(color, alpha, [&, at, thickness, h](float u, float v) { return Box(u, v, c, at, h, thickness * 0.5f, 0.0f); }, cylinder(h));
+  };
+  // A pocket clip down the barrel's right side, ending in a ball.
+  const auto clip = [&](float top, float length) {
+    const float x = c + 5.4f;
+    const auto shape = [&, top, length](float u, float v) {
+      return std::min(Box(u, v, x, top + length * 0.5f, 1.05f, length * 0.5f, 1.0f), std::hypot(u - x, v - (top + length)) - 1.6f);
+    };
+    painter.Fill(0x000000, 0.18f, [&](float u, float v) { return shape(u - 0.5f, v - 0.6f) - 0.3f; });
+    painter.Fill(steel, 1.0f, shape, [&](float u, float) { return 0.25f - 0.5f * std::fabs(u - x); });
   };
 
-  float label_y = 58.0f;
+  float label_y = 60.0f;
   switch (tool) {
     case Tool::kPen: {
-      barrel(40.0f);
-      band(40.0f, 44.0f, look.ink);
-      body(0x2B2C30, [&](float u, float v) { return Taper(u, v, c, 21.0f, 40.5f, [](float y) { return 5.2f + (y - 21.0f) / 19.5f * 4.4f; }); },
-           [&](float u, float v) { return Cylinder(u, c, 5.2f + (std::clamp(v, 21.0f, 40.5f) - 21.0f) / 19.5f * 4.4f); });
-      const auto nib_half = [](float y) { return 5.6f * std::pow(std::max(y - 3.0f, 0.0f) / 19.0f, 0.7f); };
-      body(config::kNibSteel, [&](float u, float v) { return Taper(u, v, c, 3.0f, 22.0f, nib_half); },
-           [&](float u, float v) { return Cylinder(u, c, std::max(nib_half(std::clamp(v, 3.0f, 22.0f)), 0.8f)) * 1.4f; });
-      painter.Fill(0x3A3C40, 1.0f, [&](float u, float v) { return std::min(Segment(u, v, c, 8.6f, c, 17.0f) - 0.42f, std::hypot(u - c, v - 17.8f) - 1.15f); });
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.0f, 6.6f, nib_half); });
+      barrel(42.0f);
+      clip(47.0f, 26.0f);
+      band(42.0f, 45.6f, look.ink);
+      ring(41.8f, 0.7f, steel, 1.0f);
+      ring(45.9f, 0.7f, steel, 1.0f);
+      // The grip, ridged where the fingers hold it, under a steel collar.
+      const auto grip = linear(22.0f, 42.0f, 5.1f, 9.6f);
+      body(dark, [&](float u, float v) { return Taper(u, v, c, 22.0f, 42.3f, grip); },
+           [&](float u, float v) { return Cylinder(u, c, grip(v)) + 0.05f * std::sin(v * 2.6f); });
+      band(20.6f, 23.0f, steel, 5.4f);
+      // The nib: plated steel with a slit, a breather hole, engraved scrolls, and the ink at its point.
+      const auto nib_half = [](float y) { return 5.6f * std::pow(std::max(y - 3.0f, 0.0f) / 18.0f, 0.68f); };
+      body(steel, [&](float u, float v) { return Taper(u, v, c, 3.0f, 21.0f, nib_half); },
+           [&](float u, float v) { return Cylinder(u, c, std::max(nib_half(std::clamp(v, 3.0f, 21.0f)), 0.8f)) * 1.5f + (v > 15.0f ? 0.06f : 0.0f); });
+      painter.Fill(0x6E7178, 0.7f, [&](float u, float v) {
+        const float left = std::fabs(std::hypot(u - (c - 4.6f), v - 19.2f) - 3.0f) - 0.28f;
+        const float right = std::fabs(std::hypot(u - (c + 4.6f), v - 19.2f) - 3.0f) - 0.28f;
+        return std::max(std::min(left, right), Taper(u, v, c, 3.0f, 21.0f, nib_half) + 0.6f);
+      });
+      painter.Fill(0x2E3034, 1.0f, [&](float u, float v) { return std::min(Segment(u, v, c, 7.8f, c, 16.6f) - 0.36f, std::hypot(u - c, v - 17.4f) - 1.05f); });
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.0f, 6.0f, nib_half); });
+      label_y = 64.0f;
       break;
     }
     case Tool::kMonoline: {
-      barrel(36.0f);
-      band(36.0f, 39.5f, look.ink);
-      body(look.barrel, [&](float u, float v) { return Taper(u, v, c, 13.0f, 36.5f, [](float y) { return 2.6f + (y - 13.0f) / 23.5f * 7.0f; }); },
-           [&](float u, float v) { return Cylinder(u, c, 2.6f + (std::clamp(v, 13.0f, 36.5f) - 13.0f) / 23.5f * 7.0f); });
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return std::min(Box(u, v, c, 9.6f, 2.6f, 4.0f, 0.0f), std::hypot(u - c, v - 5.8f) - 2.6f); },
-                   cylinder(2.6f));
+      barrel(38.0f);
+      clip(44.0f, 24.0f);
+      band(38.0f, 41.6f, look.ink);
+      ring(42.0f, 0.6f, dark, 0.35f);
+      const auto cone = linear(14.0f, 38.0f, 2.4f, 9.6f);
+      body(look.barrel, [&](float u, float v) { return Taper(u, v, c, 14.0f, 38.5f, cone); }, [&](float u, float v) { return Cylinder(u, c, cone(v)); });
+      for (const float at : {28.5f, 31.0f, 33.5f}) {
+        painter.Fill(dark, 0.16f, [&, at](float u, float v) { return std::max(Taper(u, v, c, 14.0f, 38.5f, cone), std::fabs(v - at) - 0.3f); });
+      }
+      band(9.6f, 14.6f, steel, 2.1f);
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return std::min(Box(u, v, c, 7.6f, 1.55f, 2.4f, 0.0f), std::hypot(u - c, v - 5.4f) - 1.55f); },
+                   cylinder(1.55f));
+      painter.Fill(0xFFFFFF, 0.5f, [&](float u, float v) { return std::hypot(u - (c - 0.6f), v - 5.2f) - 0.45f; });
+      label_y = 58.0f;
       break;
     }
     case Tool::kHighlighter: {
-      barrel(38.0f);
-      band(38.0f, 44.0f, look.ink);
-      body(look.barrel, [&](float u, float v) { return Taper(u, v, c, 28.0f, 38.5f, [](float y) { return 7.0f + (y - 28.0f) / 10.5f * 2.6f; }); },
-           cylinder(8.3f));
-      const auto chisel = [&](float u, float v) { return std::max(Box(u, v, c, 18.5f, 7.0f, 10.0f, 0.0f), (9.0f + (u - (c - 7.0f)) * 0.55f) - v); };
-      painter.Fill(look.ink, 1.0f, chisel, cylinder(7.0f));
-      painter.Fill(0xFFFFFF, 0.22f, [&](float u, float v) { return std::max(chisel(u, v), v - (11.2f + (u - (c - 7.0f)) * 0.55f)); });
+      barrel(40.0f);
+      // A window down the barrel shows the ink inside.
+      painter.Fill(look.ink, 0.42f, [&](float u, float v) { return Box(u, v, c - 0.8f, 61.0f, 5.6f, 10.0f, 2.6f); }, cylinder(half));
+      band(40.0f, 46.0f, look.ink);
+      ring(46.3f, 0.7f, dark, 0.3f);
+      const auto shoulder = linear(29.0f, 40.0f, 7.2f, 9.6f);
+      body(look.barrel, [&](float u, float v) { return Taper(u, v, c, 29.0f, 40.5f, shoulder); }, [&](float u, float v) { return Cylinder(u, c, shoulder(v)); });
+      for (const float at : {32.0f, 34.4f, 36.8f}) ring(at, 0.55f, dark, 0.18f, 9.0f);
+      // A felt chisel, cut on the slant, its top face catching the light.
+      const auto chisel = [&](float u, float v) { return std::max(Box(u, v, c, 19.5f, 7.0f, 10.0f, 0.0f), (10.0f + (u - (c - 7.0f)) * 0.55f) - v); };
+      painter.Fill(look.ink, 1.0f, chisel, [&](float u, float v) { return Cylinder(u, c, 7.0f) * 0.7f - 0.10f * ArtNoise(u * 2.2f, v * 2.2f); });
+      painter.Fill(0xFFFFFF, 0.26f, [&](float u, float v) { return std::max(chisel(u, v), v - (12.2f + (u - (c - 7.0f)) * 0.55f)); });
+      label_y = 78.0f;
       break;
     }
     case Tool::kPencil: {
-      const auto wood_half = [](float y) { return 2.4f + (y - 12.0f) / 22.0f * 7.2f; };
-      painter.Fill(config::kPencilWood, 1.0f, [&](float u, float v) { return Taper(u, v, c, 12.0f, 36.0f, wood_half); },
-                   [&](float u, float v) { return Cylinder(u, c, wood_half(std::clamp(v, 12.0f, 36.0f))) * 0.8f; });
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.6f, 12.4f, [](float y) { return 0.35f + (y - 3.6f) / 8.8f * 2.1f; }); },
-                   cylinder(1.6f));
-      // The paint ends in scallops where the wood was sharpened.
+      // Sharpened wood with its grain running up to the lead, and the paint ending in scallops.
+      const auto wood = linear(12.0f, 36.0f, 2.4f, 9.6f);
+      painter.Fill(config::kPencilWood, 1.0f, [&](float u, float v) { return Taper(u, v, c, 12.0f, 36.0f, wood); },
+                   [&](float u, float v) {
+                     const float q = (u - c) / std::max(wood(v), 0.5f);
+                     return Cylinder(u, c, wood(v)) * 0.8f - 0.09f * std::pow(std::fabs(std::sin(q * 7.0f + v * 0.18f)), 6.0f);
+                   });
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.4f, 12.6f, linear(3.4f, 12.6f, 0.3f, 2.5f)); }, cylinder(1.6f));
+      painter.Fill(0xFFFFFF, 0.35f, [&](float u, float v) { return Segment(u, v, c - 0.4f, 5.0f, c - 1.2f, 11.4f) - 0.25f; });
       const auto paint = [&](float u, float v) {
-        const float edge = 32.6f + 1.5f * (0.5f + 0.5f * std::cos((u - c) * 0.95f));
+        const float edge = 33.4f + 1.6f * (0.5f + 0.5f * std::cos((u - c) * 0.95f));
         return std::max(Box(u, v, c, (edge + bottom) * 0.5f, half, (bottom - 30.0f) * 0.5f, 0.0f), edge - v);
       };
+      // Six sides, three of them seen, each lit on its own.
       body(look.barrel, paint, [&](float u, float) {
         const float q = (u - c) / half;
-        return q < -0.33f ? -0.02f : (q < 0.33f ? 0.08f : -0.16f);
+        return q < -0.33f ? -0.03f : (q < 0.33f ? 0.10f : -0.17f);
       });
-      band(46.0f, 48.0f, look.ink);
-      label_y = 60.0f;
+      painter.Fill(dark, 0.14f, [&](float u, float v) { return std::max(paint(u, v), std::min(std::fabs(u - (c - 3.2f)), std::fabs(u - (c + 3.2f))) - 0.25f); });
+      band(47.0f, 49.0f, look.ink);
+      ring(51.2f, 0.6f, gold, 0.9f);
+      label_y = 62.0f;
       break;
     }
     case Tool::kCrayon: {
-      barrel(31.0f);
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Box(u, v, c, 56.0f, half, 11.0f, 0.0f); }, cylinder(half));
-      painter.Fill(look.barrel, 0.9f, [&](float u, float v) { return std::min(Box(u, v, c, 47.6f, half, 0.45f, 0.0f), Box(u, v, c, 64.4f, half, 0.45f, 0.0f)); });
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Box(u, v, c, 24.5f, 9.0f, 7.5f, 0.0f); }, cylinder(9.0f));
-      painter.Fill(look.ink, 1.0f,
-                   [&](float u, float v) {
-                     return std::min(Taper(u, v, c, 8.2f, 17.5f, [](float y) { return 3.4f + (y - 8.2f) / 9.3f * 5.6f; }), std::hypot(u - c, v - 8.4f) - 3.4f);
-                   },
-                   [&](float u, float v) { return Cylinder(u, c, 3.4f + (std::clamp(v, 8.2f, 17.5f) - 8.2f) / 9.3f * 5.6f) + 0.05f; });
-      label_y = 74.0f;
+      // The paper wrapper, cut in a zigzag, printed with the color and its marks.
+      const auto wrapper = [&](float u, float v) {
+        const float tooth = 31.0f + 1.3f * std::fabs(std::fmod(u + 100.0f, 2.6f) - 1.3f);
+        return std::max(Box(u, v, c, (31.0f + bottom) * 0.5f, half, (bottom - 31.0f) * 0.5f, 0.0f), tooth - v);
+      };
+      body(look.barrel, wrapper, cylinder(half));
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Box(u, v, c, 58.0f, half, 13.0f, 0.0f); }, cylinder(half));
+      painter.Fill(look.barrel, 0.9f, [&](float u, float v) { return std::min(Box(u, v, c, 47.8f, half, 0.45f, 0.0f), Box(u, v, c, 68.2f, half, 0.45f, 0.0f)); });
+      painter.Fill(look.barrel, 0.85f, [&](float u, float v) {
+        float nearest = 1e9f;
+        for (int k = -2; k <= 2; ++k) nearest = std::min(nearest, std::hypot(u - (c + static_cast<float>(k) * 3.4f), v - 58.0f) - 0.8f);
+        return nearest;
+      });
+      painter.Fill(dark, 0.18f, [&](float u, float v) { return std::max(wrapper(u, v), std::fabs(u - (c + 6.2f)) - 0.22f); });
+      // The wax, blunt from use, with a waxy sheen.
+      const auto wax = linear(8.0f, 17.6f, 3.6f, 9.0f);
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Box(u, v, c, 24.5f, 9.0f, 7.4f, 0.0f); },
+                   [&](float u, float v) { return Cylinder(u, c, 9.0f) - 0.06f * ArtNoise(u * 1.4f, v * 1.4f); });
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return std::min(Taper(u, v, c, 8.0f, 17.6f, wax), Box(u, v, c, 8.2f, 3.6f, 1.2f, 1.2f)); },
+                   [&](float u, float v) { return Cylinder(u, c, wax(v)) + 0.05f; });
+      painter.Fill(0xFFFFFF, 0.28f, [&](float u, float v) { return Box(u, v, c, 7.6f, 3.0f, 0.6f, 0.6f); });
+      label_y = 76.0f;
       break;
     }
     case Tool::kBrush: {
-      barrel(42.0f);
-      body(config::kNibSteel, [&](float u, float v) { return Taper(u, v, c, 29.0f, 42.5f, [](float y) { return 8.2f + (y - 29.0f) / 13.5f * 1.4f; }); },
-           cylinder(9.0f));
-      const auto bristle_half = [](float y) { return 8.0f * std::pow(std::max(y - 3.0f, 0.0f) / 27.0f, 0.55f); };
-      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.0f, 30.0f, bristle_half); },
-                   [&](float u, float v) { return Cylinder(u, c, std::max(bristle_half(std::clamp(v, 3.0f, 30.0f)), 0.8f)) + 0.07f * std::sin(u * 2.3f + v * 0.35f); });
-      label_y = 60.0f;
+      barrel(44.0f);
+      for (const float at : {60.0f, 78.0f}) {
+        ring(at, 1.2f, dark, 0.20f);
+        ring(at + 0.9f, 0.5f, 0xFFFFFF, 0.25f);
+      }
+      // A crimped ferrule, then a tuft of hairs, darker and wetter toward the point.
+      const auto ferrule = linear(29.0f, 44.0f, 8.0f, 9.6f);
+      body(steel, [&](float u, float v) { return Taper(u, v, c, 29.0f, 44.5f, ferrule); },
+           [&](float u, float v) { return Cylinder(u, c, ferrule(v)) * 1.3f; });
+      for (const float at : {37.0f, 39.6f}) ring(at, 0.6f, dark, 0.35f, 9.2f);
+      const auto tuft = [](float y) { return 7.8f * std::pow(std::max(y - 3.0f, 0.0f) / 27.0f, 0.55f); };
+      painter.Fill(look.ink, 1.0f, [&](float u, float v) { return Taper(u, v, c, 3.0f, 30.0f, tuft); },
+                   [&](float u, float v) {
+                     const float strands = std::pow(std::fabs(std::sin((u - c) * 3.1f + v * 0.12f)), 10.0f);
+                     const float dry = std::clamp((v - 18.0f) / 12.0f, 0.0f, 1.0f);
+                     return Cylinder(u, c, std::max(tuft(v), 0.8f)) + 0.14f * strands * dry - 0.08f * (1.0f - dry);
+                   });
+      painter.Fill(0xFFFFFF, 0.30f, [&](float u, float v) { return Segment(u, v, c - 1.2f, 7.0f, c - 3.2f, 22.0f) - 0.35f; });
+      label_y = 66.0f;
       break;
     }
     case Tool::kEraser: {
-      barrel(36.0f);
-      painter.Fill(config::kNibSteel, 1.0f, [&](float u, float v) { return Box(u, v, c, 33.5f, half, 2.6f, 0.0f); }, cylinder(half));
-      body(config::kEraserRubber, [&](float u, float v) { return Box(u, v, c, 19.5f, 9.2f, 12.5f, 4.6f); }, cylinder(9.2f));
+      barrel(38.0f);
+      clip(44.0f, 22.0f);
+      band(32.6f, 38.6f, steel);
+      for (const float at : {34.4f, 36.8f}) ring(at, 0.55f, dark, 0.35f);
+      // Soft rubber, bevelled on top and flecked.
+      const auto rubber = [&](float u, float v) { return Box(u, v, c, 20.0f, 9.2f, 12.6f, 4.6f); };
+      body(config::kEraserRubber, rubber, [&](float u, float v) {
+        const float flecks = ArtNoise(u * 3.0f, v * 3.0f) > 0.78f ? -0.10f : 0.0f;
+        return Cylinder(u, c, 9.2f) + (v < 11.0f ? 0.16f : 0.0f) + flecks;
+      });
       break;
     }
     case Tool::kLasso: {
-      barrel(36.0f);
-      const auto cone = [&](float u, float v) { return Taper(u, v, c, 5.0f, 36.5f, [](float y) { return 0.8f + (y - 5.0f) / 31.5f * 8.8f; }); };
-      body(look.barrel, cone, [&](float u, float v) { return Cylinder(u, c, 0.8f + (std::clamp(v, 5.0f, 36.5f) - 5.0f) / 31.5f * 8.8f); });
+      barrel(38.0f);
+      const auto taper = linear(5.0f, 38.0f, 0.8f, 9.6f);
+      const auto cone = [&](float u, float v) { return Taper(u, v, c, 5.0f, 38.5f, taper); };
+      body(look.barrel, cone, [&](float u, float v) { return Cylinder(u, c, taper(v)); });
       painter.Fill(look.edge, 0.9f, [&](float u, float v) {
         const float stripe = std::fmod(u * 0.9f + v * 0.75f + 100.0f, 5.2f) - 2.1f;
         return std::max(cone(u, v) + 0.6f, stripe * 0.6f);
       });
+      painter.Fill(0xFFFFFF, 0.30f, [&](float u, float v) { return std::max(cone(u, v), Segment(u, v, c - 0.5f, 8.0f, c - 4.6f, 36.0f) - 0.5f); });
       painter.Fill(look.edge, 1.0f, [&](float u, float v) { return std::hypot(u - c, v - 5.6f) - 1.1f; });
       break;
     }
     case Tool::kRuler: {
-      body(look.barrel, [&](float u, float v) { return Box(u, v, c, (6.0f + bottom) * 0.5f, half, (bottom - 6.0f) * 0.5f, 2.0f); },
-           [](float, float) { return 0.0f; });
+      const auto ruler = [&](float u, float v) { return Box(u, v, c, (6.0f + bottom) * 0.5f, half, (bottom - 6.0f) * 0.5f, 2.0f); };
+      body(look.barrel, ruler, flat);
+      painter.Fill(0xFFFFFF, 0.35f, [&](float u, float v) { return std::max(ruler(u, v), std::fabs(u - (c + half - 1.0f)) - 0.4f); });
       painter.Fill(look.edge, 1.0f, [&](float u, float v) {
         float nearest = 1e9f;
-        for (int k = 0; k < 24; ++k) {
-          const float y = 10.0f + static_cast<float>(k) * 3.6f;
-          const float length = k % 5 == 0 ? 7.0f : (k % 5 == 2 ? 4.8f : 3.4f);
+        for (int k = 0; k < 26; ++k) {
+          const float y = 10.0f + static_cast<float>(k) * 3.4f;
+          const float length = k % 5 == 0 ? 7.6f : (k % 5 == 2 ? 5.0f : 3.4f);
           nearest = std::min(nearest, Segment(u, v, c - half + 1.2f, y, c - half + 1.2f + length, y));
         }
-        return nearest - 0.36f;
+        return nearest - 0.34f;
+      });
+      painter.Fill(look.edge, 0.55f, [&](float u, float v) {
+        float nearest = 1e9f;
+        for (int k = 0; k < 6; ++k) nearest = std::min(nearest, std::hypot(u - (c + 3.6f), v - (10.0f + static_cast<float>(k) * 17.0f)) - 0.7f);
+        return nearest;
       });
       break;
     }
@@ -377,8 +485,8 @@ Image RenderToolArt(Tool tool, int width, int height, float scale, const ToolLoo
     swprintf_s(text, L"%d", look.percent);
     const TextLine line = RenderText(text, std::max(static_cast<int>(std::lround(config::kToolLabelSize * scale)), 6), look.label);
     const RECT ink = InkBounds(line.image);
-    const int x = static_cast<int>(std::lround(c * scale - static_cast<float>(ink.left + ink.right) * 0.5f));
-    const int y = static_cast<int>(std::lround(label_y * scale - static_cast<float>(ink.top + ink.bottom) * 0.5f));
+    const int x = static_cast<int>(std::lround(c * unit - static_cast<float>(ink.left + ink.right) * 0.5f));
+    const int y = static_cast<int>(std::lround(label_y * unit - static_cast<float>(ink.top + ink.bottom) * 0.5f));
     painter.Blend(line.image, x, y);
   }
   return painter.Finish();
